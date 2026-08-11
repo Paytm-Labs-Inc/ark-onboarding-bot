@@ -1,0 +1,5 @@
+anthropic
+# vector store + embeddings — pick one and pin it as you go:
+# chromadb   (or faiss-cpu)
+# voyageai   (or openai, for embeddings)
+python-dotenv
