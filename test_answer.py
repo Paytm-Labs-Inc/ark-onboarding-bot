@@ -8,7 +8,7 @@ import sys
 from dotenv import load_dotenv
 
 from src.answer import REFUSAL_PHRASE, answer
-from src.stub_chunks import STUB_CHUNKS
+from src.retriever import retrieve
 
 QUESTIONS = [
     "how do I enroll a host?",
@@ -22,13 +22,12 @@ def main() -> int:
     load_dotenv()
 
     print("Running answer layer smoke test\n")
-    print(f"Stub chunks: {len(STUB_CHUNKS)}")
     print("-" * 72)
 
     for question in QUESTIONS:
         print(f"\nQ: {question}")
         try:
-            result = answer(question, STUB_CHUNKS)
+            result = answer(question, retrieve(question, top_k=5))
         except ValueError as exc:
             print(f"ERROR: {exc}")
             return 1
