@@ -191,17 +191,13 @@ def ingest_foundry_page(
     source: Source,
     *,
     platform_root: Path | None,
-    hash_map: dict[str, str] | None,
+    hash_map: dict[str, str],
 ) -> str:
     if platform_root is not None:
         local = read_local_markdown(platform_root, source)
         if local is not None:
             print(f"  local: {platform_root / source.local_relpath}")
             return local
-    if hash_map is None:
-        raise RuntimeError(
-            "VitePress hash map unavailable and no local foundry-platform markdown"
-        )
     print(f"  web:   {source.markdown_name} via VitePress bundles")
     return fetch_vitepress_markdown(source, hash_map)
 
@@ -288,35 +284,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _existing_corpus_path(out_dir: Path, slug: str) -> Path | None:
-    path = out_dir / f"{slug}.md"
-    return path if path.is_file() else None
-
-
-def _ingest_one_source(
-    label: str,
-    slug: str,
-    source_url: str,
-    out_dir: Path,
-    ingest_fn,
-) -> Path | None:
-    """Run one ingest step; warn and keep the previous file on failure."""
-    print(f"[{label}]")
-    try:
-        body = ingest_fn()
-        path = write_corpus(slug, source_url, body, out_dir)
-        print(f"  -> {path} ({path.stat().st_size} bytes)")
-        return path
-    except Exception as exc:
-        print(f"  skipped: {exc}", file=sys.stderr)
-        kept = _existing_corpus_path(out_dir, slug)
-        if kept is not None:
-            print(f"  kept:  {kept} (previous corpus)", file=sys.stderr)
-            return kept
-        print(f"  no existing corpus file for {slug}", file=sys.stderr)
-        return None
-
-
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     platform_root = args.foundry_platform
@@ -328,61 +295,38 @@ def main(argv: list[str] | None = None) -> int:
         platform_root = platform_root.expanduser().resolve()
         if not platform_root.is_dir():
             print(f"warning: FOUNDRY_PLATFORM_PATH not found: {platform_root}", file=sys.stderr)
-            platform_root = None
 
     global FOUNDRY_SITE
     FOUNDRY_SITE = args.site.rstrip("/")
 
     print(f"Writing corpus to {args.out.resolve()}")
-    hash_map: dict[str, str] | None = None
-    try:
-        hash_map = load_hash_map(FOUNDRY_SITE)
-    except Exception as exc:
-        print(
-            f"warning: could not load VitePress hash map ({exc}); "
-            "live site re-fetch disabled for Foundry pages",
-            file=sys.stderr,
-        )
-
-    platform = platform_root if platform_root and platform_root.is_dir() else None
+    hash_map = load_hash_map(FOUNDRY_SITE)
     written: list[Path] = []
-    failed: list[str] = []
 
     for source in SOURCES:
-        path = _ingest_one_source(
-            source.slug,
-            source.slug,
-            source.url,
-            args.out,
-            lambda s=source: ingest_foundry_page(
-                s,
-                platform_root=platform,
-                hash_map=hash_map,
-            ),
+        print(f"[{source.slug}]")
+        body = ingest_foundry_page(
+            source,
+            platform_root=platform_root if platform_root and platform_root.is_dir() else None,
+            hash_map=hash_map,
         )
-        if path is not None:
-            written.append(path)
-        else:
-            failed.append(source.slug)
-
-    path = _ingest_one_source(
-        GDOCS_SOURCE.slug,
-        GDOCS_SOURCE.slug,
-        GDOCS_SOURCE.url,
-        args.out,
-        lambda: ingest_gdocs_faq(manual_path=args.gdoc_file),
-    )
-    if path is not None:
+        path = write_corpus(source.slug, source.url, body, args.out)
         written.append(path)
-    else:
-        failed.append(GDOCS_SOURCE.slug)
+        print(f"  -> {path} ({path.stat().st_size} bytes)")
+
+    print(f"[{GDOCS_SOURCE.slug}]")
+    try:
+        gdoc_body = ingest_gdocs_faq(manual_path=args.gdoc_file)
+        path = write_corpus(GDOCS_SOURCE.slug, GDOCS_SOURCE.url, gdoc_body, args.out)
+        written.append(path)
+        print(f"  -> {path} ({path.stat().st_size} bytes)")
+    except RuntimeError as exc:
+        print(f"  skipped: {exc}", file=sys.stderr)
+        return 1
 
     print("\nSources ingested:")
     for path in written:
         print(f"  - {path.name}")
-    if failed:
-        print(f"\nFailed/skipped (no fresh write): {', '.join(failed)}", file=sys.stderr)
-        return 1
     return 0
 
 
