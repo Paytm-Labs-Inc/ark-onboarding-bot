@@ -5,3 +5,4 @@ __pycache__/
 .chroma/
 *.sqlite3
 data/*.embeddings
+sources/faq-google-doc.*

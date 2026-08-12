@@ -1,4 +1,5 @@
 anthropic
+html2text>=2024.2.26
 # vector store + embeddings — pick one and pin it as you go:
 # chromadb   (or faiss-cpu)
 # voyageai   (or openai, for embeddings)
