@@ -26,7 +26,6 @@ Ask it "how do I enroll a host?" or "how do I set up Cursor?" → it retrieves t
 ```
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=...   # for Claude generation
 ```
 
 ## Ingest docs (Task 1)
@@ -36,4 +35,6 @@ Rebuild the `data/` corpus from Foundry onboarding pages + the Google Docs FAQ:
 python ingest/ingest.py
 ```
 
-For the Google Doc FAQ, export plain text to `sources/faq-google-doc.txt` (or pass `--gdoc-file`). Optional: set `FOUNDRY_PLATFORM_PATH` to a local `foundry-platform` clone to read raw markdown from `doc-site/onboarding/`.
+**Source of truth:** the committed `data/` corpus is what downstream retrieval uses. Re-running ingest is best-effort — live re-fetch scrapes VitePress JS bundles (asset hashes change on every doc-site build) and can break without warning. The robust path is a local `foundry-platform` clone via `FOUNDRY_PLATFORM_PATH` (raw markdown under `doc-site/onboarding/`). If one source fails, ingest warns and keeps the previous file for that source instead of aborting the whole run.
+
+For the Google Doc FAQ, export plain text to `sources/faq-google-doc.txt` (or pass `--gdoc-file`).

@@ -2,5 +2,6 @@ html2text>=2024.2.26
 python-dotenv
 # vector store + embeddings — pick one and pin it as you go:
 # chromadb   (or faiss-cpu)
+# sentence-transformers
 # voyageai   (or openai, for embeddings)
 # Answer generation uses the Cursor agent CLI (`agent`) + CURSOR_API_KEY.
