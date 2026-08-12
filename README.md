@@ -28,3 +28,12 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 export ANTHROPIC_API_KEY=...   # for Claude generation
 ```
+
+## Ingest docs (Task 1)
+Rebuild the `data/` corpus from Foundry onboarding pages + the Google Docs FAQ:
+
+```bash
+python ingest/ingest.py
+```
+
+For the Google Doc FAQ, export plain text to `sources/faq-google-doc.txt` (or pass `--gdoc-file`). Optional: set `FOUNDRY_PLATFORM_PATH` to a local `foundry-platform` clone to read raw markdown from `doc-site/onboarding/`.

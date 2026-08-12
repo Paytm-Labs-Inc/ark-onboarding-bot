@@ -1,3 +1,4 @@
+html2text>=2024.2.26
 python-dotenv
 # vector store + embeddings — pick one and pin it as you go:
 # chromadb   (or faiss-cpu)
