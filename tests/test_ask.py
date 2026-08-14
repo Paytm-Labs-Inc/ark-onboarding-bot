@@ -30,8 +30,10 @@ class AskTests(unittest.TestCase):
 
         result = ask("how do I enroll a host?")
 
-        mock_retrieve.assert_called_once_with("how do I enroll a host?", k=5)
-        mock_answer.assert_called_once_with("how do I enroll a host?", chunks)
+        mock_retrieve.assert_called_once_with("how do I enroll a host?", k=8)
+        mock_answer.assert_called_once_with(
+            "how do I enroll a host?", chunks, history=None
+        )
         self.assertEqual(result["answer"], "Run ark host enroll.")
         self.assertEqual(len(result["citations"]), 1)
 

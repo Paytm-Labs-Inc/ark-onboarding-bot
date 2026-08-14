@@ -9,11 +9,11 @@ import shutil
 import subprocess
 from typing import Any
 
-REFUSAL_PHRASE = "I don't have that in the onboarding docs"
+REFUSAL_PHRASE = "I don't have an answer for that yet."
 
 DEFAULT_MODEL = "composer-2.5"
 
-SYSTEM_PROMPT = f"""You answer onboarding questions using ONLY the document chunks provided.
+SYSTEM_PROMPT = f"""You answer Ark setup and usage questions using ONLY the document chunks provided.
 
 Rules:
 1. Use only facts explicitly stated in the chunks. Do not use outside knowledge.
@@ -23,6 +23,21 @@ Rules:
 4. When you answer, cite every chunk source you used in citations.
 5. citations must be copied exactly from the chunk source labels provided.
 6. Respond with JSON only — no markdown fences, no extra text.
+7. Write directly to the user in second person ("You can…", "Use…", "Run…"). Never refer to
+   "onboarding docs", "the docs", "documentation", "these docs", "the chunks", "provided
+   sources", or meta phrases like "the docs do not mention" or "is not covered in the docs".
+   State what to do or what is supported instead (e.g. "Use Claude Code or Cursor via MCP"
+   not "the docs recommend Claude and Cursor").
+8. For onboarding steps or order questions: if chunks include an "Onboarding path"
+   numbered list and/or a "correct onboarding order" checklist, present the FULL
+   ordered list with concrete steps. Do not answer with only MCP setup when a broader
+   checklist is present in the chunks.
+9. For "how to use Ark" / post-onboarding questions: give concrete operational steps
+   (register agents, `ark workspace apply`, `ark flow create`, dispatch a session,
+   then watch progress). Do not lead with "Ark is not a chatbot" unless the user
+   explicitly asks what Ark is.
+10. For tool/client choice (Claude vs Cursor vs OpenAI): say which clients Ark supports
+    and how to connect each. Do not discuss what documentation omits — say what works.
 
 JSON shape:
 {{"answer": "<your answer>", "citations": ["<source label>", "..."]}}
@@ -62,7 +77,6 @@ def _call_cursor_agent(prompt: str) -> str:
     workspace = os.environ.get("CURSOR_WORKSPACE", os.getcwd())
     model = os.environ.get("CURSOR_MODEL", DEFAULT_MODEL)
 
-    # Pass the key via env (not argv) so tracebacks never echo it.
     env = os.environ.copy()
     env["CURSOR_API_KEY"] = api_key
 
@@ -103,14 +117,43 @@ def _call_cursor_agent(prompt: str) -> str:
     return completed.stdout.strip()
 
 
-def answer(question: str, chunks: list[dict[str, Any]]) -> dict[str, Any]:
+def _format_history(history: list[dict[str, str]]) -> str:
+    lines: list[str] = []
+    for turn in history:
+        question = turn.get("question", "").strip()
+        answer_text = turn.get("answer", "").strip()
+        if not question:
+            continue
+        lines.append(f"User: {question}")
+        if answer_text:
+            lines.append(f"Assistant: {answer_text}")
+    return "\n".join(lines)
+
+
+def answer(
+    question: str,
+    chunks: list[dict[str, Any]],
+    *,
+    history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     """Return a grounded answer and source citations for a question."""
     if not chunks:
         return {"answer": REFUSAL_PHRASE, "citations": []}
 
+    history_block = ""
+    if history:
+        formatted = _format_history(history)
+        if formatted:
+            history_block = (
+                "Recent conversation (follow-up context only — "
+                "still answer ONLY from the document chunks):\n"
+                f"{formatted}\n\n"
+            )
+
     user_content = (
         f"{SYSTEM_PROMPT}\n\n"
         f"Document chunks:\n\n{_format_chunks(chunks)}\n\n"
+        f"{history_block}"
         f"Question: {question}"
     )
 

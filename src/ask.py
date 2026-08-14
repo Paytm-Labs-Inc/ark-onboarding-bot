@@ -10,42 +10,69 @@ from typing import IO, Any
 from src.answer import REFUSAL_PHRASE, answer
 from src.retrieve import retrieve
 
+try:
+    from src.retriever import DEFAULT_TOP_K
+except ImportError:
+    DEFAULT_TOP_K = 8
+
 EXIT_COMMANDS = {"quit", "exit", "q"}
 
 
-def ask(question: str, *, k: int = 5) -> dict[str, list[str] | str]:
+def ask(
+    question: str,
+    *,
+    k: int | None = None,
+    history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     """Retrieve relevant chunks, then generate a grounded answer."""
     question = question.strip()
     if not question:
-        return {"answer": REFUSAL_PHRASE, "citations": []}
+        return {"answer": REFUSAL_PHRASE, "citations": [], "retrieved_sources": []}
 
-    chunks = retrieve(question, k=k)
+    top_k = DEFAULT_TOP_K if k is None else k
+    chunks = retrieve(question, k=top_k)
     if not chunks:
-        return {"answer": REFUSAL_PHRASE, "citations": []}
+        return {"answer": REFUSAL_PHRASE, "citations": [], "retrieved_sources": []}
 
-    return answer(question, chunks)
+    result = answer(question, chunks, history=history)
+    result["retrieved_sources"] = [
+        str(chunk["source"]) for chunk in chunks if chunk.get("source")
+    ]
+    return result
 
 
-def run_question(question: str, *, k: int = 5, verbose: bool = True) -> dict[str, list[str] | str]:
+def run_question(
+    question: str,
+    *,
+    k: int | None = None,
+    history: list[dict[str, str]] | None = None,
+    verbose: bool = True,
+) -> dict[str, Any]:
     """Run retrieve → answer with optional progress messages for the CLI."""
     question = question.strip()
     if not question:
-        return {"answer": REFUSAL_PHRASE, "citations": []}
+        return {"answer": REFUSAL_PHRASE, "citations": [], "retrieved_sources": []}
+
+    top_k = DEFAULT_TOP_K if k is None else k
 
     if verbose:
         print("Retrieving relevant docs...", flush=True)
 
-    chunks = retrieve(question, k=k)
+    chunks = retrieve(question, k=top_k)
     if not chunks:
-        return {"answer": REFUSAL_PHRASE, "citations": []}
+        return {"answer": REFUSAL_PHRASE, "citations": [], "retrieved_sources": []}
 
     if verbose:
         print("Generating answer (may take 1–2 min)...", flush=True)
 
-    return answer(question, chunks)
+    result = answer(question, chunks, history=history)
+    result["retrieved_sources"] = [
+        str(chunk["source"]) for chunk in chunks if chunk.get("source")
+    ]
+    return result
 
 
-def print_result(result: dict[str, list[str] | str], *, file: IO[str] = sys.stdout) -> None:
+def print_result(result: dict[str, Any], *, file: IO[str] = sys.stdout) -> None:
     """Print a grounded answer and its citations in a readable CLI format."""
     answer_text = str(result.get("answer", "")).strip() or REFUSAL_PHRASE
     citations_raw = result.get("citations", [])
