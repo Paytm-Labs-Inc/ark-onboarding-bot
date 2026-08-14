@@ -18,8 +18,9 @@ from eval.run_eval import (  # noqa: E402
     QUESTIONS_PATH,
     evaluate_question,
     load_questions,
-    norm_source,
 )
+from src.chunker import MAX_CHARS as SHIPPED_MAX_CHARS  # noqa: E402
+from src.retriever import DEFAULT_TOP_K as SHIPPED_TOP_K  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,23 @@ class TuneResult:
         if self.total == 0:
             return 0.0
         return round(100.0 * self.hits / self.total, 1)
+
+
+def _pick_winner(results: list[TuneResult]) -> TuneResult:
+    """Prefer the shipped chunker/retriever defaults when hit-rate is tied."""
+    max_hits = max(item.hits for item in results)
+    tied = [item for item in results if item.hits == max_hits]
+    shipped = next(
+        (
+            item
+            for item in tied
+            if item.max_chars == SHIPPED_MAX_CHARS and item.top_k == SHIPPED_TOP_K
+        ),
+        None,
+    )
+    if shipped is not None:
+        return shipped
+    return max(tied, key=lambda item: (item.top_k, item.max_chars))
 
 
 def _score_gold_set(*, max_chars: int, top_k: int, model_name: str) -> TuneResult:
@@ -103,7 +121,7 @@ def main() -> int:
         results.append(result)
         print(f"    -> {result.hits}/{result.total} ({result.hit_rate}%)", flush=True)
 
-    best = max(results, key=lambda item: (item.hits, item.top_k, -item.max_chars))
+    best = _pick_winner(results)
     print("\nBest config")
     print("=" * 60)
     print(

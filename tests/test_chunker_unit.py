@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.chunker import MAX_CHARS, load_chunks
+from src.chunker import MAX_CHARS, OVERLAP_CHARS, _split_fixed, load_chunks
 
 
 class ChunkerTests(unittest.TestCase):
@@ -65,6 +65,17 @@ class ChunkerTests(unittest.TestCase):
     def test_empty_corpus_dir_raises(self) -> None:
         with self.assertRaises(RuntimeError):
             load_chunks(self.data_dir)
+
+    def test_split_fixed_rejects_overlap_ge_max_chars(self) -> None:
+        with self.assertRaises(ValueError):
+            _split_fixed("abcdefghij", max_chars=OVERLAP_CHARS, overlap=OVERLAP_CHARS)
+
+    def test_split_fixed_advances_when_overlap_lt_max_chars(self) -> None:
+        text = "a" * (MAX_CHARS + 50)
+        pieces = _split_fixed(text, MAX_CHARS, OVERLAP_CHARS)
+        self.assertGreater(len(pieces), 1)
+        joined = pieces[0][-OVERLAP_CHARS:]
+        self.assertTrue(any(piece.startswith(joined) for piece in pieces[1:]))
 
 
 if __name__ == "__main__":

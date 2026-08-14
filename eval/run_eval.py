@@ -123,13 +123,23 @@ def _pct(numerator: int, denominator: int) -> float:
     return round(100.0 * numerator / denominator, 1)
 
 
-def print_report(results: list[QuestionResult], *, run_answer: bool) -> None:
+def print_report(
+    results: list[QuestionResult],
+    *,
+    run_answer: bool,
+    top_k: int,
+    max_chars: int,
+    model_name: str,
+) -> None:
     scored = [r for r in results if r.expected_source is not None]
     refusals = [r for r in results if r.expect_refusal]
 
     retrieval_pass = sum(1 for r in scored if r.retrieval_hit)
     print("\nEval summary")
     print("=" * 72)
+    print(
+        f"Config: MAX_CHARS={max_chars}, top_k={top_k}, model={model_name}",
+    )
     print(
         f"Retrieval hit @ top-k: {retrieval_pass}/{len(scored)} "
         f"({_pct(retrieval_pass, len(scored))}%)"
@@ -170,13 +180,25 @@ def print_report(results: list[QuestionResult], *, run_answer: bool) -> None:
         print()
 
 
-def write_report(results: list[QuestionResult], *, run_answer: bool) -> Path:
+def write_report(
+    results: list[QuestionResult],
+    *,
+    run_answer: bool,
+    top_k: int,
+    max_chars: int,
+    model_name: str,
+) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     path = RESULTS_DIR / f"eval-{stamp}.json"
     payload = {
         "generated_at": stamp,
         "run_answer": run_answer,
+        "config": {
+            "max_chars": max_chars,
+            "top_k": top_k,
+            "model_name": model_name,
+        },
         "results": [asdict(result) for result in results],
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -191,7 +213,15 @@ def main() -> int:
         default=QUESTIONS_PATH,
         help="Path to questions JSON (default: eval/questions.json)",
     )
-    parser.add_argument("--top-k", type=int, default=5, help="Retrieval top-k (default: 5)")
+    from src.chunker import MAX_CHARS
+    from src.retriever import DEFAULT_TOP_K, MODEL_NAME
+
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=DEFAULT_TOP_K,
+        help=f"Retrieval top-k (default: {DEFAULT_TOP_K})",
+    )
     parser.add_argument(
         "--full",
         action="store_true",
@@ -245,8 +275,20 @@ def main() -> int:
             last = results[-1]
             status = "ok" if not last.error else f"error: {last.error}"
             print(f"    done ({status})", flush=True)
-    print_report(results, run_answer=args.full)
-    report_path = write_report(results, run_answer=args.full)
+    print_report(
+        results,
+        run_answer=args.full,
+        top_k=args.top_k,
+        max_chars=MAX_CHARS,
+        model_name=MODEL_NAME,
+    )
+    report_path = write_report(
+        results,
+        run_answer=args.full,
+        top_k=args.top_k,
+        max_chars=MAX_CHARS,
+        model_name=MODEL_NAME,
+    )
     print(f"Wrote report: {report_path}")
 
     scored = [r for r in results if r.expected_source is not None]

@@ -1,10 +1,10 @@
 {
   "winner": {
-    "max_chars": 300,
+    "max_chars": 2000,
     "top_k": 8,
     "model_name": "all-MiniLM-L6-v2",
-    "hits": 14,
-    "total": 14,
+    "hits": 16,
+    "total": 16,
     "hit_rate_pct": 100.0
   },
   "runs": [
@@ -12,72 +12,72 @@
       "max_chars": 300,
       "top_k": 3,
       "model_name": "all-MiniLM-L6-v2",
-      "hits": 12,
-      "total": 14,
-      "hit_rate_pct": 85.7
+      "hits": 14,
+      "total": 16,
+      "hit_rate_pct": 87.5
     },
     {
       "max_chars": 300,
       "top_k": 5,
       "model_name": "all-MiniLM-L6-v2",
-      "hits": 14,
-      "total": 14,
+      "hits": 16,
+      "total": 16,
       "hit_rate_pct": 100.0
     },
     {
       "max_chars": 300,
       "top_k": 8,
       "model_name": "all-MiniLM-L6-v2",
-      "hits": 14,
-      "total": 14,
+      "hits": 16,
+      "total": 16,
       "hit_rate_pct": 100.0
     },
     {
       "max_chars": 800,
       "top_k": 3,
       "model_name": "all-MiniLM-L6-v2",
-      "hits": 13,
-      "total": 14,
-      "hit_rate_pct": 92.9
+      "hits": 15,
+      "total": 16,
+      "hit_rate_pct": 93.8
     },
     {
       "max_chars": 800,
       "top_k": 5,
       "model_name": "all-MiniLM-L6-v2",
-      "hits": 14,
-      "total": 14,
+      "hits": 16,
+      "total": 16,
       "hit_rate_pct": 100.0
     },
     {
       "max_chars": 800,
       "top_k": 8,
       "model_name": "all-MiniLM-L6-v2",
-      "hits": 14,
-      "total": 14,
+      "hits": 16,
+      "total": 16,
       "hit_rate_pct": 100.0
     },
     {
       "max_chars": 2000,
       "top_k": 3,
       "model_name": "all-MiniLM-L6-v2",
-      "hits": 14,
-      "total": 14,
+      "hits": 16,
+      "total": 16,
       "hit_rate_pct": 100.0
     },
     {
       "max_chars": 2000,
       "top_k": 5,
       "model_name": "all-MiniLM-L6-v2",
-      "hits": 14,
-      "total": 14,
+      "hits": 16,
+      "total": 16,
       "hit_rate_pct": 100.0
     },
     {
       "max_chars": 2000,
       "top_k": 8,
       "model_name": "all-MiniLM-L6-v2",
-      "hits": 14,
-      "total": 14,
+      "hits": 16,
+      "total": 16,
       "hit_rate_pct": 100.0
     }
   ]

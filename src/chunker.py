@@ -19,6 +19,11 @@ class Chunk(TypedDict):
 
 
 def _split_fixed(text: str, max_chars: int, overlap: int) -> list[str]:
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+    if overlap >= max_chars:
+        raise ValueError("overlap must be less than max_chars")
+
     windows: list[str] = []
     start = 0
     n = len(text)
@@ -27,7 +32,10 @@ def _split_fixed(text: str, max_chars: int, overlap: int) -> list[str]:
         windows.append(text[start:end])
         if end == n:
             break
-        start = end - overlap
+        next_start = end - overlap
+        if next_start <= start:
+            break
+        start = next_start
     return windows
 
 
