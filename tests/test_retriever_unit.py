@@ -61,6 +61,23 @@ class RetrieverTests(unittest.TestCase):
         index = build_index([])
         self.assertEqual(retrieve("anything", top_k=5, index=index), [])
 
+    @patch("src.retriever._embed", side_effect=_fake_embed)
+    def test_onboarding_steps_pins_checklist_chunk(self, _mock) -> None:
+        chunks = CHUNKS + [
+            {
+                "source": "getting-started -- https://example.com",
+                "text": "## Onboarding path\n1. Getting access\n2. Secrets",
+            },
+            {
+                "source": "getting-access -- https://example.com/access",
+                "text": "**Step 1** - open the onboarding tab",
+            },
+        ]
+        index = build_index(chunks)
+        results = retrieve("what are the steps to onboard ark", top_k=3, index=index)
+        texts = [chunk["text"] for chunk in results]
+        self.assertTrue(any("Onboarding path" in text for text in texts))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,105 @@
+[
+  {
+    "id": "cursor-setup",
+    "question": "how do I get Cursor working with Ark?",
+    "expected_source": "set-up-cursor",
+    "notes": "Cursor MCP config and verification"
+  },
+  {
+    "id": "cursor-mcp-json",
+    "question": "where do I put the ark MCP config in Cursor?",
+    "expected_source": "set-up-cursor",
+    "notes": "~/.cursor/mcp.json or project .cursor/mcp.json"
+  },
+  {
+    "id": "update-cli-plugin",
+    "question": "how do I update the Ark CLI and plugin?",
+    "expected_source": "updating-cli-plugin",
+    "notes": "CLI + ark-superpowers update script"
+  },
+  {
+    "id": "install-plugin-only",
+    "question": "how do I reinstall just the ark-superpowers Claude Code plugin?",
+    "expected_source": "updating-cli-plugin",
+    "notes": "ark install-claude-code subcommand"
+  },
+  {
+    "id": "get-ark-account",
+    "question": "how do I get an Ark account?",
+    "expected_source": "getting-access",
+    "notes": "Open Ark URL, email invite, contact Bhurva"
+  },
+  {
+    "id": "mcp-tools-fetch-failed",
+    "question": "why does Claude Code show ark connected but tools fetch failed?",
+    "expected_source": "getting-access",
+    "notes": "MCP troubleshooting section"
+  },
+  {
+    "id": "session-stuck-ready",
+    "question": "why is my session stuck at Ready?",
+    "expected_source": "faq-google-doc",
+    "notes": "FAQ Q1 / sessions section"
+  },
+  {
+    "id": "enrolled-no-dispatch",
+    "question": "I enrolled my compute but sessions are not getting dispatched, what should I check?",
+    "expected_source": "faq-google-doc",
+    "notes": "FAQ Q2 — capacity and health"
+  },
+  {
+    "id": "bitbucket-credentials",
+    "question": "where should I add my Bitbucket and Jira credentials?",
+    "expected_source": "faq-google-doc",
+    "notes": "FAQ Q5 — user scope not team scope"
+  },
+  {
+    "id": "onboard-team-members",
+    "question": "who can onboard new team members — do I need tenant-admin?",
+    "expected_source": "faq-google-doc",
+    "notes": "FAQ Q7 — team admins can"
+  },
+  {
+    "id": "laptop-vs-managed",
+    "question": "should I use my laptop or managed EC2 for Ark sessions?",
+    "expected_source": "faq-google-doc",
+    "notes": "FAQ Q8 — managed recommended"
+  },
+  {
+    "id": "compute-disk",
+    "question": "how much disk space do I need on compute?",
+    "expected_source": "faq-google-doc",
+    "notes": "FAQ Q10 — 100 GB minimum"
+  },
+  {
+    "id": "onboarding-order",
+    "question": "what is the correct onboarding order to follow?",
+    "expected_source": "faq-google-doc",
+    "notes": "FAQ Q13 — secrets, compute, doctor, flows"
+  },
+  {
+    "id": "ark-roles",
+    "question": "what is the difference between member, team-admin, and tenant-admin?",
+    "expected_source": "getting-started",
+    "notes": "Roles section on getting started page"
+  },
+  {
+    "id": "onboarding-steps",
+    "question": "what are the steps to onboard ark",
+    "expected_source": "getting-started",
+    "notes": "Onboarding path numbered list (steps 1-7) on getting started page"
+  },
+  {
+    "id": "post-onboarding-usage",
+    "question": "how to use ark once onboarding is done",
+    "expected_source": "getting-access",
+    "notes": "Register agents, workspace apply, flow create, dispatch session"
+  },
+  {
+    "id": "out-of-scope-jira-password",
+    "question": "how do I reset my Jira password?",
+    "expected_source": null,
+    "expect_refusal": true,
+    "notes": "Not in onboarding corpus — should refuse"
+  }
+]
