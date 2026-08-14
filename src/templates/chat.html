@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ark Onboarding Bot</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --user: #eff6ff;
+      --bot: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 24px 16px 32px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: 1.35rem;
+      margin: 0;
+      font-weight: 650;
+    }
+    .subtitle {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    button.secondary {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.88rem;
+      cursor: pointer;
+    }
+    button.secondary:hover { background: #f9fafb; }
+    #chat {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-height: 280px;
+      margin-bottom: 16px;
+    }
+    .empty {
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      padding: 28px 20px;
+      text-align: center;
+      color: var(--muted);
+      background: var(--panel);
+    }
+    .turn {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--panel);
+    }
+    .question, .answer {
+      padding: 14px 16px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+    .question {
+      background: var(--user);
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+    }
+    .answer-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .citations {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .citations a {
+      display: inline-block;
+      font-size: 0.84rem;
+      color: var(--accent);
+      text-decoration: none;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      background: #f8fafc;
+    }
+    .citations a:hover { border-color: var(--accent); }
+    .feedback {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 16px 12px;
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+    .feedback button {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .feedback button:hover { border-color: var(--accent); }
+    .feedback button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+    form {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+    textarea {
+      flex: 1;
+      min-height: 52px;
+      max-height: 160px;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font: inherit;
+      background: var(--panel);
+    }
+    textarea:focus {
+      outline: 2px solid rgba(37, 99, 235, 0.25);
+      border-color: var(--accent);
+    }
+    button.primary {
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 12px 18px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.primary:hover { background: var(--accent-hover); }
+    button.primary:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .status {
+      min-height: 1.2rem;
+      margin-top: 10px;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+    .status.error { color: #b91c1c; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Ark Onboarding Bot</h1>
+        <p class="subtitle">Ask anything about getting started with Ark</p>
+      </div>
+      <button type="button" class="secondary" id="new-chat">New chat</button>
+    </header>
+
+    <div id="chat"></div>
+
+    <form id="ask-form">
+      <textarea id="question" placeholder="Ask an onboarding question..." rows="2"></textarea>
+      <button type="submit" class="primary" id="submit-btn">Ask</button>
+    </form>
+    <div class="status" id="status"></div>
+  </div>
+
+  <script>
+    let sessionId = null;
+    const chat = document.getElementById("chat");
+    const form = document.getElementById("ask-form");
+    const questionEl = document.getElementById("question");
+    const submitBtn = document.getElementById("submit-btn");
+    const statusEl = document.getElementById("status");
+    const newChatBtn = document.getElementById("new-chat");
+
+    const EMPTY_TEXT =
+      "Ask how to set up Cursor, enroll compute, fix a stuck session, and more.";
+
+    function setStatus(message, isError = false) {
+      statusEl.textContent = message || "";
+      statusEl.classList.toggle("error", isError);
+    }
+
+    function showEmptyState() {
+      chat.replaceChildren();
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.id = "empty-state";
+      empty.textContent = EMPTY_TEXT;
+      chat.appendChild(empty);
+    }
+
+    function renderCitations(sources) {
+      if (!sources || !sources.length) return "";
+      const links = sources.map((source) => {
+        const label = source.slug || source.label || "source";
+        const url = source.url;
+        if (url) {
+          return `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+        }
+        return `<span>${label}</span>`;
+      }).join("");
+      return `<div class="citations">${links}</div>`;
+    }
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    async function sendFeedback(meta, rating, upBtn, downBtn) {
+      upBtn.disabled = true;
+      downBtn.disabled = true;
+      try {
+        const response = await fetch("/api/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...meta, rating }),
+        });
+        if (!response.ok) {
+          const payload = await response.json();
+          throw new Error(payload.detail || "Feedback failed");
+        }
+        setStatus("Thanks for the feedback.");
+      } catch (error) {
+        upBtn.disabled = false;
+        downBtn.disabled = false;
+        setStatus(error.message || "Could not save feedback.", true);
+      }
+    }
+
+    function appendFeedbackButtons(turn, meta) {
+      const row = document.createElement("div");
+      row.className = "feedback";
+      row.innerHTML = `<span>Was this helpful?</span>`;
+      const upBtn = document.createElement("button");
+      upBtn.type = "button";
+      upBtn.textContent = "👍";
+      upBtn.title = "Helpful";
+      const downBtn = document.createElement("button");
+      downBtn.type = "button";
+      downBtn.textContent = "👎";
+      downBtn.title = "Not helpful";
+      upBtn.addEventListener("click", () => sendFeedback(meta, "up", upBtn, downBtn));
+      downBtn.addEventListener("click", () => sendFeedback(meta, "down", upBtn, downBtn));
+      row.appendChild(upBtn);
+      row.appendChild(downBtn);
+      turn.appendChild(row);
+    }
+
+    function appendTurn(question, answer, sources, meta) {
+      const empty = document.getElementById("empty-state");
+      if (empty) empty.remove();
+
+      const turn = document.createElement("div");
+      turn.className = "turn";
+      turn.innerHTML = `
+        <div class="question">${escapeHtml(question)}</div>
+        <div class="answer">
+          <div class="answer-label">Answer</div>
+          ${escapeHtml(answer)}
+          ${renderCitations(sources)}
+        </div>
+      `;
+      appendFeedbackButtons(turn, meta);
+      chat.appendChild(turn);
+      turn.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const question = questionEl.value.trim();
+      if (!question) {
+        setStatus("Type a question first.", true);
+        return;
+      }
+
+      submitBtn.disabled = true;
+      setStatus("Thinking…");
+
+      try {
+        const response = await fetch("/api/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question, session_id: sessionId }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || "Request failed");
+        }
+        sessionId = payload.session_id;
+        const meta = {
+          question,
+          answer: payload.answer,
+          sources: payload.citations || [],
+          retrieved_sources: payload.retrieved_sources || [],
+          session_id: payload.session_id,
+        };
+        appendTurn(question, payload.answer, payload.sources, meta);
+        questionEl.value = "";
+        setStatus("");
+      } catch (error) {
+        setStatus(error.message || "Something went wrong.", true);
+      } finally {
+        submitBtn.disabled = false;
+        questionEl.focus();
+      }
+    });
+
+    newChatBtn.addEventListener("click", async () => {
+      if (sessionId) {
+        await fetch("/api/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId }),
+        });
+      }
+      sessionId = null;
+      showEmptyState();
+      questionEl.value = "";
+      setStatus("");
+      submitBtn.disabled = false;
+      questionEl.focus();
+    });
+
+    showEmptyState();
+    questionEl.focus();
+  </script>
+</body>
+</html>

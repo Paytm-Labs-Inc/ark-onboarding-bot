@@ -6,4 +6,5 @@ __pycache__/
 *.sqlite3
 data/*.embeddings
 sources/faq-google-doc.*
+eval/feedback.jsonl
 eval/results/
