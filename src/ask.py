@@ -18,6 +18,25 @@ except ImportError:
 EXIT_COMMANDS = {"quit", "exit", "q"}
 
 
+def _retrieval_query(question: str, history: list[dict[str, str]] | None = None) -> str:
+    """Build a retrieval query that includes recent user questions for follow-ups."""
+    if not history:
+        return question
+
+    prior_questions = [
+        str(turn.get("question", "")).strip()
+        for turn in history
+        if str(turn.get("question", "")).strip()
+    ]
+    if not prior_questions:
+        return question
+
+    # Follow-ups often omit the topic ("where does the config file go?") — keep
+    # recent user questions in the embed query so retrieval stays on-topic.
+    context = " ".join(prior_questions[-2:])
+    return f"{context} {question}".strip()
+
+
 def ask(
     question: str,
     *,
@@ -30,7 +49,7 @@ def ask(
         return {"answer": REFUSAL_PHRASE, "citations": [], "retrieved_sources": []}
 
     top_k = DEFAULT_TOP_K if k is None else k
-    chunks = retrieve(question, k=top_k)
+    chunks = retrieve(_retrieval_query(question, history), k=top_k)
     if not chunks:
         return {"answer": REFUSAL_PHRASE, "citations": [], "retrieved_sources": []}
 
@@ -58,7 +77,7 @@ def run_question(
     if verbose:
         print("Retrieving relevant docs...", flush=True)
 
-    chunks = retrieve(question, k=top_k)
+    chunks = retrieve(_retrieval_query(question, history), k=top_k)
     if not chunks:
         return {"answer": REFUSAL_PHRASE, "citations": [], "retrieved_sources": []}
 

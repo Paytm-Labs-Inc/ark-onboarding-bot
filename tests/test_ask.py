@@ -39,6 +39,22 @@ class AskTests(unittest.TestCase):
 
     @patch("src.ask.answer")
     @patch("src.ask.retrieve")
+    def test_ask_retrieval_includes_history_for_follow_ups(
+        self, mock_retrieve: MagicMock, mock_answer: MagicMock
+    ) -> None:
+        chunks = [{"source": "set-up-cursor -- https://example.com", "text": "mcp.json"}]
+        mock_retrieve.return_value = chunks
+        mock_answer.return_value = {"answer": "Use ~/.cursor/mcp.json.", "citations": []}
+        history = [{"question": "how do I set up Cursor?", "answer": "Use MCP."}]
+
+        ask("where does the config file go?", history=history)
+
+        query = mock_retrieve.call_args[0][0]
+        self.assertIn("Cursor", query)
+        self.assertIn("where does the config file go?", query)
+
+    @patch("src.ask.answer")
+    @patch("src.ask.retrieve")
     def test_ask_refuses_when_retrieval_empty(self, mock_retrieve: MagicMock, mock_answer: MagicMock) -> None:
         mock_retrieve.return_value = []
 
