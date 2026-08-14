@@ -19,6 +19,11 @@ class Chunk(TypedDict):
 
 
 def _split_fixed(text: str, max_chars: int, overlap: int) -> list[str]:
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+    if overlap >= max_chars:
+        raise ValueError("overlap must be less than max_chars")
+
     windows: list[str] = []
     start = 0
     n = len(text)
@@ -27,13 +32,49 @@ def _split_fixed(text: str, max_chars: int, overlap: int) -> list[str]:
         windows.append(text[start:end])
         if end == n:
             break
-        start = end - overlap
+        next_start = end - overlap
+        if next_start <= start:
+            break
+        start = next_start
     return windows
+
+
+SECTION_PREFIXES: dict[str, str] = {
+    "### Register your own": (
+        "How to use Ark after onboarding — create agents, apply a workspace, register a flow.\n\n"
+    ),
+    "### Use them over MCP": (
+        "How to run Ark — discover flows, dispatch a session, and watch progress.\n\n"
+    ),
+    "### Worked example, end to end": (
+        "End-to-end Ark usage: agent create, workspace apply, flow create, start session.\n\n"
+    ),
+    "## Onboarding path": (
+        "Steps to onboard on Ark — full onboarding checklist and order.\n\n"
+    ),
+}
 
 
 def _sections(body: str) -> list[str]:
     parts = re.split(r"(?m)^(?=## )", body)
-    return [p.strip() for p in parts if p.strip()]
+    sections: list[str] = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        if re.search(r"(?m)^### ", part):
+            subparts = re.split(r"(?m)^(?=### )", part)
+            sections.extend(p.strip() for p in subparts if p.strip())
+        else:
+            sections.append(part)
+    return sections
+
+
+def _prefix_section(section: str) -> str:
+    for heading, prefix in SECTION_PREFIXES.items():
+        if section.startswith(heading):
+            return prefix + section
+    return section
 
 
 def _chunk_file(path: Path) -> list[Chunk]:
@@ -47,6 +88,7 @@ def _chunk_file(path: Path) -> list[Chunk]:
 
     chunks: list[Chunk] = []
     for section in _sections(body):
+        section = _prefix_section(section)
         pieces = [section] if len(section) <= MAX_CHARS else _split_fixed(
             section, MAX_CHARS, OVERLAP_CHARS
         )
