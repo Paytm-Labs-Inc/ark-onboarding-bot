@@ -8,7 +8,8 @@ import warnings
 from typing import IO, Any
 
 from src.answer import REFUSAL_PHRASE, answer
-from src.retrieve import retrieve
+from src.query_log import log_query
+from src.retrieve import retrieve_scored
 
 try:
     from src.retriever import DEFAULT_TOP_K
@@ -37,26 +38,67 @@ def _retrieval_query(question: str, history: list[dict[str, str]] | None = None)
     return f"{context} {question}".strip()
 
 
-def ask(
+def _result_from_retrieval(
     question: str,
+    scored,
     *,
-    k: int | None = None,
-    history: list[dict[str, str]] | None = None,
+    history: list[dict[str, str]] | None,
 ) -> dict[str, Any]:
-    """Retrieve relevant chunks, then generate a grounded answer."""
-    question = question.strip()
-    if not question:
-        return {"answer": REFUSAL_PHRASE, "citations": [], "retrieved_sources": []}
-
-    top_k = DEFAULT_TOP_K if k is None else k
-    chunks = retrieve(_retrieval_query(question, history), k=top_k)
+    chunks = scored.chunks
+    top_score = scored.top_score
+    chunk_count = len(chunks)
     if not chunks:
-        return {"answer": REFUSAL_PHRASE, "citations": [], "retrieved_sources": []}
+        return {
+            "answer": REFUSAL_PHRASE,
+            "citations": [],
+            "retrieved_sources": [],
+            "top_score": top_score,
+            "chunk_count": chunk_count,
+        }
 
     result = answer(question, chunks, history=history)
     result["retrieved_sources"] = [
         str(chunk["source"]) for chunk in chunks if chunk.get("source")
     ]
+    result["top_score"] = top_score
+    result["chunk_count"] = chunk_count
+    return result
+
+
+def ask(
+    question: str,
+    *,
+    k: int | None = None,
+    history: list[dict[str, str]] | None = None,
+    channel: str = "cli",
+    session_id: str | None = None,
+    log: bool = True,
+) -> dict[str, Any]:
+    """Retrieve relevant chunks, then generate a grounded answer."""
+    question = question.strip()
+    if not question:
+        return {
+            "answer": REFUSAL_PHRASE,
+            "citations": [],
+            "retrieved_sources": [],
+            "top_score": None,
+            "chunk_count": 0,
+        }
+
+    top_k = DEFAULT_TOP_K if k is None else k
+    scored = retrieve_scored(_retrieval_query(question, history), k=top_k)
+    result = _result_from_retrieval(question, scored, history=history)
+    if log:
+        log_query(
+            question=question,
+            answer=str(result.get("answer", "")),
+            citations=[str(item) for item in result.get("citations", [])],
+            retrieved_sources=[str(item) for item in result.get("retrieved_sources", [])],
+            top_score=result.get("top_score"),
+            chunk_count=int(result.get("chunk_count", 0)),
+            channel=channel,
+            session_id=session_id,
+        )
     return result
 
 
@@ -66,28 +108,54 @@ def run_question(
     k: int | None = None,
     history: list[dict[str, str]] | None = None,
     verbose: bool = True,
+    channel: str = "cli",
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Run retrieve → answer with optional progress messages for the CLI."""
     question = question.strip()
     if not question:
-        return {"answer": REFUSAL_PHRASE, "citations": [], "retrieved_sources": []}
+        return ask("", channel=channel, session_id=session_id)
 
     top_k = DEFAULT_TOP_K if k is None else k
 
     if verbose:
         print("Retrieving relevant docs...", flush=True)
 
-    chunks = retrieve(_retrieval_query(question, history), k=top_k)
-    if not chunks:
-        return {"answer": REFUSAL_PHRASE, "citations": [], "retrieved_sources": []}
+    scored = retrieve_scored(_retrieval_query(question, history), k=top_k)
+    if not scored.chunks:
+        result = {
+            "answer": REFUSAL_PHRASE,
+            "citations": [],
+            "retrieved_sources": [],
+            "top_score": scored.top_score,
+            "chunk_count": 0,
+        }
+        log_query(
+            question=question,
+            answer=result["answer"],
+            citations=[],
+            retrieved_sources=[],
+            top_score=result["top_score"],
+            chunk_count=0,
+            channel=channel,
+            session_id=session_id,
+        )
+        return result
 
     if verbose:
         print("Generating answer (may take 1–2 min)...", flush=True)
 
-    result = answer(question, chunks, history=history)
-    result["retrieved_sources"] = [
-        str(chunk["source"]) for chunk in chunks if chunk.get("source")
-    ]
+    result = _result_from_retrieval(question, scored, history=history)
+    log_query(
+        question=question,
+        answer=str(result.get("answer", "")),
+        citations=[str(item) for item in result.get("citations", [])],
+        retrieved_sources=[str(item) for item in result.get("retrieved_sources", [])],
+        top_score=result.get("top_score"),
+        chunk_count=int(result.get("chunk_count", 0)),
+        channel=channel,
+        session_id=session_id,
+    )
     return result
 
 
