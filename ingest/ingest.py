@@ -281,7 +281,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=FOUNDRY_SITE,
         help="Foundry docs site base URL",
     )
+    parser.add_argument(
+        "--skip-eval",
+        action="store_true",
+        help="Skip retrieval eval after ingest (local dev only)",
+    )
     return parser.parse_args(argv)
+
+
+def run_retrieval_eval() -> int:
+    """Run gold-set retrieval eval; return 0 on pass, 1 on fail."""
+    import subprocess
+
+    cmd = [
+        sys.executable,
+        str(ROOT / "eval" / "run_eval.py"),
+        "--quiet-retriever",
+    ]
+    print("\nRunning retrieval eval gate...")
+    result = subprocess.run(cmd, cwd=ROOT)
+    if result.returncode != 0:
+        print("Eval gate FAILED — corpus not updated for production.", file=sys.stderr)
+    else:
+        print("Eval gate passed.")
+    return result.returncode
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -327,6 +350,9 @@ def main(argv: list[str] | None = None) -> int:
     print("\nSources ingested:")
     for path in written:
         print(f"  - {path.name}")
+
+    if not args.skip_eval:
+        return run_retrieval_eval()
     return 0
 
 
