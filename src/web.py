@@ -7,11 +7,13 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from src.chat import ask_in_session, reset_session
+from src.chunker import DATA_DIR, load_chunks
 from src.feedback import append_feedback
+from src.retriever import retrieve
 
 TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "chat.html"
 
@@ -39,6 +41,43 @@ class FeedbackRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return TEMPLATE_PATH.read_text(encoding="utf-8")
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/ready", response_model=None)
+def ready() -> dict[str, object] | JSONResponse:
+    if not DATA_DIR.is_dir():
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "reason": "data directory missing"},
+        )
+
+    chunks = load_chunks(DATA_DIR)
+    if not chunks:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "reason": "no corpus chunks"},
+        )
+
+    try:
+        hits = retrieve("how do I set up Cursor?", k=1)
+    except Exception as exc:  # noqa: BLE001 — surface readiness failure to caller
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "reason": f"retrieval failed: {exc}"},
+        )
+
+    if not hits:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "reason": "retrieval returned no chunks"},
+        )
+
+    return {"status": "ready", "chunks": len(chunks)}
 
 
 @app.post("/api/ask")

@@ -30,6 +30,26 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Ark Onboarding Bot", response.text)
 
+    def test_health_returns_ok(self) -> None:
+        response = self.client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+
+    @patch("src.web.retrieve", return_value=[{"source": "x", "text": "y"}])
+    @patch("src.web.load_chunks", return_value=[{"source": "x", "text": "y"}])
+    def test_ready_returns_ok_when_corpus_loaded(
+        self, _mock_chunks: object, _mock_retrieve: object
+    ) -> None:
+        response = self.client.get("/ready")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ready")
+
+    @patch("src.web.load_chunks", return_value=[])
+    def test_ready_returns_503_when_corpus_empty(self, _mock_chunks: object) -> None:
+        response = self.client.get("/ready")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["reason"], "no corpus chunks")
+
     @patch("src.web.ask_in_session")
     def test_api_ask_returns_answer_and_sources(self, mock_ask) -> None:
         mock_ask.return_value = {
