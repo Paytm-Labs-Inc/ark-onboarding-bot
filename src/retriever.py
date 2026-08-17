@@ -58,6 +58,12 @@ class Index:
     embeddings: np.ndarray
 
 
+@dataclass(frozen=True)
+class ScoredRetrieval:
+    chunks: list[Chunk]
+    top_score: float | None
+
+
 def _get_model():
     global _model
     if _model is None:
@@ -125,23 +131,23 @@ def _pin_markers(
     return out[: max(top_k, len(pinned))]
 
 
-def retrieve(
+def retrieve_scored(
     question: str,
     *,
     top_k: int = DEFAULT_TOP_K,
     index: Index | None = None,
     data_dir: Path = DATA_DIR,
-) -> list[Chunk]:
-    """Return the top_k corpus chunks most relevant to question."""
+) -> ScoredRetrieval:
+    """Return top_k chunks plus the best similarity score for observability."""
     global _default_index
     if not question or not question.strip():
-        return []
+        return ScoredRetrieval(chunks=[], top_score=None)
     if index is None:
         if _default_index is None:
             _default_index = build_index(load_chunks(data_dir))
         index = _default_index
     if not index.chunks:
-        return []
+        return ScoredRetrieval(chunks=[], top_score=None)
 
     start = time.perf_counter()
     search_query = _expand_query(question.strip())
@@ -159,4 +165,17 @@ def retrieve(
     elapsed_ms = (time.perf_counter() - start) * 1000
     top_score = float(sims[int(order[0])])
     print(f"retrieved {len(results)} chunks in {elapsed_ms:.0f}ms, top_score={top_score:.3f}")
-    return results
+    return ScoredRetrieval(chunks=results, top_score=top_score)
+
+
+def retrieve(
+    question: str,
+    *,
+    top_k: int = DEFAULT_TOP_K,
+    index: Index | None = None,
+    data_dir: Path = DATA_DIR,
+) -> list[Chunk]:
+    """Return the top_k corpus chunks most relevant to question."""
+    return retrieve_scored(
+        question, top_k=top_k, index=index, data_dir=data_dir
+    ).chunks

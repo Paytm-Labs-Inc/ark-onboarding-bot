@@ -69,7 +69,12 @@ def enrich_citations(citations: list[str]) -> list[dict[str, str]]:
 
 def ask_in_session(session_id: str | None, question: str) -> dict[str, Any]:
     sid, session = get_session(session_id)
-    result = ask(question, history=session.history_for_prompt())
+    result = ask(
+        question,
+        history=session.history_for_prompt(),
+        channel="web",
+        session_id=sid,
+    )
     answer_text = str(result.get("answer", ""))
     citations = [str(item) for item in result.get("citations", [])]
     retrieved_sources = [str(item) for item in result.get("retrieved_sources", [])]
