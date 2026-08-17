@@ -1,0 +1,41 @@
+# systemd unit for the Ark onboarding bot web UI (internal-only).
+#
+# Install on an Ark registered-host:
+#   1. Clone the repo to /opt/ark-onboarding-bot (or edit WorkingDirectory below).
+#   2. Create /opt/ark-onboarding-bot/.env with: CURSOR_API_KEY=crsr_...
+#   3. sudo cp deploy/ark-onboarding-bot.service /etc/systemd/system/
+#   4. sudo systemctl daemon-reload && sudo systemctl enable --now ark-onboarding-bot
+#   5. Check: systemctl status ark-onboarding-bot ; journalctl -u ark-onboarding-bot -f
+#
+# The service binds to 127.0.0.1 (loopback) only — reach it via SSH tunnel
+# (see deploy/README.md). Do not set WEB_HOST=0.0.0.0 on a host reachable from
+# outside the corp network.
+
+[Unit]
+Description=Ark onboarding bot web UI (internal-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a non-root service account; create with: sudo useradd -r -s /usr/sbin/nologin arkbot
+User=arkbot
+Group=arkbot
+WorkingDirectory=/opt/ark-onboarding-bot
+EnvironmentFile=/opt/ark-onboarding-bot/.env
+Environment=WEB_HOST=127.0.0.1
+Environment=WEB_PORT=8765
+# Ensure the Cursor agent CLI is discoverable (installed under the service user's home).
+Environment=PATH=/opt/ark-onboarding-bot/.venv/bin:/home/arkbot/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/ark-onboarding-bot/deploy/run_web.sh
+Restart=on-failure
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target
