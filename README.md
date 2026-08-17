@@ -109,6 +109,21 @@ python3 -m unittest discover -s tests -v
 
 ---
 
+## Web UI
+
+A browser chat UI (FastAPI) with multi-turn memory, citations, and thumbs
+feedback lives in `src/web.py`. Run it locally:
+
+```bash
+source .venv/bin/activate
+python -m src.web        # → http://127.0.0.1:8765
+```
+
+It binds to loopback (`127.0.0.1`) by default. To host it for the team on an Ark
+compute — internal-only, no open bind — see **[deploy/README.md](deploy/README.md)**.
+
+---
+
 ## Ingest docs (rebuild corpus)
 
 Rebuild the `data/` corpus from Foundry onboarding pages + the Google Docs FAQ:
