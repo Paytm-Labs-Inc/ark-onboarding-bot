@@ -1,10 +1,10 @@
 # retrieval tuning
 
-Grid search on the gold set (`eval/questions.json`), Aug 2026. **30 questions** total: **24 scored** (retrieval hit-rate) + **6 refusal** (out-of-scope / adversarial prompts for answer eval).
+Grid search on the gold set (`eval/questions.json`), Aug 2026. **44 questions** total: **32 scored** (retrieval hit-rate) + **12 refusal** (out-of-scope prompts for answer eval).
 
-**Winner (shipped):** `MAX_CHARS=2000`, `top_k=8`, `all-MiniLM-L6-v2` → **24/24 (100%)** retrieval hit on the scored set.
+**Winner (shipped):** `MAX_CHARS=2000`, `top_k=8`, `all-MiniLM-L6-v2` → **32/32 (100%)** retrieval hit on the scored set.
 
-**CI gate:** `.github/workflows/eval.yml` runs `python eval/run_eval.py --quiet-retriever` on every PR; exit non-zero if hit-rate drops below 100% on scored questions.
+**CI gate:** `.github/workflows/eval.yml` runs `python eval/run_eval.py --quiet-retriever --only-scored` on every PR; exit non-zero if hit-rate drops below 100% on scored questions. Refusal cases run on `main` with `--full --only-refusals` when `CURSOR_API_KEY` is configured.
 
 Re-run the grid with `python eval/tune_retrieval.py`. Raw numbers in `eval/tuning_results.json`.
 

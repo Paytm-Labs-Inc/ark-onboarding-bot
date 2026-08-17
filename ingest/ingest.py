@@ -297,6 +297,7 @@ def run_retrieval_eval() -> int:
         sys.executable,
         str(ROOT / "eval" / "run_eval.py"),
         "--quiet-retriever",
+        "--only-scored",
     ]
     print("\nRunning retrieval eval gate...")
     result = subprocess.run(cmd, cwd=ROOT)

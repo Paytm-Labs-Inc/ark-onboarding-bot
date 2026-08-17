@@ -53,6 +53,21 @@ def load_questions(path: Path = QUESTIONS_PATH) -> list[dict]:
     return payload
 
 
+def filter_questions(
+    questions: list[dict],
+    *,
+    only_refusals: bool,
+    only_scored: bool,
+) -> list[dict]:
+    if only_refusals and only_scored:
+        raise ValueError("Use at most one of --only-refusals and --only-scored")
+    if only_refusals:
+        return [item for item in questions if item.get("expect_refusal")]
+    if only_scored:
+        return [item for item in questions if item.get("expected_source") is not None]
+    return questions
+
+
 def evaluate_question(
     item: dict,
     *,
@@ -79,7 +94,7 @@ def evaluate_question(
         answer_preview: str | None = None
 
         if run_answer:
-            result = ask(question, k=top_k)
+            result = ask(question, k=top_k, log=False, channel="eval")
             answer_preview = str(result.get("answer", ""))[:240]
             raw_citations = result.get("citations", [])
             citations = [str(item) for item in raw_citations] if isinstance(raw_citations, list) else []
@@ -162,7 +177,16 @@ def print_report(
     print("\nDetails")
     print("-" * 72)
     for result in results:
-        status = "PASS" if result.retrieval_hit or result.expect_refusal else "MISS"
+        if result.expect_refusal:
+            status = (
+                "PASS"
+                if run_answer and result.citation_hit
+                else "REFUSAL" if run_answer else "SKIP"
+            )
+        elif result.retrieval_hit:
+            status = "PASS"
+        else:
+            status = "MISS"
         if result.error:
             status = "ERROR"
         print(f"[{status}] {result.id}: {result.question}")
@@ -205,7 +229,7 @@ def write_report(
     return path
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run onboarding bot eval gold set")
     parser.add_argument(
         "--questions",
@@ -232,7 +256,24 @@ def main() -> int:
         action="store_true",
         help="Suppress retriever timing logs during eval",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--only-refusals",
+        action="store_true",
+        help="Run only expect_refusal questions (requires --full to assert refusal)",
+    )
+    parser.add_argument(
+        "--only-scored",
+        action="store_true",
+        help="Run only in-scope retrieval questions (expected_source set)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.only_refusals and not args.full:
+        print(
+            "Refusal cases require --full to assert clean refusals via ask().",
+            file=sys.stderr,
+        )
+        return 2
 
     if args.full:
         try:
@@ -255,11 +296,25 @@ def main() -> int:
 
         builtins.print = filtered_print
 
-    questions = load_questions(args.questions)
+    questions = filter_questions(
+        load_questions(args.questions),
+        only_refusals=args.only_refusals,
+        only_scored=args.only_scored,
+    )
+    if not questions:
+        print("No questions selected for this eval run.", file=sys.stderr)
+        return 2
+
     if args.full:
+        scope = "refusal" if args.only_refusals else "full"
         print(
-            f"Running full eval on {len(questions)} questions "
+            f"Running {scope} eval on {len(questions)} questions "
             "(each calls Cursor — expect several minutes).",
+            flush=True,
+        )
+    elif args.only_scored:
+        print(
+            f"Running retrieval eval on {len(questions)} in-scope questions.",
             flush=True,
         )
 
@@ -292,13 +347,20 @@ def main() -> int:
     print(f"Wrote report: {report_path}")
 
     scored = [r for r in results if r.expected_source is not None]
+    refusals = [r for r in results if r.expect_refusal]
+
+    if args.only_refusals:
+        refusal_pass = sum(1 for r in refusals if r.citation_hit)
+        if refusal_pass < len(refusals):
+            return 1
+        return 0
+
     retrieval_pass = sum(1 for r in scored if r.retrieval_hit)
     if retrieval_pass < len(scored):
         return 1
     if args.full:
         citation_scored = [r for r in scored if r.citation_hit is not None]
         citation_pass = sum(1 for r in citation_scored if r.citation_hit)
-        refusals = [r for r in results if r.expect_refusal]
         refusal_pass = sum(1 for r in refusals if r.citation_hit)
         if citation_pass < len(citation_scored) or refusal_pass < len(refusals):
             return 1
