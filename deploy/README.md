@@ -69,11 +69,23 @@ publicly — the app is only reachable through the authenticated SSH connection.
 ## 4. Verify
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8765/   # expect 200
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8765/   # index → 200
+curl -s http://127.0.0.1:8765/health                             # liveness → {"status":"ok"}
+curl -s http://127.0.0.1:8765/ready                              # readiness → {"status":"ready","chunks":N}
 curl -s -X POST http://127.0.0.1:8765/api/ask \
   -H 'Content-Type: application/json' \
   -d '{"question":"how do I enroll a host?"}'
 ```
+
+### Health probes
+
+- **`GET /health`** — liveness. Returns `200 {"status":"ok"}` whenever the
+  process is up. Use this for restart supervision (systemd, a load balancer, or
+  an Ark health probe).
+- **`GET /ready`** — readiness. Loads the corpus and runs a sample retrieval;
+  returns `200 {"status":"ready","chunks":N}` when the instance can serve, or
+  `503 {"status":"not_ready","reason":...}` otherwise. The first `/ready` call
+  warms the embedding model, so it can take a few seconds; later calls are fast.
 
 ## Updating a deployment
 
