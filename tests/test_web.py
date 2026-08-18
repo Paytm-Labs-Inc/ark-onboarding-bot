@@ -75,7 +75,33 @@ class WebAppTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["answer"], "Use ~/.cursor/mcp.json")
         self.assertEqual(len(payload["sources"]), 1)
-        mock_ask.assert_called_once_with("sess-1", "how do I set up Cursor?")
+        mock_ask.assert_called_once_with("sess-1", "how do I set up Cursor?", channel="web")
+
+    @patch("src.web.ask_in_session")
+    def test_api_ask_accepts_slack_channel(self, mock_ask) -> None:
+        mock_ask.return_value = {
+            "session_id": "slack-sess",
+            "answer": "Enroll with ark host enroll.",
+            "citations": [],
+            "retrieved_sources": [],
+            "sources": [],
+        }
+
+        response = self.client.post(
+            "/api/ask",
+            json={
+                "question": "how do I enroll a host?",
+                "session_id": "slack:thread-1",
+                "channel": "slack",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mock_ask.assert_called_once_with(
+            "slack:thread-1",
+            "how do I enroll a host?",
+            channel="slack",
+        )
 
     def test_api_ask_rejects_blank_question(self) -> None:
         response = self.client.post("/api/ask", json={"question": "   "})

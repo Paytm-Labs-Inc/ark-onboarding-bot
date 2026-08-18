@@ -23,6 +23,7 @@ app = FastAPI(title="Ark Onboarding Bot", docs_url=None, redoc_url=None)
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     session_id: Optional[str] = None
+    channel: Optional[str] = Field(default="web", pattern=r"^(web|slack|cli)$")
 
 
 class ResetRequest(BaseModel):
@@ -87,7 +88,7 @@ def api_ask(body: AskRequest) -> dict:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     try:
-        return ask_in_session(body.session_id, question)
+        return ask_in_session(body.session_id, question, channel=body.channel or "web")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except TimeoutError as exc:

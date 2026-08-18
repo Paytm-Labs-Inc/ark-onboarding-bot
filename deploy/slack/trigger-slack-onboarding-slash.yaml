@@ -1,0 +1,17 @@
+# Register in the Ark control plane triggers/ catalog (platform repo).
+# Matches existing Slack triggers like slack-inference-slash.
+name: slack-onboarding-slash
+source: slack
+event: slash_command
+match:
+  verb: onboard
+flow: modeltest-onboarding-bot-slack
+workspace: modeltest-onboarding-bot-slack
+autonomy: full
+summary: "Onboarding Q (/onboard): $.payload.rest"
+enabled: true
+inputs:
+  prompt: $.payload.rest
+  slack_user: $.payload.user_id
+  slack_channel: $.payload.channel_id
+  thread_ts: $.payload.thread_ts

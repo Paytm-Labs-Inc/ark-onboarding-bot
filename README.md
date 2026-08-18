@@ -122,6 +122,8 @@ python -m src.web        # → http://127.0.0.1:8765
 It binds to loopback (`127.0.0.1`) by default. To host it for the team on an Ark
 compute — internal-only, no open bind — see **[deploy/README.md](deploy/README.md)**.
 
+For **Slack** (`/onboard` via Ark trigger), see **[deploy/SLACK.md](deploy/SLACK.md)**.
+
 ---
 
 ## Ingest docs (rebuild corpus)

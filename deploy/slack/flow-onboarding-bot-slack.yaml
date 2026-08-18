@@ -1,0 +1,67 @@
+name: onboarding-bot-slack
+description: >
+  Slack-dispatched onboarding Q&A. Reads the question from Slack trigger inputs,
+  calls the deployed onboarding bot /api/ask, and replies in-thread.
+
+inputs:
+  prompt:
+    description: Question text from Slack (slash command rest or mention body)
+  slack_user:
+    description: Slack user id of the asker
+  slack_channel:
+    description: Slack channel id to reply in
+  thread_ts:
+    description: Slack thread root ts for threaded replies (optional)
+
+stages:
+  - name: answer
+    agent: ark-implementer
+    gate: auto
+    produces:
+      - answer.md
+    task: |
+      Answer one Ark onboarding question from Slack by calling the deployed bot API.
+
+      Slack message text:
+      ---
+      {{ inputs.prompt | default(inputs.params.prompt) | default('') }}
+      ---
+
+      Slack context:
+      - user: {{ inputs.slack_user | default(inputs.params.slack_user) | default('') }}
+      - channel: {{ inputs.slack_channel | default(inputs.params.slack_channel) | default('') }}
+      - thread_ts: {{ inputs.thread_ts | default(inputs.params.thread_ts) | default('') }}
+
+      Environment (already set on the workspace):
+      - ONBOARDING_BOT_URL — backend host, e.g. http://10.150.28.187:8765
+      - ONBOARDING_BOT_PREFIX — path prefix, e.g. /onboarding-bot (may be empty)
+      - MONITOR_SLACK_TOKEN — Slack bot token for chat.postMessage (optional)
+      - ONBOARDING_BOT_ACCESS_TOKEN — bearer token if the bot UI requires auth (optional)
+
+      Steps:
+      1. Trim the question. If empty after removing @-mentions and slash-command noise,
+         write answer.md with "SKIPPED: empty question" and finish successfully.
+      2. Build session_id for multi-turn in the same thread:
+         "<slack_user>:<thread_ts or slack_channel>".
+      3. POST to the bot:
+         URL: ${ONBOARDING_BOT_URL}${ONBOARDING_BOT_PREFIX}/api/ask
+         Body JSON: {"question":"<question>","session_id":"<session_id>","channel":"slack"}
+         Use curl. If ONBOARDING_BOT_ACCESS_TOKEN is set, send
+         Authorization: Bearer $ONBOARDING_BOT_ACCESS_TOKEN.
+         Allow up to 180s (answer generation can be slow).
+      4. Parse the JSON response fields: answer, sources (list of {slug,url,label}).
+      5. Write the full JSON response to $WORKSPACE_ROOT/.ark/artifacts/answer.md
+         for debugging.
+      6. If MONITOR_SLACK_TOKEN is set and slack_channel is non-empty, post ONE Slack
+         reply via:
+           curl -sf -X POST https://slack.com/api/chat.postMessage \
+             -H "Authorization: Bearer $MONITOR_SLACK_TOKEN" \
+             -H 'Content-Type: application/json; charset=utf-8' \
+             -d '{"channel":"<slack_channel>","thread_ts":"<thread_ts>","text":"<message>"}'
+         Format text for Slack (plain, under 3000 chars):
+         - First line: the answer (truncate if huge)
+         - Then "Sources:" with up to 3 doc links from sources[].url
+         Escape JSON properly in the curl -d payload.
+         If thread_ts is empty, omit thread_ts from the JSON.
+      7. If the bot call fails, still post a short Slack error when token + channel
+         are available; include the HTTP status or error detail.

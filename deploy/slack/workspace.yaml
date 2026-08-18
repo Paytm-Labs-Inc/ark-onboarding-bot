@@ -1,0 +1,34 @@
+name: onboarding-bot-slack
+description: >
+  Repo-less workspace for the Slack onboarding bot bridge. Agents curl the
+  deployed onboarding bot HTTP API and post answers back to Slack threads.
+workspace_lifecycle: per-session
+
+repos: []
+
+provision:
+  - name: curl
+    check: command -v curl >/dev/null && command -v python3 >/dev/null
+    install: |
+      echo "WARN: curl and python3 are required for Slack bridge actions." >&2
+      exit 0
+
+env:
+  # Override on the compute or via workspace patch when the backend moves.
+  ONBOARDING_BOT_URL: http://10.150.28.187:8765
+  ONBOARDING_BOT_PREFIX: /onboarding-bot
+
+secrets:
+  - MONITOR_SLACK_TOKEN
+  - ONBOARDING_BOT_ACCESS_TOKEN
+
+actions:
+  ping_bot:
+    run: |
+      set -euo pipefail
+      curl -sf "${ONBOARDING_BOT_URL}${ONBOARDING_BOT_PREFIX}/health"
+    timeout: 30
+
+resource_budget:
+  memory: 512Mi
+  cpu: "25"

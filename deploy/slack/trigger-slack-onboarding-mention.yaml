@@ -1,0 +1,17 @@
+# Optional: @ArkBot mentions in a dedicated onboarding channel.
+# Set channel_id after creating the Slack channel.
+name: slack-onboarding-mention
+source: slack
+event: app_mention
+match:
+  channel_id: REPLACE_WITH_ONBOARDING_CHANNEL_ID
+flow: modeltest-onboarding-bot-slack
+workspace: modeltest-onboarding-bot-slack
+autonomy: full
+summary: "Onboarding mention: $.payload.text"
+enabled: false
+inputs:
+  prompt: $.payload.text
+  slack_user: $.payload.user_id
+  slack_channel: $.payload.channel_id
+  thread_ts: $.payload.thread_ts
