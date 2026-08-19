@@ -34,7 +34,7 @@ class AskTests(unittest.TestCase):
 
         result = ask("how do I enroll a host?")
 
-        mock_retrieve_scored.assert_called_once_with("how do I enroll a host?", k=8)
+        mock_retrieve_scored.assert_called_once_with("how do I enroll a host?", k=4)
         mock_answer.assert_called_once_with(
             "how do I enroll a host?", chunks, history=None
         )

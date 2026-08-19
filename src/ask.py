@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import warnings
 from typing import IO, Any
@@ -15,6 +16,21 @@ try:
     from src.retriever import DEFAULT_TOP_K
 except ImportError:
     DEFAULT_TOP_K = 8
+
+# The answer path retrieves fewer chunks than eval for a shorter prompt / faster
+# generation. Override with ASK_TOP_K (higher = more context but slower).
+DEFAULT_ASK_TOP_K = 4
+
+
+def _default_top_k() -> int:
+    raw = os.environ.get("ASK_TOP_K")
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return DEFAULT_ASK_TOP_K
+
 
 EXIT_COMMANDS = {"quit", "exit", "q"}
 
@@ -85,7 +101,7 @@ def ask(
             "chunk_count": 0,
         }
 
-    top_k = DEFAULT_TOP_K if k is None else k
+    top_k = _default_top_k() if k is None else k
     scored = retrieve_scored(_retrieval_query(question, history), k=top_k)
     result = _result_from_retrieval(question, scored, history=history)
     if log:
@@ -116,7 +132,7 @@ def run_question(
     if not question:
         return ask("", channel=channel, session_id=session_id)
 
-    top_k = DEFAULT_TOP_K if k is None else k
+    top_k = _default_top_k() if k is None else k
 
     if verbose:
         print("Retrieving relevant docs...", flush=True)
