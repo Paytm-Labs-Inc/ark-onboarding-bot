@@ -21,7 +21,7 @@ from src.auth import (
 from src.chat import ask_in_session, reset_session
 from src.chunker import DATA_DIR, load_chunks
 from src.feedback import append_feedback, read_feedback
-from src.retriever import retrieve
+from src.retrieve import retrieve
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 TEMPLATE_PATH = TEMPLATE_DIR / "chat.html"

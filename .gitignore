@@ -7,4 +7,5 @@ __pycache__/
 data/*.embeddings
 sources/faq-google-doc.*
 eval/feedback.jsonl
+eval/query_log.jsonl
 eval/results/
