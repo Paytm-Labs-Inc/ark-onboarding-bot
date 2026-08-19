@@ -66,7 +66,7 @@ def build_app():
 
     app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
-    @app.command("/ark")
+    @app.command("/askark")
     def handle_command(ack, command, respond):
         ack()
         respond(answer_text(command.get("text", "")))
