@@ -5,10 +5,14 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+import threading
+
 from src.slack_app import (
     PROMPT_HINT,
     answer_text,
     format_response,
+    run_in_background,
+    safe_answer,
     should_answer_dm,
     strip_mention,
 )
@@ -46,6 +50,17 @@ class SlackHelpersTests(unittest.TestCase):
     def test_answer_text_blank_question_hints_without_calling_ask(self, mock_ask) -> None:
         self.assertEqual(answer_text("<@U1>   "), PROMPT_HINT)
         mock_ask.assert_not_called()
+
+    @patch("src.slack_app.ask", side_effect=ValueError("CURSOR_API_KEY not set"))
+    def test_safe_answer_returns_message_instead_of_raising(self, _mock_ask) -> None:
+        result = safe_answer("how do I enroll a host?")
+        self.assertIn("hit an error", result)
+        self.assertIn("CURSOR_API_KEY not set", result)
+
+    def test_run_in_background_executes_target(self) -> None:
+        done = threading.Event()
+        run_in_background(done.set)
+        self.assertTrue(done.wait(timeout=2))
 
     def test_should_answer_dm_only_for_human_ims(self) -> None:
         self.assertTrue(should_answer_dm({"channel_type": "im", "text": "hi"}))

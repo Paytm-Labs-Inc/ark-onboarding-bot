@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 
 from src.ask import ask
 
@@ -60,6 +61,28 @@ def should_answer_dm(event: dict) -> bool:
     return True
 
 
+WORKING_NOTE = "Looking that up in the docs… (this takes ~1-2 min)"
+
+
+def safe_answer(raw_question: str) -> str:
+    """answer_text() but never raises — surface errors as a message instead."""
+    try:
+        return answer_text(raw_question)
+    except (ValueError, RuntimeError, TimeoutError) as exc:
+        return f"Sorry — I hit an error answering that: {exc}"
+
+
+def run_in_background(target) -> None:
+    """Run the slow answer off the Slack handler so the socket stays responsive.
+
+    Generating an answer takes ~1-2 min (Cursor agent). Doing it inline blocks
+    the Socket Mode connection long enough that Slack drops it ("connection
+    reset"), so the reply never posts. Offloading keeps the socket alive and
+    lets the reply land when ready.
+    """
+    threading.Thread(target=target, daemon=True).start()
+
+
 def build_app():
     """Build the Slack Bolt app. Imported lazily so tests don't need slack_bolt."""
     from slack_bolt import App
@@ -69,16 +92,24 @@ def build_app():
     @app.command("/askark")
     def handle_command(ack, command, respond):
         ack()
-        respond(answer_text(command.get("text", "")))
+        text = command.get("text", "")
+        respond(WORKING_NOTE)
+        run_in_background(lambda: respond(safe_answer(text)))
 
     @app.event("app_mention")
     def handle_mention(event, say):
-        say(text=answer_text(event.get("text", "")), thread_ts=event.get("ts"))
+        thread_ts = event.get("ts")
+        text = event.get("text", "")
+        say(text=WORKING_NOTE, thread_ts=thread_ts)
+        run_in_background(lambda: say(text=safe_answer(text), thread_ts=thread_ts))
 
     @app.event("message")
     def handle_direct_message(event, say):
-        if should_answer_dm(event):
-            say(answer_text(event.get("text", "")))
+        if not should_answer_dm(event):
+            return
+        text = event.get("text", "")
+        say(WORKING_NOTE)
+        run_in_background(lambda: say(safe_answer(text)))
 
     return app
 
