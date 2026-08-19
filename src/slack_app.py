@@ -51,6 +51,15 @@ def answer_text(raw_question: str) -> str:
     return format_response(ask(question))
 
 
+def should_answer_dm(event: dict) -> bool:
+    """True only for human direct messages (ignore channels, bots, edits)."""
+    if event.get("channel_type") != "im":
+        return False
+    if event.get("bot_id") or event.get("subtype"):
+        return False
+    return True
+
+
 def build_app():
     """Build the Slack Bolt app. Imported lazily so tests don't need slack_bolt."""
     from slack_bolt import App
@@ -65,6 +74,11 @@ def build_app():
     @app.event("app_mention")
     def handle_mention(event, say):
         say(text=answer_text(event.get("text", "")), thread_ts=event.get("ts"))
+
+    @app.event("message")
+    def handle_direct_message(event, say):
+        if should_answer_dm(event):
+            say(answer_text(event.get("text", "")))
 
     return app
 

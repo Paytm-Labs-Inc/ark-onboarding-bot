@@ -5,7 +5,13 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from src.slack_app import PROMPT_HINT, answer_text, format_response, strip_mention
+from src.slack_app import (
+    PROMPT_HINT,
+    answer_text,
+    format_response,
+    should_answer_dm,
+    strip_mention,
+)
 
 
 class SlackHelpersTests(unittest.TestCase):
@@ -40,6 +46,15 @@ class SlackHelpersTests(unittest.TestCase):
     def test_answer_text_blank_question_hints_without_calling_ask(self, mock_ask) -> None:
         self.assertEqual(answer_text("<@U1>   "), PROMPT_HINT)
         mock_ask.assert_not_called()
+
+    def test_should_answer_dm_only_for_human_ims(self) -> None:
+        self.assertTrue(should_answer_dm({"channel_type": "im", "text": "hi"}))
+        # Not a DM (channel message)
+        self.assertFalse(should_answer_dm({"channel_type": "channel", "text": "hi"}))
+        # Bot's own message
+        self.assertFalse(should_answer_dm({"channel_type": "im", "bot_id": "B1"}))
+        # Edited/system message
+        self.assertFalse(should_answer_dm({"channel_type": "im", "subtype": "message_changed"}))
 
 
 if __name__ == "__main__":
