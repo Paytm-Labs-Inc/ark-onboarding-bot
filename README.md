@@ -134,6 +134,26 @@ python ingest/ingest.py
 
 For the Google Doc FAQ, export plain text to `sources/faq-google-doc.txt` (or pass `--gdoc-file`). Optional: set `FOUNDRY_PLATFORM_PATH` to a local `foundry-platform` clone to read raw markdown from `doc-site/onboarding/`.
 
+## Access control (deployed UI)
+
+The web UI is gated by a single shared team token. Set `ARK_ACCESS_TOKEN` (env or
+`.env`) and the app requires it on every route except the health probes and the
+login page:
+
+```bash
+export ARK_ACCESS_TOKEN=some-long-random-team-token
+python -m src.web
+```
+
+- Users open the site, are redirected to `/login`, and enter the token once (stored
+  in an HttpOnly cookie). API calls also accept `Authorization: Bearer <token>`.
+- When `ARK_ACCESS_TOKEN` is unset the app runs open for local dev, but
+  `python -m src.web` refuses to bind to a non-loopback host in that state, so a
+  deployment can't be accidentally exposed without a token.
+- `src/auth.py` has an `sso_stub_identity` hook where real SSO can be added later.
+
+Feedback thumbs up/down submitted in the chat are viewable at `/reviews`.
+
 ## Who
 
 - **Keerthi** — retrieval: ingestion, chunking, embeddings, retriever, eval harness

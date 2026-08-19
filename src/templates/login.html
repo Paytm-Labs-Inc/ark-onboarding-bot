@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ark Onboarding Bot — Sign in</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f7f9;
+      color: #1f2937;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 28px 24px;
+      width: 100%;
+      max-width: 380px;
+    }
+    h1 { font-size: 1.2rem; margin: 0 0 4px; }
+    p.sub { color: #6b7280; font-size: 0.9rem; margin: 0 0 18px; }
+    label { display: block; font-size: 0.85rem; margin-bottom: 6px; color: #374151; }
+    input {
+      width: 100%;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 11px 12px;
+      font: inherit;
+      margin-bottom: 14px;
+    }
+    input:focus { outline: 2px solid rgba(37,99,235,0.25); border-color: #2563eb; }
+    button {
+      width: 100%;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 11px 14px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: #1d4ed8; }
+    .status { min-height: 1.1rem; margin-top: 12px; font-size: 0.86rem; color: #b91c1c; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Ark Onboarding Bot</h1>
+    <p class="sub">Team access only. Enter the shared access token to continue.</p>
+    <form id="login-form">
+      <label for="token">Access token</label>
+      <input id="token" type="password" autocomplete="current-password" placeholder="crsr-team-token" />
+      <button type="submit">Sign in</button>
+    </form>
+    <div class="status" id="status"></div>
+  </div>
+
+  <script>
+    const form = document.getElementById("login-form");
+    const tokenEl = document.getElementById("token");
+    const statusEl = document.getElementById("status");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const token = tokenEl.value.trim();
+      if (!token) { statusEl.textContent = "Enter the access token."; return; }
+      statusEl.textContent = "";
+      try {
+        const response = await fetch("/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+        if (response.ok) {
+          window.location = "/";
+          return;
+        }
+        const payload = await response.json().catch(() => ({}));
+        statusEl.textContent = payload.detail || "Invalid token.";
+      } catch (error) {
+        statusEl.textContent = "Sign in failed. Try again.";
+      }
+    });
+    tokenEl.focus();
+  </script>
+</body>
+</html>

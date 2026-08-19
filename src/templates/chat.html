@@ -57,6 +57,17 @@
       cursor: pointer;
     }
     button.secondary:hover { background: #f9fafb; }
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .header-actions a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.88rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      background: var(--panel);
+    }
+    .header-actions a:hover { border-color: var(--accent); color: var(--accent); }
     #chat {
       display: flex;
       flex-direction: column;
@@ -184,7 +195,11 @@
         <h1>Ark Onboarding Bot</h1>
         <p class="subtitle">Ask anything about getting started with Ark</p>
       </div>
-      <button type="button" class="secondary" id="new-chat">New chat</button>
+      <div class="header-actions">
+        <a href="/reviews">Reviews</a>
+        <a href="/logout">Sign out</a>
+        <button type="button" class="secondary" id="new-chat">New chat</button>
+      </div>
     </header>
 
     <div id="chat"></div>
@@ -251,6 +266,10 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...meta, rating }),
         });
+        if (response.status === 401) {
+          window.location = "/login";
+          return;
+        }
         if (!response.ok) {
           const payload = await response.json();
           throw new Error(payload.detail || "Feedback failed");
@@ -318,6 +337,10 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ question, session_id: sessionId }),
         });
+        if (response.status === 401) {
+          window.location = "/login";
+          return;
+        }
         const payload = await response.json();
         if (!response.ok) {
           throw new Error(payload.detail || "Request failed");
