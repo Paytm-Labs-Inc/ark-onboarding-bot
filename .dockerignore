@@ -1,0 +1,16 @@
+# Keep the build context small and avoid copying local/dev-only files.
+.git
+.gitignore
+.venv
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+eval/results/
+# Runtime logs (feedback.jsonl, query_log.jsonl, etc.) — never bake local traffic into the image.
+eval/*.jsonl
+sources/faq-google-doc.*
+*.log
+.DS_Store
+.pytest_cache/
