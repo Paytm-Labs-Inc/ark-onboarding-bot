@@ -28,8 +28,8 @@ Rules:
        Bitbucket password, deploying an app to AWS production, internal prod connection
        strings, bypassing Ark auth, or generic CI setup unrelated to Ark; OR
    (b) the chunks contain zero facts relevant to the question (nothing on-topic to synthesize).
-5. When you answer, cite every chunk source you used in citations.
-6. citations must be copied exactly from the chunk source labels provided.
+5. When you answer, list the NUMBER of every chunk you used in chunks_used, e.g. [1, 3].
+6. chunks_used must contain only chunk numbers shown above — never source names or URLs.
 7. Respond with JSON only — no markdown fences, no extra text. Do not put triple-backtick
    code blocks inside the answer string; use inline backticks for commands (e.g. `ark flow create`).
 8. Write directly to the user in second person ("You can…", "Use…", "Run…"). Never refer to
@@ -60,22 +60,28 @@ Rules:
     that say Cursor is "in progress" or "not yet" when current setup steps are present.
 
 JSON shape:
-{{"answer": "<your answer>", "citations": ["<source label>", "..."]}}
+{{"answer": "<your answer>", "chunks_used": [1, 3]}}
 
-If refusing, use an empty citations list."""
+If refusing, use an empty chunks_used list."""
 
 
 def _format_chunks(chunks: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     for index, chunk in enumerate(chunks, start=1):
-        source = chunk.get("source", f"chunk-{index}")
         text = chunk.get("text", "")
-        parts.append(f"[Chunk {index} — {source}]\n{text}")
+        parts.append(f"[Chunk {index}]\n{text}")
     return "\n\n".join(parts)
 
 
 def _parse_json_response(raw: str) -> dict[str, Any]:
     text = raw.strip()
+
+    # Reasoning models (Qwen3 and the R1 family) emit a <think> block first, and it
+    # can contain braces, so strip it before looking for the payload. An unterminated
+    # block means the reasoning ran past max_tokens and there is no payload after it.
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    if "<think>" in text.lower():
+        text = re.split(r"<think>", text, maxsplit=1, flags=re.IGNORECASE)[0].strip()
 
     # Haiku wraps the outer payload in ```json; the answer field may contain ``` too.
     if text.startswith("```"):
@@ -247,6 +253,42 @@ def warm_agent() -> None:
         pass
 
 
+def _resolve_citations(
+    parsed: dict[str, Any], chunks: list[dict[str, Any]]
+) -> list[str]:
+    """Map the chunk numbers the model returned back to their source labels.
+
+    Models reliably report which chunk they used but transcribe a 45-character
+    source label unreliably, so the prompt asks for numbers and the mapping
+    happens here. Responses that still carry verbatim labels (older cache
+    entries) are accepted as a fallback.
+    """
+    sources: list[str] = []
+
+    indices = parsed.get("chunks_used", [])
+    if isinstance(indices, list):
+        for item in indices:
+            try:
+                index = int(item)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= index <= len(chunks):
+                source = chunks[index - 1].get("source")
+                if source and str(source) not in sources:
+                    sources.append(str(source))
+    if sources:
+        return sources
+
+    known = {str(chunk["source"]) for chunk in chunks if chunk.get("source")}
+    labels = parsed.get("citations", [])
+    if isinstance(labels, list):
+        for item in labels:
+            label = str(item)
+            if label in known and label not in sources:
+                sources.append(label)
+    return sources
+
+
 def _format_history(history: list[dict[str, str]]) -> str:
     lines: list[str] = []
     for turn in history:
@@ -291,19 +333,7 @@ def _generate_answer(
         raise ValueError(f"Could not parse model response as JSON: {raw!r}") from exc
 
     answer_text = str(parsed.get("answer", "")).strip()
-    citations_raw = parsed.get("citations", [])
-    if not isinstance(citations_raw, list):
-        citations_raw = []
-
-    known_sources = {chunk.get("source") for chunk in chunks if chunk.get("source")}
-    citations = [str(item) for item in citations_raw if str(item) in known_sources]
-
-    if answer_text != REFUSAL_PHRASE and not citations:
-        citations = [
-            str(chunk["source"])
-            for chunk in chunks
-            if chunk.get("source") and str(chunk["source"]).lower() in answer_text.lower()
-        ]
+    citations = _resolve_citations(parsed, chunks)
 
     return {"answer": answer_text or REFUSAL_PHRASE, "citations": citations}
 
