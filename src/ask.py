@@ -6,11 +6,12 @@ import argparse
 import os
 import sys
 import warnings
+from collections import OrderedDict
 from typing import IO, Any
 
 from src.answer import REFUSAL_PHRASE, answer
 from src.query_log import log_query
-from src.retrieve import retrieve_scored
+from src.retrieve import RetrievalResult, retrieve_scored
 
 try:
     from src.retriever import DEFAULT_TOP_K
@@ -19,7 +20,8 @@ except ImportError:
 
 # The answer path retrieves fewer chunks than eval for a shorter prompt / faster
 # generation. Override with ASK_TOP_K (higher = more context but slower).
-DEFAULT_ASK_TOP_K = 4
+# k=8 keeps weaker models from refusing when key chunks rank ~4th (e.g. enroll-a-host).
+DEFAULT_ASK_TOP_K = 8
 
 
 def _default_top_k() -> int:
@@ -33,6 +35,52 @@ def _default_top_k() -> int:
 
 
 EXIT_COMMANDS = {"quit", "exit", "q"}
+
+_RETRIEVAL_CACHE: OrderedDict[tuple[str, int], RetrievalResult] = OrderedDict()
+
+
+def _cache_enabled() -> bool:
+    raw = os.environ.get("ASK_RETRIEVAL_CACHE", "1").strip().lower()
+    return raw not in ("0", "false", "no")
+
+
+def _cache_max_size() -> int:
+    raw = os.environ.get("ASK_RETRIEVAL_CACHE_SIZE", "128")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 128
+
+
+def _normalize_cache_key(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def clear_retrieval_cache() -> None:
+    """Clear the in-process retrieval LRU (for tests)."""
+    _RETRIEVAL_CACHE.clear()
+
+
+def _cached_retrieve_scored(query: str, *, k: int) -> RetrievalResult:
+    if not _cache_enabled():
+        return retrieve_scored(query, k=k)
+
+    max_size = _cache_max_size()
+    if max_size == 0:
+        return retrieve_scored(query, k=k)
+
+    key = (_normalize_cache_key(query), k)
+    cached = _RETRIEVAL_CACHE.get(key)
+    if cached is not None:
+        _RETRIEVAL_CACHE.move_to_end(key)
+        return cached
+
+    result = retrieve_scored(query, k=k)
+    _RETRIEVAL_CACHE[key] = result
+    _RETRIEVAL_CACHE.move_to_end(key)
+    while len(_RETRIEVAL_CACHE) > max_size:
+        _RETRIEVAL_CACHE.popitem(last=False)
+    return result
 
 
 def _retrieval_query(question: str, history: list[dict[str, str]] | None = None) -> str:
@@ -102,7 +150,7 @@ def ask(
         }
 
     top_k = _default_top_k() if k is None else k
-    scored = retrieve_scored(_retrieval_query(question, history), k=top_k)
+    scored = _cached_retrieve_scored(_retrieval_query(question, history), k=top_k)
     result = _result_from_retrieval(question, scored, history=history)
     if log:
         log_query(
@@ -137,7 +185,7 @@ def run_question(
     if verbose:
         print("Retrieving relevant docs...", flush=True)
 
-    scored = retrieve_scored(_retrieval_query(question, history), k=top_k)
+    scored = _cached_retrieve_scored(_retrieval_query(question, history), k=top_k)
     if not scored.chunks:
         result = {
             "answer": REFUSAL_PHRASE,

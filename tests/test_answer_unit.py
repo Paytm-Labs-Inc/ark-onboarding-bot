@@ -7,7 +7,7 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-from src.answer import REFUSAL_PHRASE, answer
+from src.answer import REFUSAL_PHRASE, SYSTEM_PROMPT, answer
 
 
 class AnswerLayerTests(unittest.TestCase):
@@ -46,6 +46,25 @@ class AnswerLayerTests(unittest.TestCase):
         self.assertEqual(result["answer"], REFUSAL_PHRASE)
         self.assertEqual(result["citations"], [])
         mock_cursor.assert_not_called()
+
+    @patch("src.answer._call_cursor_agent")
+    def test_answer_single_model_call_on_refusal(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps({"answer": REFUSAL_PHRASE, "citations": []})
+        chunks = [
+            {
+                "source": "faq -- https://foundry.mypaytm.com/faq",
+                "text": "Run ark host enroll with your user API key.",
+            }
+        ]
+
+        result = answer("how to enroll a host", chunks)
+
+        self.assertEqual(result["answer"], REFUSAL_PHRASE)
+        mock_cursor.assert_called_once()
+
+    def test_system_prompt_requires_answer_when_chunks_exist(self) -> None:
+        self.assertIn("MUST synthesize an answer", SYSTEM_PROMPT)
+        self.assertIn("Jira or", SYSTEM_PROMPT)
 
     @patch("src.answer.shutil.which", return_value="/usr/bin/agent")
     def test_missing_api_key_raises(self, _mock_which: MagicMock) -> None:

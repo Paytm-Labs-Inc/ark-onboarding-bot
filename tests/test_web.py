@@ -15,6 +15,8 @@ from src.web import app
 
 class WebAppTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.warm_patch = patch("src.web.warm_services")
+        self.warm_patch.start()
         self.client = TestClient(app)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.feedback_path = Path(self.temp_dir.name) / "feedback.jsonl"
@@ -23,6 +25,7 @@ class WebAppTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.feedback_patch.stop()
+        self.warm_patch.stop()
         self.temp_dir.cleanup()
 
     def test_index_returns_html(self) -> None:
@@ -35,8 +38,8 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
 
-    @patch("src.web.retrieve", return_value=[{"source": "x", "text": "y"}])
-    @patch("src.web.load_chunks", return_value=[{"source": "x", "text": "y"}])
+    @patch("src.warmup.retrieve", return_value=[{"source": "x", "text": "y"}])
+    @patch("src.warmup.load_chunks", return_value=[{"source": "x", "text": "y"}])
     def test_ready_returns_ok_when_corpus_loaded(
         self, _mock_chunks: object, _mock_retrieve: object
     ) -> None:
@@ -44,7 +47,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
 
-    @patch("src.web.load_chunks", return_value=[])
+    @patch("src.warmup.load_chunks", return_value=[])
     def test_ready_returns_503_when_corpus_empty(self, _mock_chunks: object) -> None:
         response = self.client.get("/ready")
         self.assertEqual(response.status_code, 503)

@@ -78,6 +78,23 @@ class RetrieverTests(unittest.TestCase):
         texts = [chunk["text"] for chunk in results]
         self.assertTrue(any("Onboarding path" in text for text in texts))
 
+    @patch("src.retriever._embed", side_effect=_fake_embed)
+    def test_enroll_host_pins_faq_chunk(self, _mock) -> None:
+        chunks = CHUNKS + [
+            {
+                "source": "faq -- https://example.com/faq",
+                "text": "Run `ark host enroll` with your user API key.",
+            },
+            {
+                "source": "getting-started -- https://example.com",
+                "text": "Registering a machine as compute is an admin action.",
+            },
+        ]
+        index = build_index(chunks)
+        results = retrieve("how to enroll a host", top_k=3, index=index)
+        texts = " ".join(chunk["text"] for chunk in results)
+        self.assertIn("ark host enroll", texts)
+
 
 if __name__ == "__main__":
     unittest.main()

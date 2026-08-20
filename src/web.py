@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -19,10 +20,8 @@ from src.auth import (
     token_valid,
 )
 from src.chat import ask_in_session, reset_session
-from src.chunker import DATA_DIR, load_chunks
 from src.feedback import append_feedback, read_feedback
-# Public retrieve() wrapper (accepts k=...) — used by the /ready probe.
-from src.retrieve import retrieve
+from src.warmup import check_retrieval_ready, warm_services
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 TEMPLATE_PATH = TEMPLATE_DIR / "chat.html"
@@ -87,7 +86,18 @@ class PrefixStripMiddleware:
         await self.app(scope, receive, send)
 
 
-app = FastAPI(title="Ark Onboarding Bot", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    warm_services()
+    yield
+
+
+app = FastAPI(
+    title="Ark Onboarding Bot",
+    docs_url=None,
+    redoc_url=None,
+    lifespan=lifespan,
+)
 
 
 @app.middleware("http")
@@ -176,34 +186,10 @@ def health() -> dict[str, str]:
 
 @app.get("/ready", response_model=None)
 def ready() -> dict[str, object] | JSONResponse:
-    if not DATA_DIR.is_dir():
-        return JSONResponse(
-            status_code=503,
-            content={"status": "not_ready", "reason": "data directory missing"},
-        )
-
-    chunks = load_chunks(DATA_DIR)
-    if not chunks:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "not_ready", "reason": "no corpus chunks"},
-        )
-
-    try:
-        hits = retrieve("how do I set up Cursor?", k=1)
-    except Exception as exc:  # noqa: BLE001 — surface readiness failure to caller
-        return JSONResponse(
-            status_code=503,
-            content={"status": "not_ready", "reason": f"retrieval failed: {exc}"},
-        )
-
-    if not hits:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "not_ready", "reason": "retrieval returned no chunks"},
-        )
-
-    return {"status": "ready", "chunks": len(chunks)}
+    ok, body = check_retrieval_ready()
+    if not ok:
+        return JSONResponse(status_code=503, content=body)
+    return body
 
 
 @app.post("/api/ask")

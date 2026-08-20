@@ -39,6 +39,19 @@ USAGE_RE = re.compile(
     r"\bwhat\s+(?:do\s+i|should\s+i)\s+do\s+(?:next|after)\b"
 )
 
+ENROLL_HOST_RE = re.compile(
+    r"(?i)"
+    r"\b(?:how\s+(?:do\s+i|to)\s+)?(?:enroll|register)\b.*\b(?:host|compute|machine|box)\b|"
+    r"\b(?:host|compute|machine|box)\b.*\b(?:enroll|register)\b|"
+    r"\benroll\s+(?:a\s+)?host\b"
+)
+
+ENROLL_PINNED_MARKERS = (
+    "ark host enroll",
+    "not able to enroll compute",
+    "enroll a machine for themselves",
+)
+
 ONBOARDING_PINNED_MARKERS = PINNED_MARKERS
 
 USAGE_PINNED_MARKERS = (
@@ -101,6 +114,8 @@ def _expand_query(question: str) -> str:
         return (
             f"{question} create workspace register flow start session dispatch agent"
         )
+    if ENROLL_HOST_RE.search(question):
+        return f"{question} ark host enroll member key API token compute"
     return question
 
 
@@ -162,6 +177,8 @@ def retrieve_scored(
         )
     if USAGE_RE.search(question):
         results = _pin_markers(results, index, USAGE_PINNED_MARKERS, top_k=top_k)
+    if ENROLL_HOST_RE.search(question):
+        results = _pin_markers(results, index, ENROLL_PINNED_MARKERS, top_k=top_k)
     elapsed_ms = (time.perf_counter() - start) * 1000
     top_score = float(sims[int(order[0])])
     print(f"retrieved {len(results)} chunks in {elapsed_ms:.0f}ms, top_score={top_score:.3f}")

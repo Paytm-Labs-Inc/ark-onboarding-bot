@@ -105,3 +105,39 @@ sudo systemctl restart ark-onboarding-bot
   to a private/VPN-only interface (`WEB_HOST=<private-ip>`) — but only behind a
   security group / firewall that blocks everything outside the corp network.
   Never bind `0.0.0.0` on a publicly reachable host.
+
+## Performance (Aug 2026)
+
+Measured locally on the gold question *"how to enroll a host?"* after startup
+warmup (`WARM_ON_STARTUP=1`, `WARM_AGENT_ON_STARTUP=1`, `ASK_RETRIEVAL_CACHE=1`).
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Answer model | `composer-2.5` (~73s) | `claude-haiku-4-5` (~25–35s steady state) |
+| Retrieval (first ask, warm process) | ~250ms | ~250ms |
+| Retrieval (repeat same question) | ~250ms | **~5ms** (LRU cache hit) |
+| Startup warmup (one-time per restart) | none | ~20–90s (embed model + agent ping) |
+| First user ask after warmup | ~60–90s if cold | ~25–55s |
+
+**Env knobs** (see `.env.example`):
+
+- `ASK_RETRIEVAL_CACHE=1` / `ASK_RETRIEVAL_CACHE_SIZE=128` — in-process retrieval LRU
+- `WARM_ON_STARTUP=1` / `WARM_AGENT_ON_STARTUP=1` — warm embed index + Cursor agent on boot
+- `ASK_TOP_K=8` — chunk count sent to Haiku
+- `CURSOR_MODEL=claude-haiku-4-5` — answer generation model
+
+Retrieval cache saves search time only; repeat asks still pay the full model call
+(~25–35s). Disable cache with `ASK_RETRIEVAL_CACHE=0` when debugging retrieval.
+
+### Slack (Socket Mode)
+
+Run as a separate process from the web UI:
+
+```bash
+set -a && source .env && set +a   # needs SLACK_BOT_TOKEN + SLACK_APP_TOKEN
+python -m src.slack_app
+```
+
+Only one `src.slack_app` instance should run at a time (Socket Mode holds one
+connection). Both web and Slack call the same `ask()` pipeline and benefit from
+cache + warmup on their respective startups.

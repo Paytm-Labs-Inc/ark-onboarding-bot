@@ -124,6 +124,9 @@ def main() -> None:
 
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+    from src.warmup import warm_services
+
+    warm_services()
     app = build_app()
     print("Ark onboarding bot Slack app — connecting via Socket Mode...")
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()

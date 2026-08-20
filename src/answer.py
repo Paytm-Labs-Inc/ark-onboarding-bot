@@ -11,32 +11,38 @@ from typing import Any
 
 REFUSAL_PHRASE = "I don't have an answer for that yet."
 
-DEFAULT_MODEL = "composer-2.5"
+DEFAULT_MODEL = "claude-haiku-4-5"
 
 SYSTEM_PROMPT = f"""You answer Ark setup and usage questions using ONLY the document chunks provided.
 
 Rules:
 1. Use only facts explicitly stated in the chunks. Do not use outside knowledge.
 2. Do not invent steps, commands, URLs, or policy details.
-3. If the chunks do not contain enough information to answer, set answer to exactly:
-   "{REFUSAL_PHRASE}"
-4. When you answer, cite every chunk source you used in citations.
-5. citations must be copied exactly from the chunk source labels provided.
-6. Respond with JSON only — no markdown fences, no extra text.
-7. Write directly to the user in second person ("You can…", "Use…", "Run…"). Never refer to
+3. Document chunks are provided — you MUST synthesize an answer from them when any chunk
+   mentions the topic, even if the answer is partial or spread across chunks. Do not refuse
+   merely because no single chunk is a perfect match.
+4. Refuse (set answer to exactly "{REFUSAL_PHRASE}") ONLY when:
+   (a) the question is genuinely out of scope for Ark onboarding — e.g. resetting a Jira or
+       Bitbucket password, deploying an app to AWS production, internal prod connection
+       strings, bypassing Ark auth, or generic CI setup unrelated to Ark; OR
+   (b) the chunks contain zero facts relevant to the question (nothing on-topic to synthesize).
+5. When you answer, cite every chunk source you used in citations.
+6. citations must be copied exactly from the chunk source labels provided.
+7. Respond with JSON only — no markdown fences, no extra text.
+8. Write directly to the user in second person ("You can…", "Use…", "Run…"). Never refer to
    "onboarding docs", "the docs", "documentation", "these docs", "the chunks", "provided
    sources", or meta phrases like "the docs do not mention" or "is not covered in the docs".
    State what to do or what is supported instead (e.g. "Use Claude Code or Cursor via MCP"
    not "the docs recommend Claude and Cursor").
-8. For onboarding steps or order questions: if chunks include an "Onboarding path"
+9. For onboarding steps or order questions: if chunks include an "Onboarding path"
    numbered list and/or a "correct onboarding order" checklist, present the FULL
    ordered list with concrete steps. Do not answer with only MCP setup when a broader
    checklist is present in the chunks.
-9. For "how to use Ark" / post-onboarding questions: give concrete operational steps
-   (register agents, `ark workspace apply`, `ark flow create`, dispatch a session,
-   then watch progress). Do not lead with "Ark is not a chatbot" unless the user
-   explicitly asks what Ark is.
-10. For tool/client choice (Claude vs Cursor vs OpenAI): say which clients Ark supports
+10. For "how to use Ark" / post-onboarding questions: give concrete operational steps
+    (register agents, `ark workspace apply`, `ark flow create`, dispatch a session,
+    then watch progress). Do not lead with "Ark is not a chatbot" unless the user
+    explicitly asks what Ark is.
+11. For tool/client choice (Claude vs Cursor vs OpenAI): say which clients Ark supports
     and how to connect each. Do not discuss what documentation omits — say what works.
 
 JSON shape:
@@ -62,7 +68,7 @@ def _parse_json_response(raw: str) -> dict[str, Any]:
     return json.loads(text)
 
 
-def _call_cursor_agent(prompt: str) -> str:
+def _call_cursor_agent(prompt: str, *, model: str | None = None) -> str:
     """Run a one-shot ask-mode generation through the Cursor agent CLI."""
     api_key = os.environ.get("CURSOR_API_KEY", "").strip()
     if not api_key:
@@ -75,7 +81,7 @@ def _call_cursor_agent(prompt: str) -> str:
         )
 
     workspace = os.environ.get("CURSOR_WORKSPACE", os.getcwd())
-    model = os.environ.get("CURSOR_MODEL", DEFAULT_MODEL)
+    chosen_model = model or os.environ.get("CURSOR_MODEL", DEFAULT_MODEL)
 
     env = os.environ.copy()
     env["CURSOR_API_KEY"] = api_key
@@ -90,7 +96,7 @@ def _call_cursor_agent(prompt: str) -> str:
         "--trust",
         "--approve-mcps",
         "--model",
-        model,
+        chosen_model,
         "--workspace",
         workspace,
         prompt,
@@ -117,6 +123,19 @@ def _call_cursor_agent(prompt: str) -> str:
     return completed.stdout.strip()
 
 
+def warm_agent() -> None:
+    """Ping the Cursor agent CLI so the first user ask is not cold."""
+    if not os.environ.get("CURSOR_API_KEY", "").strip():
+        return
+    raw = os.environ.get("WARM_AGENT_ON_STARTUP", "1").strip().lower()
+    if raw in ("0", "false", "no"):
+        return
+    try:
+        _call_cursor_agent('Respond with JSON only: {"answer":"ok","citations":[]}')
+    except (ValueError, RuntimeError, TimeoutError):
+        pass
+
+
 def _format_history(history: list[dict[str, str]]) -> str:
     lines: list[str] = []
     for turn in history:
@@ -130,16 +149,13 @@ def _format_history(history: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def answer(
+def _generate_answer(
     question: str,
     chunks: list[dict[str, Any]],
     *,
     history: list[dict[str, str]] | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
-    """Return a grounded answer and source citations for a question."""
-    if not chunks:
-        return {"answer": REFUSAL_PHRASE, "citations": []}
-
     history_block = ""
     if history:
         formatted = _format_history(history)
@@ -157,7 +173,7 @@ def answer(
         f"Question: {question}"
     )
 
-    raw = _call_cursor_agent(user_content)
+    raw = _call_cursor_agent(user_content, model=model)
     try:
         parsed = _parse_json_response(raw)
     except (json.JSONDecodeError, IndexError, KeyError) as exc:
@@ -179,3 +195,16 @@ def answer(
         ]
 
     return {"answer": answer_text or REFUSAL_PHRASE, "citations": citations}
+
+
+def answer(
+    question: str,
+    chunks: list[dict[str, Any]],
+    *,
+    history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Return a grounded answer and source citations for a question."""
+    if not chunks:
+        return {"answer": REFUSAL_PHRASE, "citations": []}
+
+    return _generate_answer(question, chunks, history=history)
