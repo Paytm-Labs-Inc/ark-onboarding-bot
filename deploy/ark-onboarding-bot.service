@@ -25,6 +25,9 @@ WorkingDirectory=/opt/ark-onboarding-bot
 EnvironmentFile=/opt/ark-onboarding-bot/.env
 Environment=WEB_HOST=127.0.0.1
 Environment=WEB_PORT=8765
+# Subpath prefix behind the Foundry ingress (works whether the ingress strips or
+# passes it). Set empty if the ingress strips the prefix and you prefer root.
+Environment=BASE_PATH=/onboarding-bot
 # Ensure the Cursor agent CLI is discoverable (installed under the service user's home).
 Environment=PATH=/opt/ark-onboarding-bot/.venv/bin:/home/arkbot/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/opt/ark-onboarding-bot/deploy/run_web.sh

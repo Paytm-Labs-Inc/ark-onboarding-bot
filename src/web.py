@@ -21,6 +21,7 @@ from src.auth import (
 from src.chat import ask_in_session, reset_session
 from src.chunker import DATA_DIR, load_chunks
 from src.feedback import append_feedback, read_feedback
+# Public retrieve() wrapper (accepts k=...) — used by the /ready probe.
 from src.retrieve import retrieve
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
@@ -29,6 +30,62 @@ LOGIN_TEMPLATE_PATH = TEMPLATE_DIR / "login.html"
 
 # 12 hours; a shared team token doesn't need long-lived sessions.
 SESSION_MAX_AGE = 12 * 60 * 60
+
+
+def base_path() -> str:
+    """URL prefix when served under a subpath (e.g. "/onboarding-bot").
+
+    Read from BASE_PATH (falls back to ROOT_PATH) at call time so the prefix can
+    be set via env with no code change. Empty means served at the domain root.
+    Outgoing links/redirects are always prefixed with this; incoming requests
+    are normalized by PrefixStripMiddleware, so the app works whether the ingress
+    strips the prefix or passes it through.
+    """
+    prefix = os.environ.get("BASE_PATH") or os.environ.get("ROOT_PATH", "")
+    return prefix.rstrip("/")
+
+
+def base_href() -> str:
+    """`<base>` value so in-page relative URLs resolve under the prefix."""
+    prefix = base_path()
+    return f"{prefix}/" if prefix else "/"
+
+
+def _render_template(path: Path) -> str:
+    """Load a template and inject the <base> tag for the current prefix."""
+    return path.read_text(encoding="utf-8").replace(
+        "<!--BASE_TAG-->", f'<base href="{base_href()}">'
+    )
+
+
+class PrefixStripMiddleware:
+    """Strip BASE_PATH from incoming request paths when it is present.
+
+    Lets one app work regardless of ingress behavior:
+    - ingress strips the prefix -> path already lacks it -> left untouched.
+    - ingress passes the prefix through -> path starts with it -> stripped here
+      so routing (defined at "/login", "/api/ask", ...) still matches.
+    Outgoing URLs are prefixed separately via base_path(), so links/redirects
+    stay correct in both modes.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            prefix = base_path()
+            path = scope.get("path", "")
+            if prefix and (path == prefix or path.startswith(prefix + "/")):
+                scope = dict(scope)
+                new_path = path[len(prefix):] or "/"
+                scope["path"] = new_path
+                if scope.get("raw_path") is not None:
+                    query = scope.get("query_string", b"")
+                    raw = new_path.encode("utf-8")
+                    scope["raw_path"] = raw + (b"?" + query if query else b"")
+        await self.app(scope, receive, send)
+
 
 app = FastAPI(title="Ark Onboarding Bot", docs_url=None, redoc_url=None)
 
@@ -43,7 +100,12 @@ async def enforce_auth(request: Request, call_next):
             status_code=401,
             content={"detail": "Authentication required. Sign in at /login."},
         )
-    return RedirectResponse(url="/login", status_code=303)
+    return RedirectResponse(url=f"{base_path()}/login", status_code=303)
+
+
+# Added after enforce_auth so it wraps outermost: normalize the path (strip the
+# prefix if the ingress passed it through) before auth and routing see it.
+app.add_middleware(PrefixStripMiddleware)
 
 
 class AskRequest(BaseModel):
@@ -70,16 +132,16 @@ class LoginRequest(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    return TEMPLATE_PATH.read_text(encoding="utf-8")
+    return _render_template(TEMPLATE_PATH)
 
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page() -> str:
-    return LOGIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    return _render_template(LOGIN_TEMPLATE_PATH)
 
 
 @app.post("/login")
-def login_submit(body: LoginRequest) -> Response:
+def login_submit(request: Request, body: LoginRequest) -> Response:
     if auth_enabled() and not token_valid(body.token.strip()):
         return JSONResponse(status_code=401, content={"detail": "Invalid token."})
     response = JSONResponse(content={"ok": True})
@@ -87,16 +149,18 @@ def login_submit(body: LoginRequest) -> Response:
         COOKIE_NAME,
         body.token.strip(),
         max_age=SESSION_MAX_AGE,
+        path=base_path() or "/",
         httponly=True,
         samesite="lax",
+        secure=request.url.scheme == "https",
     )
     return response
 
 
 @app.get("/logout")
 def logout() -> Response:
-    response = RedirectResponse(url="/login", status_code=303)
-    response.delete_cookie(COOKIE_NAME)
+    response = RedirectResponse(url=f"{base_path()}/login", status_code=303)
+    response.delete_cookie(COOKIE_NAME, path=base_path() or "/")
     return response
 
 
@@ -215,6 +279,7 @@ def render_reviews(records: list[dict]) -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ark Onboarding Bot — Feedback</title>
+  <base href="{base_href()}">
   <style>
     body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
       background:#f6f7f9; color:#1f2937; }}
@@ -240,7 +305,7 @@ def render_reviews(records: list[dict]) -> str:
   <div class="wrap">
     <header>
       <h1>Feedback review</h1>
-      <a class="back" href="/">&larr; Back to chat</a>
+      <a class="back" href=".">&larr; Back to chat</a>
     </header>
     <div class="counts">{ups} 👍 &nbsp; {downs} 👎 &nbsp; ({len(records)} total)</div>
     <table>
@@ -280,8 +345,17 @@ def main() -> None:
             "reach it. Set ARK_ACCESS_TOKEN to gate access to the team.",
         )
 
-    print(f"Ark onboarding bot web UI → http://{host}:{port}")
-    uvicorn.run(app, host=host, port=port)
+    prefix = base_path()
+    if prefix:
+        print(f"Serving under subpath prefix {prefix!r} (expects a reverse proxy to strip it).")
+    print(f"Ark onboarding bot web UI → http://{host}:{port}{prefix}/")
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
 
 
 if __name__ == "__main__":
