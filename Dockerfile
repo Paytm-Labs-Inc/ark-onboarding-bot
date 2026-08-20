@@ -35,10 +35,15 @@ COPY --chown=app:app . /home/app/app
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
 # Runtime defaults. CURSOR_WORKSPACE points at an empty dir so the agent does not
-# scan the app tree on every answer (keeps latency down).
+# scan the app tree on every answer (keeps latency down). HF_HUB_OFFLINE /
+# TRANSFORMERS_OFFLINE force the embedding model to load from the baked-in cache
+# without any Hugging Face network call at runtime (set AFTER the pre-cache step
+# above so the build-time download still works).
 ENV WEB_HOST=0.0.0.0 \
     WEB_PORT=8765 \
-    CURSOR_WORKSPACE=/home/app/agent-workspace
+    CURSOR_WORKSPACE=/home/app/agent-workspace \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
 RUN mkdir -p /home/app/agent-workspace
 
 EXPOSE 8765

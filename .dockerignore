@@ -8,7 +8,8 @@ __pycache__/
 .env
 .env.*
 eval/results/
-eval/feedback.jsonl
+# Runtime logs (feedback.jsonl, query_log.jsonl, etc.) — never bake local traffic into the image.
+eval/*.jsonl
 sources/faq-google-doc.*
 *.log
 .DS_Store
