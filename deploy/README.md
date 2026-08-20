@@ -105,3 +105,53 @@ sudo systemctl restart ark-onboarding-bot
   to a private/VPN-only interface (`WEB_HOST=<private-ip>`) — but only behind a
   security group / firewall that blocks everything outside the corp network.
   Never bind `0.0.0.0` on a publicly reachable host.
+
+## Performance (Aug 2026)
+
+Measured locally on the gold question *"how to enroll a host?"* after startup
+warmup (`WARM_ON_STARTUP=1`, `WARM_AGENT_ON_STARTUP=1`, `ASK_RETRIEVAL_CACHE=1`,
+`ASK_ANSWER_CACHE=1`).
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Answer model | `composer-2.5` (~73s) | `composer-2.5-fast` (~35–55s steady state) |
+| Retrieval (first ask, warm process) | ~250ms | ~250ms |
+| Retrieval (repeat same question) | ~250ms | **~5ms** (LRU cache hit) |
+| **Full ask (repeat same question, no history)** | ~25–35s | **~0–1s** (answer LRU cache hit) |
+| Startup warmup (one-time per restart) | none | ~20–90s (embed model + agent ping) |
+| First user ask after warmup | ~60–90s if cold | ~25–55s |
+
+**Env knobs** (see `.env.example`):
+
+- `ASK_RETRIEVAL_CACHE=1` / `ASK_RETRIEVAL_CACHE_SIZE=128` — in-process retrieval LRU
+- `ASK_ANSWER_CACHE=1` / `ASK_ANSWER_CACHE_SIZE=128` — in-process full-answer LRU (skips Haiku on repeat)
+- `WARM_ON_STARTUP=1` / `WARM_AGENT_ON_STARTUP=1` — warm embed index + Cursor agent on boot
+- `ASK_TOP_K=8` — chunk count sent to Haiku
+- `CURSOR_MODEL=composer-2.5-fast` — answer generation model (`claude-haiku-4-5` is blocked in the agent CLI)
+
+Retrieval cache saves search time only (~240ms). Answer cache skips the model call on
+**exact repeat** questions (no session history). New questions still pay ~25–35s for Haiku.
+Disable caches with `ASK_RETRIEVAL_CACHE=0` or `ASK_ANSWER_CACHE=0` when debugging.
+
+### Slack (Socket Mode)
+
+Run as a separate process from the web UI:
+
+```bash
+set -a && source .env && set +a   # needs SLACK_BOT_TOKEN + SLACK_APP_TOKEN
+python -m src.slack_app
+```
+
+Only one `src.slack_app` instance should run at a time (Socket Mode holds one
+connection). Both web and Slack call the same `ask()` pipeline and benefit from
+cache + warmup on their respective startups.
+
+**Corp laptop SSL errors:** Python 3.13+ may reject your company's SSL inspection
+CA with `Basic Constraints of CA cert not marked critical`. Add to `.env`:
+
+```bash
+SLACK_SSL_RELAX=1
+```
+
+Then restart `python -m src.slack_app`. Use this only on managed laptops; prefer
+running Slack on an Ark compute without SSL inspection for production.

@@ -8,16 +8,23 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from src.answer import REFUSAL_PHRASE
-from src.ask import ask, main, print_result, run_question
+from src.ask import ask, clear_answer_cache, clear_retrieval_cache, main, print_result, run_question
+from src.ask import _normalize_cache_key
 from src.retrieve import RetrievalResult
 
 
 class AskTests(unittest.TestCase):
     def setUp(self) -> None:
         os.environ["CURSOR_API_KEY"] = "crsr_test_key"
+        clear_retrieval_cache()
+        clear_answer_cache()
 
     def tearDown(self) -> None:
         os.environ.pop("CURSOR_API_KEY", None)
+        os.environ.pop("ASK_RETRIEVAL_CACHE", None)
+        os.environ.pop("ASK_ANSWER_CACHE", None)
+        clear_retrieval_cache()
+        clear_answer_cache()
 
     @patch("src.ask.log_query")
     @patch("src.ask.answer")
@@ -25,6 +32,7 @@ class AskTests(unittest.TestCase):
     def test_ask_wires_retrieve_to_answer(
         self, mock_retrieve_scored: MagicMock, mock_answer: MagicMock, _mock_log: MagicMock
     ) -> None:
+        clear_retrieval_cache()
         chunks = [{"source": "getting-started -- https://example.com", "text": "enroll host"}]
         mock_retrieve_scored.return_value = RetrievalResult(chunks=chunks, top_score=0.82)
         mock_answer.return_value = {
@@ -34,7 +42,7 @@ class AskTests(unittest.TestCase):
 
         result = ask("how do I enroll a host?")
 
-        mock_retrieve_scored.assert_called_once_with("how do I enroll a host?", k=4)
+        mock_retrieve_scored.assert_called_once_with("how do I enroll a host?", k=8)
         mock_answer.assert_called_once_with(
             "how do I enroll a host?", chunks, history=None
         )
@@ -133,6 +141,97 @@ class AskTests(unittest.TestCase):
     def test_main_one_shot_empty_question_exits_nonzero(self) -> None:
         code = main(["   "])
         self.assertEqual(code, 1)
+
+    @patch("src.ask.log_query")
+    @patch("src.ask.answer")
+    @patch("src.ask.retrieve_scored")
+    def test_ask_caches_repeat_retrieval_queries(
+        self, mock_retrieve_scored: MagicMock, mock_answer: MagicMock, _mock_log: MagicMock
+    ) -> None:
+        chunks = [{"source": "getting-started -- https://example.com", "text": "enroll host"}]
+        mock_retrieve_scored.return_value = RetrievalResult(chunks=chunks, top_score=0.82)
+        mock_answer.return_value = {
+            "answer": "Run ark host enroll.",
+            "citations": ["getting-started -- https://example.com"],
+        }
+
+        ask("how do I enroll a host?")
+        ask("how do i enroll a host?")
+
+        mock_retrieve_scored.assert_called_once()
+        mock_answer.assert_called_once()
+
+    def test_normalize_cache_key_strips_trailing_punctuation(self) -> None:
+        self.assertEqual(
+            _normalize_cache_key("how do i enroll a host?"),
+            _normalize_cache_key("how do i enroll a host"),
+        )
+
+    @patch("src.ask.log_query")
+    @patch("src.ask.answer")
+    @patch("src.ask.retrieve_scored")
+    def test_answer_cache_misses_when_history_present(
+        self, mock_retrieve_scored: MagicMock, mock_answer: MagicMock, _mock_log: MagicMock
+    ) -> None:
+        chunks = [{"source": "set-up-cursor -- https://example.com", "text": "mcp.json"}]
+        mock_retrieve_scored.return_value = RetrievalResult(chunks=chunks, top_score=0.75)
+        mock_answer.return_value = {"answer": "Use ~/.cursor/mcp.json.", "citations": []}
+        history = [{"question": "how do I set up Cursor?", "answer": "Use MCP."}]
+
+        ask("where does the config file go?", history=history)
+        ask("where does the config file go?", history=history)
+
+        mock_retrieve_scored.assert_called_once()
+        self.assertEqual(mock_answer.call_count, 2)
+
+    @patch("src.ask.log_query")
+    @patch("src.ask.answer")
+    @patch("src.ask.retrieve_scored")
+    def test_answer_cache_can_be_disabled(
+        self, mock_retrieve_scored: MagicMock, mock_answer: MagicMock, _mock_log: MagicMock
+    ) -> None:
+        os.environ["ASK_ANSWER_CACHE"] = "0"
+        chunks = [{"source": "getting-started -- https://example.com", "text": "enroll host"}]
+        mock_retrieve_scored.return_value = RetrievalResult(chunks=chunks, top_score=0.82)
+        mock_answer.return_value = {"answer": "Run ark host enroll.", "citations": []}
+
+        ask("how do I enroll a host?")
+        ask("how do I enroll a host?")
+
+        self.assertEqual(mock_answer.call_count, 2)
+
+    @patch("src.ask.log_query")
+    @patch("src.ask.answer")
+    @patch("src.ask.retrieve_scored")
+    def test_ask_cache_misses_when_history_differs(
+        self, mock_retrieve_scored: MagicMock, mock_answer: MagicMock, _mock_log: MagicMock
+    ) -> None:
+        chunks = [{"source": "set-up-cursor -- https://example.com", "text": "mcp.json"}]
+        mock_retrieve_scored.return_value = RetrievalResult(chunks=chunks, top_score=0.75)
+        mock_answer.return_value = {"answer": "Use ~/.cursor/mcp.json.", "citations": []}
+        history = [{"question": "how do I set up Cursor?", "answer": "Use MCP."}]
+
+        ask("where does the config file go?", history=history)
+        ask("where does the config file go?")
+
+        self.assertEqual(mock_retrieve_scored.call_count, 2)
+
+    @patch("src.ask.log_query")
+    @patch("src.ask.answer")
+    @patch("src.ask.retrieve_scored")
+    def test_ask_cache_can_be_disabled(
+        self, mock_retrieve_scored: MagicMock, mock_answer: MagicMock, _mock_log: MagicMock
+    ) -> None:
+        os.environ["ASK_RETRIEVAL_CACHE"] = "0"
+        os.environ["ASK_ANSWER_CACHE"] = "0"
+        chunks = [{"source": "getting-started -- https://example.com", "text": "enroll host"}]
+        mock_retrieve_scored.return_value = RetrievalResult(chunks=chunks, top_score=0.82)
+        mock_answer.return_value = {"answer": "Run ark host enroll.", "citations": []}
+
+        ask("how do I enroll a host?")
+        ask("how do I enroll a host?")
+
+        self.assertEqual(mock_retrieve_scored.call_count, 2)
 
 
 if __name__ == "__main__":

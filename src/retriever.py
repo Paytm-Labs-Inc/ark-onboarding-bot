@@ -39,6 +39,56 @@ USAGE_RE = re.compile(
     r"\bwhat\s+(?:do\s+i|should\s+i)\s+do\s+(?:next|after)\b"
 )
 
+ENROLL_HOST_RE = re.compile(
+    r"(?i)"
+    r"\b(?:how\s+(?:do\s+i|to)\s+)?(?:enroll|register)\b.*\b(?:host|compute|machine|box)\b|"
+    r"\b(?:host|compute|machine|box)\b.*\b(?:enroll|register)\b|"
+    r"\benroll\s+(?:a\s+)?host\b"
+)
+
+ENROLL_PINNED_MARKERS = (
+    "ark host enroll",
+    "not able to enroll compute",
+    "enroll a machine for themselves",
+)
+
+WORKSPACE_RE = re.compile(
+    r"(?i)"
+    r"\bwhat\s+is\s+a\s+workspace\b|"
+    r"\bsteps?\b.*\b(?:create|set up|setup|apply|wire|define)\b.*\bworkspace\b|"
+    r"\b(?:create|set up|setup|apply|wire|define)\b.*\bworkspace\b|"
+    r"\bworkspace\b.*\b(?:yaml|apply|create)\b|"
+    r"\b(?:use|using)\b.*\bworkspace\b|"
+    r"\bsomeone else'?s?\b.*\bworkspace\b|"
+    r"\bown workspace\b|"
+    r"\bshare\b.*\bworkspace\b"
+)
+
+WORKSPACE_PINNED_MARKERS = (
+    "**Step 2 - Wire the workspace.**",
+    "ark workspace apply",
+    "**Workspace** is a full environment",
+    "Workspaces are repos plus tools",
+    "Workspace not found.",
+    "start my myteam-review flow on the myteam-workspace workspace",
+)
+
+CURSOR_RE = re.compile(
+    r"(?i)"
+    r"\b(?:how\s+(?:do\s+i|to)\s+)?(?:access|use|set\s+up|setup|connect|get)\b.*\bcursor\b|"
+    r"\bcursor\b.*\b(?:access|mcp|setup|set\s+up|connect|working|ark)\b|"
+    r"\bwhere\b.*\b(?:put|add)\b.*\b(?:mcp|config)\b.*\bcursor\b|"
+    r"\b(?:get|getting)\b.*\bcursor\b.*\b(?:working|ark)\b|"
+    r"\bcan\s+(?:we|i)\s+use\s+cursor\b"
+)
+
+CURSOR_PINNED_MARKERS = (
+    "# Set up Cursor",
+    "Add the ark MCP server to Cursor",
+    ".cursor/mcp.json",
+    "Cursor Settings - > MCP",
+)
+
 ONBOARDING_PINNED_MARKERS = PINNED_MARKERS
 
 USAGE_PINNED_MARKERS = (
@@ -101,6 +151,14 @@ def _expand_query(question: str) -> str:
         return (
             f"{question} create workspace register flow start session dispatch agent"
         )
+    if ENROLL_HOST_RE.search(question):
+        return f"{question} ark host enroll member key API token compute"
+    if WORKSPACE_RE.search(question):
+        return f"{question} ark workspace apply YAML wire repos secrets actions"
+    if CURSOR_RE.search(question):
+        return (
+            f"{question} set up cursor mcp.json ark MCP server API key getting access"
+        )
     return question
 
 
@@ -162,6 +220,12 @@ def retrieve_scored(
         )
     if USAGE_RE.search(question):
         results = _pin_markers(results, index, USAGE_PINNED_MARKERS, top_k=top_k)
+    if ENROLL_HOST_RE.search(question):
+        results = _pin_markers(results, index, ENROLL_PINNED_MARKERS, top_k=top_k)
+    if WORKSPACE_RE.search(question):
+        results = _pin_markers(results, index, WORKSPACE_PINNED_MARKERS, top_k=top_k)
+    if CURSOR_RE.search(question):
+        results = _pin_markers(results, index, CURSOR_PINNED_MARKERS, top_k=top_k)
     elapsed_ms = (time.perf_counter() - start) * 1000
     top_score = float(sims[int(order[0])])
     print(f"retrieved {len(results)} chunks in {elapsed_ms:.0f}ms, top_score={top_score:.3f}")

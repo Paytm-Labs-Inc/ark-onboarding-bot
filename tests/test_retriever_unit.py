@@ -78,6 +78,81 @@ class RetrieverTests(unittest.TestCase):
         texts = [chunk["text"] for chunk in results]
         self.assertTrue(any("Onboarding path" in text for text in texts))
 
+    @patch("src.retriever._embed", side_effect=_fake_embed)
+    def test_enroll_host_pins_faq_chunk(self, _mock) -> None:
+        chunks = CHUNKS + [
+            {
+                "source": "faq -- https://example.com/faq",
+                "text": "Run `ark host enroll` with your user API key.",
+            },
+            {
+                "source": "getting-started -- https://example.com",
+                "text": "Registering a machine as compute is an admin action.",
+            },
+        ]
+        index = build_index(chunks)
+        results = retrieve("how to enroll a host", top_k=3, index=index)
+        texts = " ".join(chunk["text"] for chunk in results)
+        self.assertIn("ark host enroll", texts)
+
+    @patch("src.retriever._embed", side_effect=_fake_embed)
+    def test_workspace_steps_pins_apply_chunk(self, _mock) -> None:
+        chunks = CHUNKS + [
+            {
+                "source": "getting-access -- https://example.com/access",
+                "text": "**Step 2 - Wire the workspace.** Run ark workspace apply myteam-workspace.yaml",
+            },
+        ]
+        index = build_index(chunks)
+        results = retrieve("what are the steps to create a workspace", top_k=3, index=index)
+        texts = " ".join(chunk["text"] for chunk in results)
+        self.assertIn("ark workspace apply", texts)
+
+    @patch("src.retriever._embed", side_effect=_fake_embed)
+    def test_workspace_ownership_pins_apply_chunk(self, _mock) -> None:
+        chunks = CHUNKS + [
+            {
+                "source": "getting-access -- https://example.com/access",
+                "text": (
+                    "ark workspace apply myteam-workspace.yaml. "
+                    "start my myteam-review flow on the myteam-workspace workspace"
+                ),
+            },
+            {
+                "source": "faq -- https://example.com/faq",
+                "text": "Workspace not found. Wrong tenant/team, or not created.",
+            },
+        ]
+        index = build_index(chunks)
+        results = retrieve(
+            "can I use someone else's workspace or create my own",
+            top_k=3,
+            index=index,
+        )
+        texts = " ".join(chunk["text"] for chunk in results)
+        self.assertIn("ark workspace apply", texts)
+
+    @patch("src.retriever._embed", side_effect=_fake_embed)
+    def test_cursor_access_pins_setup_chunk(self, _mock) -> None:
+        chunks = CHUNKS + [
+            {
+                "source": "set-up-cursor -- https://example.com/cursor",
+                "text": (
+                    "# Set up Cursor\nAdd the ark MCP server to Cursor. "
+                    "Use ~/.cursor/mcp.json globally."
+                ),
+            },
+            {
+                "source": "faq -- https://example.com/faq",
+                "text": '7.4 "Can we use Cursor?" In progress, not yet.',
+            },
+        ]
+        index = build_index(chunks)
+        results = retrieve("how to access cursor?", top_k=3, index=index)
+        texts = " ".join(chunk["text"] for chunk in results)
+        self.assertIn("Set up Cursor", texts)
+        self.assertIn(".cursor/mcp.json", texts)
+
 
 if __name__ == "__main__":
     unittest.main()
