@@ -132,6 +132,27 @@ class RetrieverTests(unittest.TestCase):
         texts = " ".join(chunk["text"] for chunk in results)
         self.assertIn("ark workspace apply", texts)
 
+    @patch("src.retriever._embed", side_effect=_fake_embed)
+    def test_cursor_access_pins_setup_chunk(self, _mock) -> None:
+        chunks = CHUNKS + [
+            {
+                "source": "set-up-cursor -- https://example.com/cursor",
+                "text": (
+                    "# Set up Cursor\nAdd the ark MCP server to Cursor. "
+                    "Use ~/.cursor/mcp.json globally."
+                ),
+            },
+            {
+                "source": "faq -- https://example.com/faq",
+                "text": '7.4 "Can we use Cursor?" In progress, not yet.',
+            },
+        ]
+        index = build_index(chunks)
+        results = retrieve("how to access cursor?", top_k=3, index=index)
+        texts = " ".join(chunk["text"] for chunk in results)
+        self.assertIn("Set up Cursor", texts)
+        self.assertIn(".cursor/mcp.json", texts)
+
 
 if __name__ == "__main__":
     unittest.main()

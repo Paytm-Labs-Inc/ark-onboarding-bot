@@ -54,6 +54,10 @@ Rules:
     dispatching with a workspace name, or team/tenant scoping, explain that workspaces are
     team-scoped, you typically create and apply your own with `ark workspace apply`, and you
     reference a workspace by name at dispatch — do not refuse when those facts appear.
+14. For Cursor setup or access: if chunks describe minting a user API key, adding the ark MCP
+    server to Cursor (`~/.cursor/mcp.json` or project `.cursor/mcp.json`), or verifying under
+    Cursor Settings → MCP, give those steps. Prefer set-up-cursor content over older FAQ lines
+    that say Cursor is "in progress" or "not yet" when current setup steps are present.
 
 JSON shape:
 {{"answer": "<your answer>", "citations": ["<source label>", "..."]}}

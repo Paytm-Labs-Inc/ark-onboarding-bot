@@ -73,6 +73,22 @@ WORKSPACE_PINNED_MARKERS = (
     "start my myteam-review flow on the myteam-workspace workspace",
 )
 
+CURSOR_RE = re.compile(
+    r"(?i)"
+    r"\b(?:how\s+(?:do\s+i|to)\s+)?(?:access|use|set\s+up|setup|connect|get)\b.*\bcursor\b|"
+    r"\bcursor\b.*\b(?:access|mcp|setup|set\s+up|connect|working|ark)\b|"
+    r"\bwhere\b.*\b(?:put|add)\b.*\b(?:mcp|config)\b.*\bcursor\b|"
+    r"\b(?:get|getting)\b.*\bcursor\b.*\b(?:working|ark)\b|"
+    r"\bcan\s+(?:we|i)\s+use\s+cursor\b"
+)
+
+CURSOR_PINNED_MARKERS = (
+    "# Set up Cursor",
+    "Add the ark MCP server to Cursor",
+    ".cursor/mcp.json",
+    "Cursor Settings - > MCP",
+)
+
 ONBOARDING_PINNED_MARKERS = PINNED_MARKERS
 
 USAGE_PINNED_MARKERS = (
@@ -139,6 +155,10 @@ def _expand_query(question: str) -> str:
         return f"{question} ark host enroll member key API token compute"
     if WORKSPACE_RE.search(question):
         return f"{question} ark workspace apply YAML wire repos secrets actions"
+    if CURSOR_RE.search(question):
+        return (
+            f"{question} set up cursor mcp.json ark MCP server API key getting access"
+        )
     return question
 
 
@@ -204,6 +224,8 @@ def retrieve_scored(
         results = _pin_markers(results, index, ENROLL_PINNED_MARKERS, top_k=top_k)
     if WORKSPACE_RE.search(question):
         results = _pin_markers(results, index, WORKSPACE_PINNED_MARKERS, top_k=top_k)
+    if CURSOR_RE.search(question):
+        results = _pin_markers(results, index, CURSOR_PINNED_MARKERS, top_k=top_k)
     elapsed_ms = (time.perf_counter() - start) * 1000
     top_score = float(sims[int(order[0])])
     print(f"retrieved {len(results)} chunks in {elapsed_ms:.0f}ms, top_score={top_score:.3f}")

@@ -180,6 +180,12 @@
     "notes": "Getting started — Compute → Workspace → Flows"
   },
   {
+    "id": "cursor-access",
+    "question": "how to access cursor?",
+    "expected_source": "set-up-cursor",
+    "notes": "Cursor MCP setup — pinned despite vague wording"
+  },
+  {
     "id": "tricky-register-agent",
     "question": "how do i register my own agent yaml with ark",
     "expected_source": "getting-access",
