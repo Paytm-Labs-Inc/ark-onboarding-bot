@@ -1,0 +1,15 @@
+# Keep the build context small and avoid copying local/dev-only files.
+.git
+.gitignore
+.venv
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+eval/results/
+eval/feedback.jsonl
+sources/faq-google-doc.*
+*.log
+.DS_Store
+.pytest_cache/

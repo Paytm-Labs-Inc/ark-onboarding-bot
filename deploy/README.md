@@ -96,6 +96,57 @@ sudo -u arkbot .venv/bin/pip install -r requirements.txt   # if deps changed
 sudo systemctl restart ark-onboarding-bot
 ```
 
+## Run as a container (for a stable host / k8s)
+
+The repo ships a `Dockerfile` that packages **one image** you run as **two
+services**:
+
+- **Web bot** — `python -m src.web` (default command), served behind the Foundry
+  ingress at `/onboarding-bot`, listens on port **8765**.
+- **Slack app** — `python -m src.slack_app` (override the command), uses **Socket
+  Mode**, so it needs **no ingress** (only outbound WebSocket to Slack).
+
+The image bakes in the Cursor agent CLI, Python deps, and the embedding model.
+Secrets/config are injected at runtime (never baked into the image):
+`CURSOR_API_KEY`, `ARK_ACCESS_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and
+`BASE_PATH=/onboarding-bot`.
+
+### Build
+
+```bash
+docker build -t ark-onboarding-bot:<tag> .   # tag by git SHA, not :latest
+```
+
+### Run — web bot (behind the ingress)
+
+```bash
+docker run -p 8765:8765 \
+  -e CURSOR_API_KEY=... -e ARK_ACCESS_TOKEN=... -e BASE_PATH=/onboarding-bot \
+  ark-onboarding-bot:<tag>
+```
+
+### Run — Slack app (Socket Mode, no ingress)
+
+```bash
+docker run \
+  -e CURSOR_API_KEY=... -e SLACK_BOT_TOKEN=... -e SLACK_APP_TOKEN=... \
+  ark-onboarding-bot:<tag> python -m src.slack_app
+```
+
+### On k8s
+
+Two Deployments from the **same image**: the web Deployment (default command)
+gets a Service + the `/onboarding-bot` ingress route; the Slack Deployment
+overrides the command to `python -m src.slack_app` and needs no Service/ingress.
+Provide the secrets above via a k8s Secret. Health probes for the web service:
+`/health` (liveness) and `/ready` (readiness).
+
+### Updating a container deployment
+
+A container is a frozen snapshot — new code is **not** live until you rebuild and
+redeploy: merge to `main` → `docker build` a new tag → push → roll the Deployment
+to the new tag. Tag by commit SHA so it's unambiguous which code is running.
+
 ## Notes
 
 - **Sessions are in-memory.** Multi-turn chat history lives in the process, so a
