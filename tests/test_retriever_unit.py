@@ -95,6 +95,43 @@ class RetrieverTests(unittest.TestCase):
         texts = " ".join(chunk["text"] for chunk in results)
         self.assertIn("ark host enroll", texts)
 
+    @patch("src.retriever._embed", side_effect=_fake_embed)
+    def test_workspace_steps_pins_apply_chunk(self, _mock) -> None:
+        chunks = CHUNKS + [
+            {
+                "source": "getting-access -- https://example.com/access",
+                "text": "**Step 2 - Wire the workspace.** Run ark workspace apply myteam-workspace.yaml",
+            },
+        ]
+        index = build_index(chunks)
+        results = retrieve("what are the steps to create a workspace", top_k=3, index=index)
+        texts = " ".join(chunk["text"] for chunk in results)
+        self.assertIn("ark workspace apply", texts)
+
+    @patch("src.retriever._embed", side_effect=_fake_embed)
+    def test_workspace_ownership_pins_apply_chunk(self, _mock) -> None:
+        chunks = CHUNKS + [
+            {
+                "source": "getting-access -- https://example.com/access",
+                "text": (
+                    "ark workspace apply myteam-workspace.yaml. "
+                    "start my myteam-review flow on the myteam-workspace workspace"
+                ),
+            },
+            {
+                "source": "faq -- https://example.com/faq",
+                "text": "Workspace not found. Wrong tenant/team, or not created.",
+            },
+        ]
+        index = build_index(chunks)
+        results = retrieve(
+            "can I use someone else's workspace or create my own",
+            top_k=3,
+            index=index,
+        )
+        texts = " ".join(chunk["text"] for chunk in results)
+        self.assertIn("ark workspace apply", texts)
+
 
 if __name__ == "__main__":
     unittest.main()

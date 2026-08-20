@@ -114,6 +114,32 @@ def build_app():
     return app
 
 
+def _maybe_relax_ssl_for_corp_proxy() -> None:
+    """Relax Python 3.13+ strict CA checks for corp SSL inspection (Zscaler/Cortex).
+
+    Enable with SLACK_SSL_RELAX=1 when Socket Mode fails with:
+    'Basic Constraints of CA cert not marked critical'.
+    Use only on managed laptops — not on production hosts with proper CA chains.
+    """
+    raw = os.environ.get("SLACK_SSL_RELAX", "").strip().lower()
+    if raw not in ("1", "true", "yes"):
+        return
+
+    import ssl
+
+    if not hasattr(ssl, "VERIFY_X509_STRICT"):
+        return
+
+    original = ssl.create_default_context
+
+    def relaxed_create_default_context(*args, **kwargs):
+        ctx = original(*args, **kwargs)
+        ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
+        return ctx
+
+    ssl.create_default_context = relaxed_create_default_context  # type: ignore[method-assign]
+
+
 def main() -> None:
     try:
         from dotenv import load_dotenv
@@ -121,6 +147,8 @@ def main() -> None:
         load_dotenv()
     except ImportError:
         pass
+
+    _maybe_relax_ssl_for_corp_proxy()
 
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 

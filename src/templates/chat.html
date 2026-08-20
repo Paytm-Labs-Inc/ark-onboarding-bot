@@ -342,7 +342,13 @@
           window.location = "login";
           return;
         }
-        const payload = await response.json();
+        const raw = await response.text();
+        let payload;
+        try {
+          payload = raw ? JSON.parse(raw) : {};
+        } catch (_parseError) {
+          throw new Error(raw.trim().slice(0, 240) || "Request failed");
+        }
         if (!response.ok) {
           throw new Error(payload.detail || "Request failed");
         }

@@ -52,6 +52,27 @@ ENROLL_PINNED_MARKERS = (
     "enroll a machine for themselves",
 )
 
+WORKSPACE_RE = re.compile(
+    r"(?i)"
+    r"\bwhat\s+is\s+a\s+workspace\b|"
+    r"\bsteps?\b.*\b(?:create|set up|setup|apply|wire|define)\b.*\bworkspace\b|"
+    r"\b(?:create|set up|setup|apply|wire|define)\b.*\bworkspace\b|"
+    r"\bworkspace\b.*\b(?:yaml|apply|create)\b|"
+    r"\b(?:use|using)\b.*\bworkspace\b|"
+    r"\bsomeone else'?s?\b.*\bworkspace\b|"
+    r"\bown workspace\b|"
+    r"\bshare\b.*\bworkspace\b"
+)
+
+WORKSPACE_PINNED_MARKERS = (
+    "**Step 2 - Wire the workspace.**",
+    "ark workspace apply",
+    "**Workspace** is a full environment",
+    "Workspaces are repos plus tools",
+    "Workspace not found.",
+    "start my myteam-review flow on the myteam-workspace workspace",
+)
+
 ONBOARDING_PINNED_MARKERS = PINNED_MARKERS
 
 USAGE_PINNED_MARKERS = (
@@ -116,6 +137,8 @@ def _expand_query(question: str) -> str:
         )
     if ENROLL_HOST_RE.search(question):
         return f"{question} ark host enroll member key API token compute"
+    if WORKSPACE_RE.search(question):
+        return f"{question} ark workspace apply YAML wire repos secrets actions"
     return question
 
 
@@ -179,6 +202,8 @@ def retrieve_scored(
         results = _pin_markers(results, index, USAGE_PINNED_MARKERS, top_k=top_k)
     if ENROLL_HOST_RE.search(question):
         results = _pin_markers(results, index, ENROLL_PINNED_MARKERS, top_k=top_k)
+    if WORKSPACE_RE.search(question):
+        results = _pin_markers(results, index, WORKSPACE_PINNED_MARKERS, top_k=top_k)
     elapsed_ms = (time.perf_counter() - start) * 1000
     top_score = float(sims[int(order[0])])
     print(f"retrieved {len(results)} chunks in {elapsed_ms:.0f}ms, top_score={top_score:.3f}")

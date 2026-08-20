@@ -11,6 +11,8 @@ from typing import Any
 
 REFUSAL_PHRASE = "I don't have an answer for that yet."
 
+# Answer generation uses the Cursor SDK (preferred) or agent CLI (fallback).
+# Override with CURSOR_ANSWER_BACKEND=sdk|cli|auto and CURSOR_MODEL.
 DEFAULT_MODEL = "claude-haiku-4-5"
 
 SYSTEM_PROMPT = f"""You answer Ark setup and usage questions using ONLY the document chunks provided.
@@ -28,7 +30,8 @@ Rules:
    (b) the chunks contain zero facts relevant to the question (nothing on-topic to synthesize).
 5. When you answer, cite every chunk source you used in citations.
 6. citations must be copied exactly from the chunk source labels provided.
-7. Respond with JSON only — no markdown fences, no extra text.
+7. Respond with JSON only — no markdown fences, no extra text. Do not put triple-backtick
+   code blocks inside the answer string; use inline backticks for commands (e.g. `ark flow create`).
 8. Write directly to the user in second person ("You can…", "Use…", "Run…"). Never refer to
    "onboarding docs", "the docs", "documentation", "these docs", "the chunks", "provided
    sources", or meta phrases like "the docs do not mention" or "is not covered in the docs".
@@ -44,6 +47,13 @@ Rules:
     explicitly asks what Ark is.
 11. For tool/client choice (Claude vs Cursor vs OpenAI): say which clients Ark supports
     and how to connect each. Do not discuss what documentation omits — say what works.
+12. For workspace questions: if chunks define a workspace or mention `ark workspace apply`,
+    answer with that definition and/or steps (write YAML, apply with `ark workspace apply`,
+    list with `ark workspace list`). Do not refuse when those steps appear in the chunks.
+13. For workspace ownership or sharing: if chunks mention applying your own workspace YAML,
+    dispatching with a workspace name, or team/tenant scoping, explain that workspaces are
+    team-scoped, you typically create and apply your own with `ark workspace apply`, and you
+    reference a workspace by name at dispatch — do not refuse when those facts appear.
 
 JSON shape:
 {{"answer": "<your answer>", "citations": ["<source label>", "..."]}}
@@ -62,18 +72,75 @@ def _format_chunks(chunks: list[dict[str, Any]]) -> str:
 
 def _parse_json_response(raw: str) -> dict[str, Any]:
     text = raw.strip()
-    fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
-    if fence_match:
-        text = fence_match.group(1).strip()
-    return json.loads(text)
+
+    # Haiku wraps the outer payload in ```json; the answer field may contain ``` too.
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+
+    start = text.find("{")
+    if start == -1:
+        raise json.JSONDecodeError("No JSON object found", text, 0)
+
+    parsed, _ = json.JSONDecoder().raw_decode(text[start:])
+    if not isinstance(parsed, dict):
+        raise ValueError("Expected JSON object")
+    return parsed
 
 
-def _call_cursor_agent(prompt: str, *, model: str | None = None) -> str:
-    """Run a one-shot ask-mode generation through the Cursor agent CLI."""
+def _model_candidates(explicit: str | None) -> list[str]:
+    primary = (explicit or os.environ.get("CURSOR_MODEL") or DEFAULT_MODEL).strip()
+    if "haiku" in primary.lower():
+        ordered = [primary, "claude-haiku-4-5", "haiku-4.5"]
+    else:
+        fallback = os.environ.get("CURSOR_MODEL_FALLBACK", "composer-2.5-fast").strip()
+        ordered = [primary, fallback, "composer-2.5", "auto"]
+    seen: set[str] = set()
+    out: list[str] = []
+    for name in ordered:
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def _answer_backend() -> str:
+    return os.environ.get("CURSOR_ANSWER_BACKEND", "auto").strip().lower()
+
+
+def _call_cursor_sdk(prompt: str, *, model: str) -> str:
+    try:
+        from cursor_sdk import Agent, AgentOptions, LocalAgentOptions
+    except ImportError as exc:
+        raise RuntimeError(
+            "cursor-sdk is not installed. Run: pip install cursor-sdk"
+        ) from exc
+
     api_key = os.environ.get("CURSOR_API_KEY", "").strip()
     if not api_key:
         raise ValueError("CURSOR_API_KEY not set")
 
+    workspace = os.environ.get("CURSOR_WORKSPACE", os.getcwd())
+    try:
+        result = Agent.prompt(
+            prompt,
+            AgentOptions(
+                api_key=api_key,
+                model=model,
+                local=LocalAgentOptions(cwd=workspace),
+            ),
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Cursor SDK request failed: {exc}") from exc
+    if getattr(result, "status", None) == "error":
+        detail = getattr(result, "result", None) or "unknown SDK error"
+        raise RuntimeError(f"Cursor SDK generation failed: {detail}")
+    text = getattr(result, "result", None)
+    if not text:
+        raise RuntimeError("Cursor SDK returned an empty response")
+    return str(text).strip()
+
+
+def _call_cursor_agent_cli(prompt: str, *, model: str) -> str:
     agent_bin = os.environ.get("CURSOR_AGENT_BIN") or shutil.which("agent")
     if not agent_bin:
         raise ValueError(
@@ -81,46 +148,83 @@ def _call_cursor_agent(prompt: str, *, model: str | None = None) -> str:
         )
 
     workspace = os.environ.get("CURSOR_WORKSPACE", os.getcwd())
-    chosen_model = model or os.environ.get("CURSOR_MODEL", DEFAULT_MODEL)
-
     env = os.environ.copy()
+    api_key = os.environ.get("CURSOR_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("CURSOR_API_KEY not set")
     env["CURSOR_API_KEY"] = api_key
+    timeout = int(os.environ.get("CURSOR_TIMEOUT_SECONDS", "180"))
 
-    command = [
-        agent_bin,
-        "-p",
-        "--mode",
-        "ask",
-        "--output-format",
-        "text",
-        "--trust",
-        "--approve-mcps",
-        "--model",
-        chosen_model,
-        "--workspace",
-        workspace,
-        prompt,
+    # Try ask mode first, then plain print mode (Haiku worked via CLI earlier today).
+    mode_variants: list[list[str]] = [
+        ["--mode", "ask"],
+        [],
     ]
+    last_detail = "unknown error"
+    for mode_args in mode_variants:
+        command = [
+            agent_bin,
+            "-p",
+            *mode_args,
+            "--output-format",
+            "text",
+            "--trust",
+            "--model",
+            model,
+            "--workspace",
+            workspace,
+            prompt,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                "Cursor generation timed out. Try again or increase CURSOR_TIMEOUT_SECONDS."
+            ) from exc
 
-    try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=int(os.environ.get("CURSOR_TIMEOUT_SECONDS", "180")),
-            check=False,
-            env=env,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            "Cursor generation timed out. Try again or increase CURSOR_TIMEOUT_SECONDS."
-        ) from exc
+        if completed.returncode == 0:
+            return completed.stdout.strip()
 
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "unknown error").strip()
-        raise RuntimeError(f"Cursor generation failed: {detail}")
+        last_detail = (completed.stderr or completed.stdout or "unknown error").strip()
+        if "Cannot use this model" not in last_detail:
+            break
 
-    return completed.stdout.strip()
+    raise RuntimeError(f"Cursor generation failed: {last_detail}")
+
+
+def _call_cursor_agent(prompt: str, *, model: str | None = None) -> str:
+    """Generate via Cursor SDK (preferred) with agent CLI fallback."""
+    backend = _answer_backend()
+    models = _model_candidates(model)
+    errors: list[str] = []
+
+    for chosen_model in models:
+        sdk_tried = False
+        if backend in ("auto", "sdk"):
+            sdk_tried = True
+            try:
+                return _call_cursor_sdk(prompt, model=chosen_model)
+            except Exception as exc:
+                errors.append(f"sdk/{chosen_model}: {exc}")
+
+        if backend in ("auto", "cli") or not sdk_tried:
+            try:
+                return _call_cursor_agent_cli(prompt, model=chosen_model)
+            except (RuntimeError, TimeoutError) as exc:
+                errors.append(f"cli/{chosen_model}: {exc}")
+
+        if "Cannot use this model" not in " ".join(errors):
+            continue
+
+    detail = errors[-1] if errors else "unknown error"
+    raise RuntimeError(f"Cursor generation failed: {detail}")
 
 
 def warm_agent() -> None:
@@ -133,6 +237,9 @@ def warm_agent() -> None:
     try:
         _call_cursor_agent('Respond with JSON only: {"answer":"ok","citations":[]}')
     except (ValueError, RuntimeError, TimeoutError):
+        pass
+    except Exception:
+        # SDK network errors during warmup must not block web/Slack startup.
         pass
 
 
