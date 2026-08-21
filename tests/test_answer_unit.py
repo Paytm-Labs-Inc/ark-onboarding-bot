@@ -146,3 +146,102 @@ class AnswerLayerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChunkNumberCitationTests(unittest.TestCase):
+    """chunks_used numbers map back to source labels (see _resolve_citations)."""
+
+    CHUNKS = [
+        {"source": "getting-started -- https://foundry.mypaytm.com/onboarding/", "text": "a"},
+        {"source": "faq -- https://foundry.mypaytm.com/faq", "text": "b"},
+        {"source": "set-up-cursor -- https://foundry.mypaytm.com/onboarding/cursor", "text": "c"},
+    ]
+
+    def setUp(self) -> None:
+        os.environ["CURSOR_API_KEY"] = "crsr_test_key"
+
+    def tearDown(self) -> None:
+        os.environ.pop("CURSOR_API_KEY", None)
+
+    @patch("src.answer._call_cursor_agent")
+    def test_numbers_map_to_sources(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps({"answer": "Do the thing.", "chunks_used": [1, 3]})
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(
+            result["citations"], [self.CHUNKS[0]["source"], self.CHUNKS[2]["source"]]
+        )
+
+    @patch("src.answer._call_cursor_agent")
+    def test_out_of_range_numbers_dropped(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps({"answer": "Do the thing.", "chunks_used": [2, 9, 0, -1]})
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(result["citations"], [self.CHUNKS[1]["source"]])
+
+    @patch("src.answer._call_cursor_agent")
+    def test_duplicate_numbers_deduped(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps({"answer": "Do the thing.", "chunks_used": [2, 2, 1]})
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(
+            result["citations"], [self.CHUNKS[1]["source"], self.CHUNKS[0]["source"]]
+        )
+
+    @patch("src.answer._call_cursor_agent")
+    def test_string_numbers_accepted(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps({"answer": "Do the thing.", "chunks_used": ["1", "2"]})
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(len(result["citations"]), 2)
+
+    @patch("src.answer._call_cursor_agent")
+    def test_refusal_has_no_citations(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps({"answer": REFUSAL_PHRASE, "chunks_used": []})
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(result["answer"], REFUSAL_PHRASE)
+        self.assertEqual(result["citations"], [])
+
+    @patch("src.answer._call_cursor_agent")
+    def test_verbatim_labels_still_accepted(self, mock_cursor: MagicMock) -> None:
+        """Older responses and cached entries carry source labels, not numbers."""
+        mock_cursor.return_value = json.dumps(
+            {"answer": "Do the thing.", "citations": [self.CHUNKS[1]["source"]]}
+        )
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(result["citations"], [self.CHUNKS[1]["source"]])
+
+    @patch("src.answer._call_cursor_agent")
+    def test_unknown_label_dropped(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps(
+            {"answer": "Do the thing.", "citations": ["invented -- https://example.com/nope"]}
+        )
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(result["citations"], [])
+
+    def test_prompt_no_longer_leaks_source_into_chunk_header(self) -> None:
+        from src.answer import _format_chunks
+
+        formatted = _format_chunks(self.CHUNKS)
+        self.assertIn("[Chunk 1]", formatted)
+        self.assertNotIn("foundry.mypaytm.com", formatted)
+        self.assertIn("chunks_used", SYSTEM_PROMPT)
+
+
+class ReasoningModelParsingTests(unittest.TestCase):
+    """Qwen3 and R1-family models emit a <think> block before the JSON payload."""
+
+    def test_think_block_stripped(self) -> None:
+        raw = (
+            "<think>The user asks about hosts. Chunk {1} looks right, "
+            "maybe {2} too.</think>\n"
+            '{"answer": "Run `ark host enroll`.", "chunks_used": [1]}'
+        )
+        parsed = _parse_json_response(raw)
+        self.assertEqual(parsed["chunks_used"], [1])
+        self.assertIn("ark host enroll", parsed["answer"])
+
+    def test_think_block_with_fenced_payload(self) -> None:
+        raw = '<think>reasoning {here}</think>\n```json\n{"answer": "ok", "chunks_used": []}\n```'
+        self.assertEqual(_parse_json_response(raw)["answer"], "ok")
+
+    def test_unterminated_think_block_raises(self) -> None:
+        """Reasoning ran past max_tokens, so there is no payload to salvage."""
+        with self.assertRaises((json.JSONDecodeError, ValueError)):
+            _parse_json_response("<think>I should consider {chunk 1} and")
