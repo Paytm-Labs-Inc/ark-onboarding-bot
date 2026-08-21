@@ -16,15 +16,16 @@ name: Publish image
 #   AWS_ECR_ACCOUNT_ID      registry account id
 #   AWS_ECR_REPO_PREFIX     namespace within the registry
 
+# workflow_dispatch deliberately takes no ref input. checkout would honour one,
+# but docker/metadata-action derives its tags from the workflow context, so a
+# custom ref would publish that commit's image under the triggering ref's names
+# (main-arm64 and the trigger's sha) and a deploy could pull the wrong code
+# under a trusted tag. Dispatching from a branch in the UI already sets
+# github.ref, so the build and the tags can never disagree.
 on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "Branch / tag / sha to build from"
-        required: false
-        type: string
 
 concurrency:
   group: publish-image-${{ github.ref }}
@@ -48,7 +49,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          # No explicit ref: the default is the commit that triggered the run,
+          # which is what metadata-action tags against. See the note on the
+          # triggers above.
           fetch-depth: 0
 
       - id: deploy-order
