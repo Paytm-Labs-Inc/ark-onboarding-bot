@@ -1,0 +1,120 @@
+name: Publish image
+
+# Builds the onboarding-bot container image and publishes it so the cluster can
+# pull it. One image, two services: the web bot (`python -m src.web`, behind the
+# /onboarding-bot ingress) and the Slack app (`python -m src.slack_app`, Socket
+# Mode, no ingress) — the deployment picks which by overriding the command.
+#
+# ECR push is guarded on AWS_ECR_PUSH_ROLE_ARN being set as a repo variable, so
+# this workflow is safe to merge before that access is provisioned: until then
+# it publishes to GHCR only and the AWS steps are skipped, and the first merge
+# after the variables land starts pushing to ECR with no further change here.
+#
+# Required repo variables for the ECR path (all four, or none):
+#   AWS_ECR_PUSH_ROLE_ARN   OIDC role the workflow assumes to push
+#   AWS_ECR_REGION          e.g. ap-south-1
+#   AWS_ECR_ACCOUNT_ID      registry account id
+#   AWS_ECR_REPO_PREFIX     namespace within the registry
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch / tag / sha to build from"
+        required: false
+        type: string
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish
+    # ubuntu-latest is an amd64 runner, so the arm64 build goes through QEMU.
+    # Measured locally on the same Dockerfile with no cache: 128s native arm64
+    # vs 386s emulated, a 3x penalty. Runner cores are slower than a laptop's,
+    # so budget 15-35 min and keep the timeout well clear of that. If this repo
+    # turns out to have access to the self-hosted arm64 runner that
+    # foundry-platform uses, switching to it removes the emulation entirely.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - id: deploy-order
+        name: Deploy ordering key
+        run: |
+          set -euo pipefail
+          n=$(git rev-list --count HEAD)
+          # A missing count would still render a well-formed tag, but one that
+          # sorts below every real ordinal — so the deploy would silently freeze
+          # on an old image. Fail loudly instead.
+          [[ "$n" =~ ^[1-9][0-9]*$ ]] || { echo "deploy-order: commit count '$n' is not a positive integer" >&2; exit 1; }
+          printf 'tag=9%013d\n' "$n" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_ECR_REGION }}
+
+      - name: Login to Amazon ECR
+        if: ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' }}
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/ark-onboarding-bot
+            ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' && format('{0}.dkr.ecr.{1}.amazonaws.com/{2}/{3}', vars.AWS_ECR_ACCOUNT_ID, vars.AWS_ECR_REGION, vars.AWS_ECR_REPO_PREFIX, 'ark-onboarding-bot') || '' }}
+          tags: |
+            type=ref,event=branch,suffix=-arm64
+            type=sha,prefix=,suffix=-arm64,format=short
+            type=raw,value=${{ steps.deploy-order.outputs.tag }}-{{sha}}-arm64,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=ark-onboarding-bot
+          cache-to: type=gha,mode=min,scope=ark-onboarding-bot
+          # arm64 only, matching every other image the platform publishes.
+          platforms: linux/arm64
+
+      - name: Published tags
+        run: |
+          echo "Published:"
+          echo "${{ steps.meta.outputs.tags }}"
+          if [ -z "${{ vars.AWS_ECR_PUSH_ROLE_ARN }}" ]; then
+            echo
+            echo "NOTE: AWS_ECR_PUSH_ROLE_ARN is unset, so nothing was pushed to ECR."
+            echo "Set AWS_ECR_PUSH_ROLE_ARN / AWS_ECR_REGION / AWS_ECR_ACCOUNT_ID /"
+            echo "AWS_ECR_REPO_PREFIX as repo variables and re-run to publish there."
+          fi
