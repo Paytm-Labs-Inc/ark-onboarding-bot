@@ -16,14 +16,19 @@ that answers Ark onboarding questions grounded in the docs under `data/`. It is 
 1. **Retrieval** (`src/chunker.py`, `src/retriever.py`, `src/retrieve.py`) — uses the
    `sentence-transformers` model `all-MiniLM-L6-v2`. Works fully offline of any API key.
    The model is downloaded from Hugging Face on first use and cached under `~/.cache`.
-2. **Answer generation** (`src/answer.py`) — calls the **Cursor Agent CLI** (the `agent`
-   binary) to produce grounded, cited answers. This layer has two hard requirements:
-   - The `agent` binary must be on `PATH`. It is installed at `~/.local/bin/agent`
-     (added to `PATH` via `~/.bashrc`). If missing, reinstall with
-     `curl https://cursor.com/install -fsS | bash`. You can also point at it with
-     `CURSOR_AGENT_BIN=/abs/path/to/agent`.
-   - The `CURSOR_API_KEY` environment variable must be set (add it as a Secret).
-     Without it, `answer()` / the `ask` CLI raise `CURSOR_API_KEY not set`.
+2. **Answer generation** (`src/answer.py`) — posts to the **Pi Inference** gateway by
+   default (`ANSWER_BACKEND=pi`), an OpenAI-compatible completions endpoint. Requirements:
+   - `PI_API_KEY` must be set (add it as a Secret). Without it `answer()` / the `ask` CLI
+     raise `PI_API_KEY not set`.
+   - Default model is `qwen/qwen3-32b`. Models needing extra request params carry them in
+     `PI_MODEL_PARAMS`; override with `PI_EXTRA_PARAMS` (JSON).
+   - The host is `api.inference.paytm.com`. `app.inference.paytm.com` is the control plane
+     and 404s on completions.
+
+   Setting `ANSWER_BACKEND=cursor` uses the original **Cursor Agent CLI** path instead. That
+   needs the `agent` binary on `PATH` (installed at `~/.local/bin/agent`; reinstall with
+   `curl https://cursor.com/install -fsS | bash`, or point at it with `CURSOR_AGENT_BIN`)
+   plus `CURSOR_API_KEY`. It boots a workspace session per question and is far slower.
 
 ### Running things
 - Unit tests (all mocked, no network, no API key): `.venv/bin/python -m unittest discover -s tests`

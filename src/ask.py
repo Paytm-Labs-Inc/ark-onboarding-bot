@@ -9,7 +9,7 @@ import warnings
 from collections import OrderedDict
 from typing import IO, Any
 
-from src.answer import REFUSAL_PHRASE, answer
+from src.answer import REFUSAL_PHRASE, answer, is_non_answer
 from src.query_log import log_query
 from src.retrieve import RetrievalResult, retrieve_scored
 
@@ -299,7 +299,7 @@ def print_result(result: dict[str, Any], *, file: IO[str] = sys.stdout) -> None:
     citations_raw = result.get("citations", [])
     citations = citations_raw if isinstance(citations_raw, list) else []
 
-    if answer_text == REFUSAL_PHRASE:
+    if is_non_answer(answer_text):
         print("\n--- Not in the docs ---", file=file)
         print(f"\n{answer_text}\n", file=file)
         return

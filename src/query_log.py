@@ -8,14 +8,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.answer import REFUSAL_PHRASE
+from src.answer import is_non_answer
 
 QUERY_LOG_PATH = Path(__file__).resolve().parent.parent / "eval" / "query_log.jsonl"
 LOW_CONFIDENCE_THRESHOLD = float(os.environ.get("QUERY_LOG_LOW_CONFIDENCE", "0.35"))
 
 
 def is_refused(answer: str) -> bool:
-    return answer.strip() == REFUSAL_PHRASE
+    return is_non_answer(answer)
 
 
 def is_low_confidence(
