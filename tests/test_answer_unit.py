@@ -158,9 +158,10 @@ class AnswerLayerTests(unittest.TestCase):
         self.assertEqual(streamer.push('ark host enroll."'), 'ark host enroll.')
 
     @patch("src.answer._generate_answer")
+    @patch("src.answer._stream_cursor_agent_cli")
     @patch("src.answer._stream_cursor_sdk")
     def test_stream_answer_yields_deltas_then_done(
-        self, mock_stream: MagicMock, mock_generate: MagicMock
+        self, mock_stream: MagicMock, mock_cli: MagicMock, mock_generate: MagicMock
     ) -> None:
         def fake_stream(_prompt: str, *, model: str):
             yield '{"answer": "Run '
@@ -171,6 +172,7 @@ class AnswerLayerTests(unittest.TestCase):
             )
 
         mock_stream.side_effect = fake_stream
+        mock_cli.side_effect = AssertionError("CLI should not run when SDK streams")
         chunks = [
             {
                 "source": "getting-started -- https://x",
@@ -183,12 +185,14 @@ class AnswerLayerTests(unittest.TestCase):
         self.assertIn("Run", events[0]["text"])
         self.assertEqual(events[-1]["type"], "done")
         self.assertIn("ark host enroll", events[-1]["answer"])
+        self.assertEqual(events[-1].get("stream_mode"), "sdk")
         mock_generate.assert_not_called()
 
     @patch("src.answer._generate_answer")
+    @patch("src.answer._stream_cursor_agent_cli", side_effect=RuntimeError("cli stream failed"))
     @patch("src.answer._stream_cursor_sdk", side_effect=RuntimeError("stream failed"))
     def test_stream_answer_falls_back_to_blocking(
-        self, _mock_stream: MagicMock, mock_generate: MagicMock
+        self, _mock_stream: MagicMock, _mock_cli: MagicMock, mock_generate: MagicMock
     ) -> None:
         mock_generate.return_value = {
             "answer": "Fallback answer.",
@@ -196,14 +200,18 @@ class AnswerLayerTests(unittest.TestCase):
         }
         chunks = [{"source": "getting-started -- https://x", "text": "t"}]
         events = list(stream_answer("question", chunks))
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["type"], "done")
-        self.assertEqual(events[0]["answer"], "Fallback answer.")
+        self.assertGreater(len(events), 1)
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(events[-1]["answer"], "Fallback answer.")
+        self.assertEqual(events[-1].get("stream_mode"), "blocking-chunked")
         mock_generate.assert_called_once()
 
     def test_stream_answer_empty_chunks(self) -> None:
         events = list(stream_answer("question", []))
-        self.assertEqual(events, [{"type": "done", "answer": REFUSAL_PHRASE, "citations": []}])
+        self.assertEqual(
+            events,
+            [{"type": "done", "answer": REFUSAL_PHRASE, "citations": [], "stream_mode": "none"}],
+        )
 
 
 if __name__ == "__main__":

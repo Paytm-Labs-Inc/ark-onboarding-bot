@@ -136,6 +136,7 @@ def measure_streaming(question: str) -> dict[str, float | str]:
     first_token_ms: float | None = None
     delta_count = 0
     answer_text = ""
+    stream_mode = "unknown"
 
     for event in stream_answer(question, chunks):
         if event.get("type") == "delta":
@@ -144,6 +145,7 @@ def measure_streaming(question: str) -> dict[str, float | str]:
                 first_token_ms = (time.perf_counter() - start) * 1000
         elif event.get("type") == "done":
             answer_text = str(event.get("answer", ""))
+            stream_mode = str(event.get("stream_mode", "unknown"))
 
     total_ms = (time.perf_counter() - start) * 1000
     return {
@@ -152,6 +154,7 @@ def measure_streaming(question: str) -> dict[str, float | str]:
         "total_ms": total_ms,
         "delta_count": delta_count,
         "answer_chars": len(answer_text),
+        "stream_mode": stream_mode,
     }
 
 
@@ -183,15 +186,20 @@ def main() -> int:
     )
     if streaming["delta_count"] == 0:
         print(
-            "\nNote: delta_count=0 means no incremental tokens were streamed — "
-            "the run likely fell back to a blocking answer. Pull the latest branch "
-            "and re-run after the streaming fix.",
+            "\nNote: delta_count=0 means no incremental tokens were streamed.",
             file=sys.stderr,
         )
-    elif streaming["time_to_first_token_ms"] >= streaming["total_ms"] * 0.9:
+    print(f"\nStream mode: {streaming.get('stream_mode', 'unknown')}")
+    if streaming.get("stream_mode") == "blocking-chunked":
         print(
-            f"\nNote: first token arrived near the end ({streaming['delta_count']} deltas). "
-            "Streaming is working but chunks may be large.",
+            "Used blocking fallback with simulated chunks (text appears after full generation). "
+            "Install/update the `agent` CLI on PATH for live CLI streaming.",
+            file=sys.stderr,
+        )
+    elif streaming["delta_count"] == 0:
+        print(
+            "Pull the latest branch and ensure `agent` is on PATH: agent status",
+            file=sys.stderr,
         )
     return 0
 
