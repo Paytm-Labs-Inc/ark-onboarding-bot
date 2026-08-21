@@ -89,6 +89,19 @@ CURSOR_PINNED_MARKERS = (
     "Cursor Settings - > MCP",
 )
 
+JIRA_MCP_VPN_RE = re.compile(
+    r"(?i)"
+    r"\bjira\b.*\bmcp\b|"
+    r"\bbitbucket\b.*\bmcp\b|"
+    r"\bmcp\b.*\b(?:blocked|vpn|pod)|"
+    r"\bpods?\b.*\bnot on vpn\b"
+)
+
+JIRA_MCP_VPN_PINNED_MARKERS = (
+    "Jira / Bitbucket MCP is blocked from Ark",
+    "pods are not on VPN",
+)
+
 ONBOARDING_PINNED_MARKERS = PINNED_MARKERS
 
 USAGE_PINNED_MARKERS = (
@@ -226,6 +239,10 @@ def retrieve_scored(
         results = _pin_markers(results, index, WORKSPACE_PINNED_MARKERS, top_k=top_k)
     if CURSOR_RE.search(question):
         results = _pin_markers(results, index, CURSOR_PINNED_MARKERS, top_k=top_k)
+    if JIRA_MCP_VPN_RE.search(question):
+        results = _pin_markers(
+            results, index, JIRA_MCP_VPN_PINNED_MARKERS, top_k=top_k
+        )
     elapsed_ms = (time.perf_counter() - start) * 1000
     top_score = float(sims[int(order[0])])
     print(f"retrieved {len(results)} chunks in {elapsed_ms:.0f}ms, top_score={top_score:.3f}")
