@@ -66,7 +66,7 @@ class RetrieverTests(unittest.TestCase):
         chunks = CHUNKS + [
             {
                 "source": "getting-started -- https://example.com",
-                "text": "## Onboarding path\n1. Getting access\n2. Secrets",
+                "text": "## Start here\nFour steps stand between a new account and a session",
             },
             {
                 "source": "getting-access -- https://example.com/access",
@@ -76,7 +76,7 @@ class RetrieverTests(unittest.TestCase):
         index = build_index(chunks)
         results = retrieve("what are the steps to onboard ark", top_k=3, index=index)
         texts = [chunk["text"] for chunk in results]
-        self.assertTrue(any("Onboarding path" in text for text in texts))
+        self.assertTrue(any("Start here" in text for text in texts))
 
     @patch("src.retriever._embed", side_effect=_fake_embed)
     def test_enroll_host_pins_faq_chunk(self, _mock) -> None:

@@ -92,8 +92,8 @@
   {
     "id": "post-onboarding-usage",
     "question": "how to use ark once onboarding is done",
-    "expected_source": "getting-access",
-    "notes": "Register agents, workspace apply, flow create, dispatch session"
+    "expected_source": "authoring-your-own",
+    "notes": "Bring your own agents and flows after the first-run path"
   },
   {
     "id": "out-of-scope-jira-password",
@@ -188,14 +188,14 @@
   {
     "id": "tricky-register-agent",
     "question": "how do i register my own agent yaml with ark",
-    "expected_source": "getting-access",
-    "notes": "Register your own — ark agent create --from"
+    "expected_source": "authoring-your-own",
+    "notes": "Bring your own agents — ark agent create --from"
   },
   {
     "id": "adversarial-enroll-typo",
     "question": "how do i enrole a compute host on ark",
-    "expected_source": "getting-started",
-    "notes": "Typo — should still retrieve enroll doc"
+    "expected_source": "registering-compute",
+    "notes": "Typo — registering-compute enroll page"
   },
   {
     "id": "adversarial-no-compute",
@@ -230,14 +230,14 @@
   {
     "id": "tricky-k8s-compute-pool",
     "question": "what is needed to set up a k8s compute pool for ark",
-    "expected_source": "faq-google-doc",
-    "notes": "FAQ 12.6 — NAT, whitelisting, k8s pool, EC2 boxes"
+    "expected_source": "k8s-compute",
+    "notes": "Creating Kubernetes compute — cluster, namespace, image"
   },
   {
     "id": "tricky-slack-bot-approvals",
     "question": "how does the ark slack bot handle approvals and session notifications",
-    "expected_source": "getting-started",
-    "notes": "Getting started — Slack bot for approvals and session DMs"
+    "expected_source": "slack-bot",
+    "notes": "Slack bot page — DMs for completions and gate approvals"
   },
   {
     "id": "out-of-scope-weather",

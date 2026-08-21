@@ -9,12 +9,14 @@ from unittest.mock import MagicMock, patch
 
 from src.answer import (
     REFUSAL_PHRASE,
+    ROADMAP_PHRASE,
     SYSTEM_PROMPT,
     _AnswerFieldStreamer,
     _call_cursor_agent,
     _model_candidates,
     _parse_json_response,
     answer,
+    is_non_answer,
     stream_answer,
 )
 
@@ -22,9 +24,11 @@ from src.answer import (
 class AnswerLayerTests(unittest.TestCase):
     def setUp(self) -> None:
         os.environ["CURSOR_API_KEY"] = "crsr_test_key"
+        os.environ["ANSWER_BACKEND"] = "cursor"
 
     def tearDown(self) -> None:
         os.environ.pop("CURSOR_API_KEY", None)
+        os.environ.pop("ANSWER_BACKEND", None)
 
     @patch("src.answer._call_cursor_agent")
     def test_answer_returns_parsed_json(self, mock_cursor: MagicMock) -> None:
@@ -212,6 +216,243 @@ class AnswerLayerTests(unittest.TestCase):
             events,
             [{"type": "done", "answer": REFUSAL_PHRASE, "citations": [], "stream_mode": "none"}],
         )
+
+
+class ChunkNumberCitationTests(unittest.TestCase):
+    """chunks_used numbers map back to source labels (see _resolve_citations)."""
+
+    CHUNKS = [
+        {"source": "getting-started -- https://foundry.mypaytm.com/onboarding/", "text": "a"},
+        {"source": "faq -- https://foundry.mypaytm.com/faq", "text": "b"},
+        {"source": "set-up-cursor -- https://foundry.mypaytm.com/onboarding/cursor", "text": "c"},
+    ]
+
+    def setUp(self) -> None:
+        os.environ["CURSOR_API_KEY"] = "crsr_test_key"
+        os.environ["ANSWER_BACKEND"] = "cursor"
+
+    def tearDown(self) -> None:
+        os.environ.pop("CURSOR_API_KEY", None)
+        os.environ.pop("ANSWER_BACKEND", None)
+
+    @patch("src.answer._call_cursor_agent")
+    def test_numbers_map_to_sources(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps({"answer": "Do the thing.", "chunks_used": [1, 3]})
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(
+            result["citations"], [self.CHUNKS[0]["source"], self.CHUNKS[2]["source"]]
+        )
+
+    @patch("src.answer._call_cursor_agent")
+    def test_out_of_range_numbers_dropped(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps({"answer": "Do the thing.", "chunks_used": [2, 9, 0, -1]})
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(result["citations"], [self.CHUNKS[1]["source"]])
+
+    @patch("src.answer._call_cursor_agent")
+    def test_duplicate_numbers_deduped(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps({"answer": "Do the thing.", "chunks_used": [2, 2, 1]})
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(
+            result["citations"], [self.CHUNKS[1]["source"], self.CHUNKS[0]["source"]]
+        )
+
+    @patch("src.answer._call_cursor_agent")
+    def test_string_numbers_accepted(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps({"answer": "Do the thing.", "chunks_used": ["1", "2"]})
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(len(result["citations"]), 2)
+
+    @patch("src.answer._call_cursor_agent")
+    def test_refusal_has_no_citations(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps({"answer": REFUSAL_PHRASE, "chunks_used": []})
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(result["answer"], REFUSAL_PHRASE)
+        self.assertEqual(result["citations"], [])
+
+    @patch("src.answer._call_cursor_agent")
+    def test_verbatim_labels_still_accepted(self, mock_cursor: MagicMock) -> None:
+        """Older responses and cached entries carry source labels, not numbers."""
+        mock_cursor.return_value = json.dumps(
+            {"answer": "Do the thing.", "citations": [self.CHUNKS[1]["source"]]}
+        )
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(result["citations"], [self.CHUNKS[1]["source"]])
+
+    @patch("src.answer._call_cursor_agent")
+    def test_unknown_label_dropped(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps(
+            {"answer": "Do the thing.", "citations": ["invented -- https://example.com/nope"]}
+        )
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(result["citations"], [])
+
+    def test_prompt_no_longer_leaks_source_into_chunk_header(self) -> None:
+        from src.answer import _format_chunks
+
+        formatted = _format_chunks(self.CHUNKS)
+        self.assertIn("[Chunk 1]", formatted)
+        self.assertNotIn("foundry.mypaytm.com", formatted)
+        self.assertIn("chunks_used", SYSTEM_PROMPT)
+
+
+class ReasoningModelParsingTests(unittest.TestCase):
+    """Qwen3 and R1-family models emit a <think> block before the JSON payload."""
+
+    def test_think_block_stripped(self) -> None:
+        raw = (
+            "<think>The user asks about hosts. Chunk {1} looks right, "
+            "maybe {2} too.</think>\n"
+            '{"answer": "Run `ark host enroll`.", "chunks_used": [1]}'
+        )
+        parsed = _parse_json_response(raw)
+        self.assertEqual(parsed["chunks_used"], [1])
+        self.assertIn("ark host enroll", parsed["answer"])
+
+    def test_think_block_with_fenced_payload(self) -> None:
+        raw = '<think>reasoning {here}</think>\n```json\n{"answer": "ok", "chunks_used": []}\n```'
+        self.assertEqual(_parse_json_response(raw)["answer"], "ok")
+
+    def test_unterminated_think_block_raises(self) -> None:
+        """Reasoning ran past max_tokens, so there is no payload to salvage."""
+        with self.assertRaises((json.JSONDecodeError, ValueError)):
+            _parse_json_response("<think>I should consider {chunk 1} and")
+
+
+class PiInferenceBackendTests(unittest.TestCase):
+    """The Pi Inference backend: an OpenAI-compatible completions POST."""
+
+    CHUNKS = [{"source": "faq -- https://foundry.mypaytm.com/faq", "text": "Use a NAT gateway."}]
+
+    def setUp(self) -> None:
+        os.environ["ANSWER_BACKEND"] = "pi"
+        os.environ["PI_API_KEY"] = "pi-test-key"
+
+    def tearDown(self) -> None:
+        for name in ("ANSWER_BACKEND", "PI_API_KEY", "PI_MODEL", "PI_BASE_URL", "PI_EXTRA_PARAMS"):
+            os.environ.pop(name, None)
+
+    @staticmethod
+    def _response(payload: dict, status: int = 200) -> MagicMock:
+        resp = MagicMock()
+        resp.status_code = status
+        resp.json.return_value = {
+            "choices": [{"message": {"content": json.dumps(payload)}}]
+        }
+        resp.text = json.dumps(payload)
+        return resp
+
+    @patch("src.answer.httpx.post")
+    def test_answer_uses_pi_backend(self, mock_post: MagicMock) -> None:
+        mock_post.return_value = self._response({"answer": "Use a NAT gateway.", "chunks_used": [1]})
+        result = answer("how do I fix the jira block?", self.CHUNKS)
+
+        self.assertEqual(result["citations"], [self.CHUNKS[0]["source"]])
+        url = mock_post.call_args.args[0]
+        self.assertTrue(url.endswith("/v1/chat/completions"))
+        self.assertIn("api.inference.paytm.com", url)
+
+    @patch("src.answer.httpx.post")
+    def test_qwen_is_the_default_model_and_carries_its_params(self, mock_post: MagicMock) -> None:
+        """Qwen3 needs reasoning disabled and JSON mode or it emits a <think> block."""
+        mock_post.return_value = self._response({"answer": "ok", "chunks_used": []})
+        answer("q", self.CHUNKS)
+
+        body = mock_post.call_args.kwargs["json"]
+        self.assertEqual(body["model"], "qwen/qwen3-32b")
+        self.assertEqual(body["reasoning_effort"], "none")
+        self.assertEqual(body["response_format"], {"type": "json_object"})
+
+    @patch("src.answer.httpx.post")
+    def test_model_without_special_params_sends_none(self, mock_post: MagicMock) -> None:
+        os.environ["PI_MODEL"] = "Claude Haiku 4.5"
+        mock_post.return_value = self._response({"answer": "ok", "chunks_used": []})
+        answer("q", self.CHUNKS)
+
+        body = mock_post.call_args.kwargs["json"]
+        self.assertEqual(body["model"], "Claude Haiku 4.5")
+        self.assertNotIn("reasoning_effort", body)
+
+    @patch("src.answer.httpx.post")
+    def test_pi_extra_params_override(self, mock_post: MagicMock) -> None:
+        os.environ["PI_EXTRA_PARAMS"] = '{"temperature": 0, "reasoning_effort": "default"}'
+        mock_post.return_value = self._response({"answer": "ok", "chunks_used": []})
+        answer("q", self.CHUNKS)
+
+        body = mock_post.call_args.kwargs["json"]
+        self.assertEqual(body["temperature"], 0)
+        self.assertEqual(body["reasoning_effort"], "default")
+
+    def test_missing_key_names_the_variable_and_the_escape_hatch(self) -> None:
+        os.environ.pop("PI_API_KEY", None)
+        with self.assertRaises(ValueError) as ctx:
+            answer("q", self.CHUNKS)
+        self.assertIn("PI_API_KEY", str(ctx.exception))
+        self.assertIn("ANSWER_BACKEND=cursor", str(ctx.exception))
+
+    @patch("src.answer.httpx.post")
+    def test_http_error_surfaces_status_and_model(self, mock_post: MagicMock) -> None:
+        resp = MagicMock()
+        resp.status_code = 404
+        resp.text = '{"error":{"message":"Model not found"}}'
+        mock_post.return_value = resp
+        with self.assertRaises(RuntimeError) as ctx:
+            answer("q", self.CHUNKS)
+        self.assertIn("404", str(ctx.exception))
+        self.assertIn("qwen/qwen3-32b", str(ctx.exception))
+
+    def test_unknown_backend_is_rejected(self) -> None:
+        os.environ["ANSWER_BACKEND"] = "banana"
+        with self.assertRaises(ValueError) as ctx:
+            answer("q", self.CHUNKS)
+        self.assertIn("banana", str(ctx.exception))
+
+    @patch("src.answer._call_cursor_agent")
+    def test_warm_agent_is_a_noop_on_pi(self, mock_cursor: MagicMock) -> None:
+        from src.answer import warm_agent
+
+        os.environ["CURSOR_API_KEY"] = "crsr_test_key"
+        warm_agent()
+        mock_cursor.assert_not_called()
+        os.environ.pop("CURSOR_API_KEY", None)
+
+
+class DeclineWordingTests(unittest.TestCase):
+    """Out-of-scope declines and not-yet-documented declines read differently."""
+
+    CHUNKS = [{"source": "faq -- https://foundry.mypaytm.com/faq", "text": "x"}]
+
+    def setUp(self) -> None:
+        os.environ["CURSOR_API_KEY"] = "crsr_test_key"
+        os.environ["ANSWER_BACKEND"] = "cursor"
+
+    def tearDown(self) -> None:
+        os.environ.pop("CURSOR_API_KEY", None)
+        os.environ.pop("ANSWER_BACKEND", None)
+
+    def test_both_phrases_count_as_non_answers(self) -> None:
+        self.assertTrue(is_non_answer(REFUSAL_PHRASE))
+        self.assertTrue(is_non_answer(ROADMAP_PHRASE))
+        self.assertTrue(is_non_answer(f"  {ROADMAP_PHRASE}  "))
+        self.assertFalse(is_non_answer("Run `ark host enroll`."))
+
+    def test_prompt_gives_the_model_both_exact_strings(self) -> None:
+        self.assertIn(REFUSAL_PHRASE, SYSTEM_PROMPT)
+        self.assertIn(ROADMAP_PHRASE, SYSTEM_PROMPT)
+
+    @patch("src.answer._call_cursor_agent")
+    def test_roadmap_reply_carries_no_citations(self, mock_cursor: MagicMock) -> None:
+        mock_cursor.return_value = json.dumps({"answer": ROADMAP_PHRASE, "chunks_used": []})
+        result = answer("does ark do X?", self.CHUNKS)
+        self.assertEqual(result["answer"], ROADMAP_PHRASE)
+        self.assertEqual(result["citations"], [])
+
+    def test_query_log_counts_a_roadmap_reply_as_refused(self) -> None:
+        from src.query_log import is_refused
+
+        self.assertTrue(is_refused(ROADMAP_PHRASE))
+        self.assertTrue(is_refused(REFUSAL_PHRASE))
+        self.assertFalse(is_refused("Use `ark workspace apply`."))
 
 
 if __name__ == "__main__":
