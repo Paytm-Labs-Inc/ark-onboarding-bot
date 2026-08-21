@@ -34,7 +34,9 @@ jobs:
 
   refusal-eval:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Runs on PRs too. Gating only on push-to-main meant a backend change could
+    # pass review and break main on merge, which is exactly what happened in #25.
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +56,19 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Refusal eval gate
-        run: python eval/run_eval.py --full --only-refusals --quiet-retriever
         env:
+          PI_API_KEY: ${{ secrets.PI_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          # This gate asks a real model whether it refuses. There is no way to
+          # check that without one, so with no key configured it skips loudly
+          # rather than failing every push and training us to ignore red.
+          if [ -z "$PI_API_KEY" ] && [ -z "$CURSOR_API_KEY" ]; then
+            echo "::warning title=Refusal gate skipped::No PI_API_KEY or CURSOR_API_KEY configured. Refusal behaviour is UNVERIFIED on this run. Add PI_API_KEY as a repository secret to turn this gate back on."
+            exit 0
+          fi
+          # Prefer Pi Inference: it is a plain HTTPS call. The Cursor backend needs the
+          # `agent` binary on PATH, which no runner has, so it can never work here.
+          if [ -n "$PI_API_KEY" ]; then export ANSWER_BACKEND=pi; else export ANSWER_BACKEND=cursor; fi
+          echo "Refusal gate running on ANSWER_BACKEND=$ANSWER_BACKEND"
+          python eval/run_eval.py --full --only-refusals --quiet-retriever
