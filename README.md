@@ -45,22 +45,43 @@ pip install --default-timeout=300 numpy html2text python-dotenv
 pip install --default-timeout=600 "sentence-transformers>=3.0,<4.0"
 ```
 
-### 2. Set your Cursor API key
+### 2. Set your answer-generation key
 
-Copy the example env file and add your key from https://cursor.com/dashboard/api:
+Answers are generated through the **Pi Inference** gateway by default — a plain
+OpenAI-compatible completion call, no agent harness. Copy the example env file
+and set your key:
 
 ```bash
 cp .env.example .env
-# edit .env → CURSOR_API_KEY=crsr_...
+# edit .env → PI_API_KEY=...
 ```
 
-The key is read from the environment (never passed on the command line).
+Defaults are `ANSWER_BACKEND=pi` and `PI_MODEL=qwen/qwen3-32b`. Keys are read from
+the environment, never passed on the command line.
 
-You also need the **Cursor agent CLI** on your PATH (`agent`). Install/update via Cursor, then verify:
+> The gateway host is `api.inference.paytm.com`. `app.inference.paytm.com` is the
+> control plane and returns 404 for completions.
+
+Models that need extra request parameters carry them in `PI_MODEL_PARAMS` in
+`src/answer.py` — qwen3-32b, for example, needs reasoning disabled and JSON mode
+or it spends its token budget on a `<think>` block. Override per deployment with
+`PI_EXTRA_PARAMS`.
+
+<details>
+<summary>Using the Cursor backend instead</summary>
+
+Set `ANSWER_BACKEND=cursor` and `CURSOR_API_KEY=crsr_...` (key from
+https://cursor.com/dashboard/api). This path also needs the **Cursor agent CLI**
+on your PATH:
 
 ```bash
 agent status
 ```
+
+It boots a workspace session per question, so expect roughly 10x the latency of
+the Pi Inference path.
+
+</details>
 
 ### 3. Ask a question
 

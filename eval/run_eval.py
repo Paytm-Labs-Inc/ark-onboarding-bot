@@ -74,7 +74,7 @@ def evaluate_question(
     top_k: int,
     run_answer: bool,
 ) -> QuestionResult:
-    from src.answer import REFUSAL_PHRASE
+    from src.answer import is_non_answer
     from src.ask import ask
     from src.retrieve import retrieve
 
@@ -100,7 +100,7 @@ def evaluate_question(
             citations = [str(item) for item in raw_citations] if isinstance(raw_citations, list) else []
 
             if expect_refusal:
-                citation_hit = result.get("answer") == REFUSAL_PHRASE and not citations
+                citation_hit = is_non_answer(str(result.get("answer", ""))) and not citations
             elif expected is not None:
                 citation_hit = any_source_matches(str(expected), citations)
             else:
