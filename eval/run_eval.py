@@ -28,6 +28,7 @@ class QuestionResult:
     retrieved_sources: list[str]
     citation_hit: bool | None
     citations: list[str]
+    answer_hit: bool | None
     answer_preview: str | None
     error: str | None = None
 
@@ -44,6 +45,17 @@ def source_matches(expected: str, actual: str) -> bool:
 
 def any_source_matches(expected: str, sources: list[str]) -> bool:
     return any(source_matches(expected, source) for source in sources)
+
+
+def answer_contains_fact(answer: str, markers: list[str]) -> bool:
+    """True when the answer carries at least one of the facts it needs.
+
+    Scores the ANSWER, not which page was retrieved. Retrieval hit-rate says
+    the right document came back; it says nothing about whether the reader got
+    the right fact, which is the thing users actually care about.
+    """
+    low = answer.lower()
+    return any(str(m).lower() in low for m in markers)
 
 
 def load_questions(path: Path = QUESTIONS_PATH) -> list[dict]:
@@ -91,20 +103,27 @@ def evaluate_question(
 
         citation_hit: bool | None = None
         citations: list[str] = []
+        answer_hit: bool | None = None
         answer_preview: str | None = None
 
         if run_answer:
             result = ask(question, k=top_k, log=False, channel="eval")
-            answer_preview = str(result.get("answer", ""))[:240]
+            answer_text = str(result.get("answer", ""))
+            answer_preview = answer_text[:240]
             raw_citations = result.get("citations", [])
             citations = [str(item) for item in raw_citations] if isinstance(raw_citations, list) else []
 
             if expect_refusal:
-                citation_hit = is_non_answer(str(result.get("answer", ""))) and not citations
+                citation_hit = is_non_answer(answer_text) and not citations
+                answer_hit = citation_hit
             elif expected is not None:
                 citation_hit = any_source_matches(str(expected), citations)
             else:
                 citation_hit = False
+
+            markers = item.get("answer_must_include") or []
+            if markers and not expect_refusal:
+                answer_hit = answer_contains_fact(answer_text, markers)
 
         return QuestionResult(
             id=str(item.get("id", question)),
@@ -115,6 +134,7 @@ def evaluate_question(
             retrieved_sources=retrieved_sources,
             citation_hit=citation_hit,
             citations=citations,
+            answer_hit=answer_hit,
             answer_preview=answer_preview,
         )
     except Exception as exc:  # noqa: BLE001 — eval runner should keep going
@@ -127,6 +147,7 @@ def evaluate_question(
             retrieved_sources=[],
             citation_hit=None if not run_answer else False,
             citations=[],
+            answer_hit=None if not run_answer else False,
             answer_preview=None,
             error=str(exc),
         )
@@ -136,6 +157,32 @@ def _pct(numerator: int, denominator: int) -> float:
     if denominator == 0:
         return 0.0
     return round(100.0 * numerator / denominator, 1)
+
+
+def random_baseline(scored: list[QuestionResult], top_k: int, trials: int = 200) -> float | None:
+    """What a retriever that ignores the question scores on the retrieval metric.
+
+    With a small corpus and a generous top_k, a large share of the hit-rate is
+    available by chance. Printing the number beside the real one is the only way
+    to tell a genuine improvement from noise.
+    """
+    try:
+        import random
+        from src.chunker import load_chunks
+    except Exception:
+        return None
+    chunks = load_chunks()
+    if not chunks or not scored:
+        return None
+    rng = random.Random(7)
+    hits = 0
+    for _ in range(trials):
+        for result in scored:
+            picked = rng.sample(chunks, min(top_k, len(chunks)))
+            sources = {norm_source(str(c.get("source", ""))) for c in picked}
+            if str(result.expected_source).strip().lower() in sources:
+                hits += 1
+    return 100.0 * hits / (trials * len(scored))
 
 
 def print_report(
@@ -155,9 +202,11 @@ def print_report(
     print(
         f"Config: MAX_CHARS={max_chars}, top_k={top_k}, model={model_name}",
     )
+    baseline = random_baseline(scored, top_k)
+    baseline_note = f"   [random baseline {baseline:.1f}%]" if baseline is not None else ""
     print(
         f"Retrieval hit @ top-k: {retrieval_pass}/{len(scored)} "
-        f"({_pct(retrieval_pass, len(scored))}%)"
+        f"({_pct(retrieval_pass, len(scored))}%){baseline_note}"
     )
 
     if run_answer:
@@ -167,6 +216,15 @@ def print_report(
             f"Citation hit:          {citation_pass}/{len(citation_scored)} "
             f"({_pct(citation_pass, len(citation_scored))}%)"
         )
+
+        answer_scored = [r for r in scored if r.answer_hit is not None]
+        if answer_scored:
+            answer_pass = sum(1 for r in answer_scored if r.answer_hit)
+            print(
+                f"Answer correct:        {answer_pass}/{len(answer_scored)} "
+                f"({_pct(answer_pass, len(answer_scored))}%)"
+                "   <- the fact is in the answer, not just the page in top-k"
+            )
 
         refusal_pass = sum(1 for r in refusals if r.citation_hit)
         print(
