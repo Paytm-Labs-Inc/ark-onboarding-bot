@@ -178,6 +178,24 @@ def _pi_request_params(model: str) -> dict[str, Any]:
     return params
 
 
+# Transient gateway failures worth another attempt. Groq's JSON mode
+# intermittently fails to produce valid JSON and answers 400 with
+# failed_generation -- measured at roughly 5% under concurrency, which surfaced
+# to users as a 502. It is a sampling failure, not a bad request, so the very
+# same call succeeds on a retry.
+_PI_RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+
+
+def _pi_is_retryable(status: int, body: str) -> bool:
+    if status in _PI_RETRYABLE_STATUS:
+        return True
+    if status == 400 and (
+        "failed_generation" in body or "Failed to generate JSON" in body
+    ):
+        return True
+    return False
+
+
 def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
     """Generate via the Pi Inference gateway's OpenAI-compatible endpoint."""
     api_key = os.environ.get("PI_API_KEY", "").strip()
@@ -197,36 +215,56 @@ def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
     }
     body.update(_pi_request_params(chosen))
 
-    try:
-        response = httpx.post(
-            f"{base_url}/v1/chat/completions",
-            json=body,
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=timeout,
-        )
-    except httpx.TimeoutException as exc:
-        raise TimeoutError(
-            f"Pi Inference timed out after {timeout}s. "
-            "Retry or increase PI_TIMEOUT_SECONDS."
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise RuntimeError(f"Pi Inference request failed: {exc}") from exc
+    attempts = max(1, int(os.environ.get("PI_MAX_ATTEMPTS", "3")))
+    url = f"{base_url}/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    detail = "unknown error"
 
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Pi Inference generation failed for model {chosen!r}: "
-            f"HTTP {response.status_code} {response.text[:200]}"
-        )
+    for attempt in range(1, attempts + 1):
+        last = attempt == attempts
+        try:
+            response = httpx.post(url, json=body, headers=headers, timeout=timeout)
+        except httpx.TimeoutException as exc:
+            if last:
+                raise TimeoutError(
+                    f"Pi Inference timed out after {timeout}s on {attempts} attempt(s). "
+                    "Retry or increase PI_TIMEOUT_SECONDS."
+                ) from exc
+            detail = f"timeout after {timeout}s"
+        except httpx.HTTPError as exc:
+            if last:
+                raise RuntimeError(f"Pi Inference request failed: {exc}") from exc
+            detail = str(exc)
+        else:
+            if response.status_code == 200:
+                try:
+                    text = response.json()["choices"][0]["message"]["content"]
+                except (KeyError, IndexError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"Pi Inference returned an unexpected payload: {response.text[:200]}"
+                    ) from exc
+                if text:
+                    return str(text).strip()
+                detail = "empty response"
+                if last:
+                    raise RuntimeError("Pi Inference returned an empty response")
+            else:
+                detail = f"HTTP {response.status_code} {response.text[:200]}"
+                retryable = _pi_is_retryable(response.status_code, response.text)
+                if last or not retryable:
+                    # Say how many attempts were made when we actually retried, so a
+                    # persistent outage reads differently from a config mistake.
+                    tried = f" after {attempts} attempts" if retryable else ""
+                    raise RuntimeError(
+                        f"Pi Inference generation failed for model {chosen!r}{tried}: {detail}"
+                    )
+        # Exponential backoff, capped. Short because these are sampling and
+        # rate-limit failures, not a service that needs time to come back.
+        time.sleep(min(2.0, 0.25 * (2 ** (attempt - 1))))
 
-    try:
-        text = response.json()["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, ValueError) as exc:
-        raise RuntimeError(
-            f"Pi Inference returned an unexpected payload: {response.text[:200]}"
-        ) from exc
-    if not text:
-        raise RuntimeError("Pi Inference returned an empty response")
-    return str(text).strip()
+    raise RuntimeError(
+        f"Pi Inference generation failed for model {chosen!r} after {attempts} attempts: {detail}"
+    )
 
 
 def _call_cursor_sdk(prompt: str, *, model: str) -> str:

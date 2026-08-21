@@ -457,3 +457,78 @@ class DeclineWordingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PiRetryTests(unittest.TestCase):
+    """Groq's JSON mode intermittently 400s; that is retryable, config errors are not."""
+
+    CHUNKS = [{"source": "faq -- https://foundry.mypaytm.com/faq", "text": "x"}]
+
+    def setUp(self) -> None:
+        os.environ["ANSWER_BACKEND"] = "pi"
+        os.environ["PI_API_KEY"] = "pi-test-key"
+        os.environ["PI_MAX_ATTEMPTS"] = "3"
+
+    def tearDown(self) -> None:
+        for name in ("ANSWER_BACKEND", "PI_API_KEY", "PI_MAX_ATTEMPTS"):
+            os.environ.pop(name, None)
+
+    @staticmethod
+    def _resp(status, payload=None, text=""):
+        r = MagicMock()
+        r.status_code = status
+        r.text = text or json.dumps(payload or {})
+        r.json.return_value = (
+            {"choices": [{"message": {"content": json.dumps(payload)}}]} if payload else {}
+        )
+        return r
+
+    def test_classifier(self) -> None:
+        from src.answer import _pi_is_retryable
+
+        self.assertTrue(_pi_is_retryable(429, ""))
+        self.assertTrue(_pi_is_retryable(503, ""))
+        self.assertTrue(_pi_is_retryable(400, '{"error":{"message":"Failed to generate JSON"}}'))
+        self.assertTrue(_pi_is_retryable(400, '{"failed_generation":"..."}'))
+        self.assertFalse(_pi_is_retryable(400, '{"error":{"message":"bad model"}}'))
+        self.assertFalse(_pi_is_retryable(401, ""))
+        self.assertFalse(_pi_is_retryable(404, '{"error":{"message":"Model not found"}}'))
+
+    @patch("src.answer.time.sleep", lambda *_: None)
+    @patch("src.answer.httpx.post")
+    def test_json_mode_failure_is_retried_and_succeeds(self, mock_post: MagicMock) -> None:
+        good = {"answer": "Use a NAT gateway.", "chunks_used": [1]}
+        mock_post.side_effect = [
+            self._resp(400, text='{"error":{"message":"Failed to generate JSON"}}'),
+            self._resp(200, good),
+        ]
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(result["citations"], [self.CHUNKS[0]["source"]])
+        self.assertEqual(mock_post.call_count, 2)
+
+    @patch("src.answer.time.sleep", lambda *_: None)
+    @patch("src.answer.httpx.post")
+    def test_rate_limit_is_retried(self, mock_post: MagicMock) -> None:
+        mock_post.side_effect = [
+            self._resp(429, text="rate limited"),
+            self._resp(200, {"answer": "ok", "chunks_used": []}),
+        ]
+        answer("q", self.CHUNKS)
+        self.assertEqual(mock_post.call_count, 2)
+
+    @patch("src.answer.time.sleep", lambda *_: None)
+    @patch("src.answer.httpx.post")
+    def test_config_error_is_not_retried(self, mock_post: MagicMock) -> None:
+        mock_post.return_value = self._resp(404, text='{"error":{"message":"Model not found"}}')
+        with self.assertRaises(RuntimeError):
+            answer("q", self.CHUNKS)
+        self.assertEqual(mock_post.call_count, 1)
+
+    @patch("src.answer.time.sleep", lambda *_: None)
+    @patch("src.answer.httpx.post")
+    def test_gives_up_after_max_attempts(self, mock_post: MagicMock) -> None:
+        mock_post.return_value = self._resp(503, text="upstream down")
+        with self.assertRaises(RuntimeError) as ctx:
+            answer("q", self.CHUNKS)
+        self.assertEqual(mock_post.call_count, 3)
+        self.assertIn("after 3 attempts", str(ctx.exception))
