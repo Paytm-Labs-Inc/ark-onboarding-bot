@@ -153,6 +153,37 @@ class RetrieverTests(unittest.TestCase):
         self.assertIn("Set up Cursor", texts)
         self.assertIn(".cursor/mcp.json", texts)
 
+    @patch("src.retriever._embed", side_effect=_fake_embed)
+    def test_jira_mcp_vpn_pins_faq_chunk(self, _mock) -> None:
+        chunks = CHUNKS + [
+            {
+                "source": "faq-google-doc -- https://example.com/faq-doc",
+                "text": (
+                    '12.4 "Jira / Bitbucket MCP is blocked from Ark — '
+                    'pods are not on VPN. How to fix?" NAT gateway.'
+                ),
+            },
+            {
+                "source": "getting-access -- https://example.com/access",
+                "text": "You must be on the corp network/VPN to open Ark.",
+            },
+            {
+                "source": "set-up-cursor -- https://example.com/cursor",
+                "text": "VPN required. The control plane is reachable only from VPN.",
+            },
+        ]
+        index = build_index(chunks)
+        results = retrieve(
+            "jira mcp is blocked from ark pods not on vpn how to fix",
+            top_k=3,
+            index=index,
+        )
+        texts = " ".join(chunk["text"] for chunk in results)
+        self.assertIn("Jira / Bitbucket MCP is blocked from Ark", texts)
+        self.assertTrue(
+            any("faq-google-doc" in chunk["source"] for chunk in results)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

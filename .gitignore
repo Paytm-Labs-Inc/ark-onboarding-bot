@@ -8,4 +8,5 @@ data/*.embeddings
 sources/faq-google-doc.*
 eval/feedback.jsonl
 eval/query_log.jsonl
+eval/triage-reports/
 eval/results/

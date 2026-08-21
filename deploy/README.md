@@ -147,6 +147,50 @@ A container is a frozen snapshot — new code is **not** live until you rebuild 
 redeploy: merge to `main` → `docker build` a new tag → push → roll the Deployment
 to the new tag. Tag by commit SHA so it's unambiguous which code is running.
 
+## Weekly query triage (follow-up to observability)
+
+Every real question is appended to `eval/query_log.jsonl` on the host. Once a week,
+run the summarizer so someone reviews **refused** and **low-confidence** buckets and
+turns them into new eval questions.
+
+### Run manually (smoke test or ad-hoc review)
+
+On the **same machine** where the bot runs (where `query_log.jsonl` lives):
+
+```bash
+cd /opt/ark-onboarding-bot
+./deploy/run_weekly_triage.sh
+less eval/triage-reports/weekly-$(date -u +%Y-%m-%d).txt
+```
+
+The report lists volume by day, refusal rate, retrieval hit-rate, and every
+**gold-set candidate** question flagged from live traffic.
+
+### Install the weekly timer (recommended)
+
+Uses the same `arkbot` service account as the web UI. After the bot is deployed:
+
+```bash
+sudo cp deploy/weekly-triage.service deploy/weekly-triage.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now weekly-triage.timer
+systemctl list-timers weekly-triage.timer    # next run: Mon 09:00 UTC
+sudo systemctl start weekly-triage.service   # optional: generate a report now
+```
+
+Reports land in `eval/triage-reports/weekly-YYYY-MM-DD.{txt,json}` on the host.
+
+### What to do with the report each week
+
+1. Open the latest `weekly-*.txt` on the host (or ask whoever has SSH to paste the
+   **Gold-set candidates** section in Slack).
+2. For each refused or low-confidence question, decide: add to `eval/questions.json`,
+   improve docs, or ignore as noise.
+3. After ingest + eval on `main`, confirm the new cases pass.
+
+Until the bot has real traffic on the deployed host, the log (and report) will be
+empty — that is expected. The timer is safe to install early.
+
 ## Notes
 
 - **Sessions are in-memory.** Multi-turn chat history lives in the process, so a
