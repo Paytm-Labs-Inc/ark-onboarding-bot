@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Iterator
 from typing import Any
 
 REFUSAL_PHRASE = "I don't have an answer for that yet."
@@ -260,13 +261,12 @@ def _format_history(history: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _generate_answer(
+def _build_user_content(
     question: str,
     chunks: list[dict[str, Any]],
     *,
     history: list[dict[str, str]] | None = None,
-    model: str | None = None,
-) -> dict[str, Any]:
+) -> str:
     history_block = ""
     if history:
         formatted = _format_history(history)
@@ -277,19 +277,17 @@ def _generate_answer(
                 f"{formatted}\n\n"
             )
 
-    user_content = (
+    return (
         f"{SYSTEM_PROMPT}\n\n"
         f"Document chunks:\n\n{_format_chunks(chunks)}\n\n"
         f"{history_block}"
         f"Question: {question}"
     )
 
-    raw = _call_cursor_agent(user_content, model=model)
-    try:
-        parsed = _parse_json_response(raw)
-    except (json.JSONDecodeError, IndexError, KeyError) as exc:
-        raise ValueError(f"Could not parse model response as JSON: {raw!r}") from exc
 
+def _finalize_parsed(
+    parsed: dict[str, Any], chunks: list[dict[str, Any]]
+) -> dict[str, Any]:
     answer_text = str(parsed.get("answer", "")).strip()
     citations_raw = parsed.get("citations", [])
     if not isinstance(citations_raw, list):
@@ -308,6 +306,110 @@ def _generate_answer(
     return {"answer": answer_text or REFUSAL_PHRASE, "citations": citations}
 
 
+def _answer_text_from_partial_json(raw: str) -> str:
+    """Best-effort extract of the answer string from incomplete JSON."""
+    match = re.search(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)', raw)
+    if not match:
+        return ""
+    fragment = match.group(1)
+    try:
+        return json.loads(f'"{fragment}"')
+    except json.JSONDecodeError:
+        return (
+            fragment.replace("\\n", "\n")
+            .replace('\\"', '"')
+            .replace("\\\\", "\\")
+        )
+
+
+class _AnswerFieldStreamer:
+    """Map raw JSON token deltas to incremental answer-field text."""
+
+    def __init__(self) -> None:
+        self._raw = ""
+        self._answer_text = ""
+
+    def push(self, delta: str) -> str:
+        self._raw += delta
+        current = _answer_text_from_partial_json(self._raw)
+        if not current.startswith(self._answer_text):
+            # Model restarted or JSON shape shifted — emit the whole visible answer.
+            new_text = current
+        else:
+            new_text = current[len(self._answer_text) :]
+        self._answer_text = current
+        return new_text
+
+
+def _parse_and_finalize(raw: str, chunks: list[dict[str, Any]]) -> dict[str, Any]:
+    try:
+        parsed = _parse_json_response(raw)
+    except (json.JSONDecodeError, IndexError, KeyError) as exc:
+        raise ValueError(f"Could not parse model response as JSON: {raw!r}") from exc
+    return _finalize_parsed(parsed, chunks)
+
+
+def _stream_cursor_sdk(prompt: str, *, model: str) -> Iterator[str]:
+    """Yield text-delta tokens; return value is the full raw model response."""
+    try:
+        from cursor_sdk import Agent, AgentOptions, LocalAgentOptions
+    except ImportError as exc:
+        raise RuntimeError(
+            "cursor-sdk is not installed. Run: pip install cursor-sdk"
+        ) from exc
+
+    api_key = os.environ.get("CURSOR_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("CURSOR_API_KEY not set")
+
+    workspace = os.environ.get("CURSOR_WORKSPACE", os.getcwd())
+    agent = Agent.create(
+        AgentOptions(
+            api_key=api_key,
+            model=model,
+            local=LocalAgentOptions(cwd=workspace),
+        )
+    )
+
+    raw_parts: list[str] = []
+    try:
+        run = agent.send(prompt)
+        for event in run.events():
+            update = event.interaction_update
+            if update is None or getattr(update, "type", None) != "text-delta":
+                continue
+            text = getattr(update, "text", "")
+            if not text:
+                continue
+            raw_parts.append(text)
+            yield text
+
+        result = run.wait()
+        if getattr(result, "status", None) == "error":
+            detail = getattr(result, "result", None) or "unknown SDK error"
+            raise RuntimeError(f"Cursor SDK generation failed: {detail}")
+        terminal = (getattr(result, "result", None) or "").strip()
+        if terminal and not raw_parts:
+            raw_parts.append(terminal)
+            yield terminal
+    finally:
+        agent.close()
+
+    return "".join(raw_parts).strip()
+
+
+def _generate_answer(
+    question: str,
+    chunks: list[dict[str, Any]],
+    *,
+    history: list[dict[str, str]] | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    user_content = _build_user_content(question, chunks, history=history)
+    raw = _call_cursor_agent(user_content, model=model)
+    return _parse_and_finalize(raw, chunks)
+
+
 def answer(
     question: str,
     chunks: list[dict[str, Any]],
@@ -319,3 +421,57 @@ def answer(
         return {"answer": REFUSAL_PHRASE, "citations": []}
 
     return _generate_answer(question, chunks, history=history)
+
+
+def stream_answer(
+    question: str,
+    chunks: list[dict[str, Any]],
+    *,
+    history: list[dict[str, str]] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Stream grounded answer token deltas, then a final parsed result.
+
+    Yields ``{"type": "delta", "text": "..."}`` events while the model
+    generates, then ``{"type": "done", "answer": "...", "citations": [...]}``.
+    Falls back to blocking ``answer()`` when SDK streaming is unavailable.
+    """
+    if not chunks:
+        yield {"type": "done", "answer": REFUSAL_PHRASE, "citations": []}
+        return
+
+    user_content = _build_user_content(question, chunks, history=history)
+    backend = _answer_backend()
+    if backend == "cli":
+        result = _generate_answer(question, chunks, history=history)
+        yield {"type": "done", **result}
+        return
+
+    models = _model_candidates(None)
+    errors: list[str] = []
+    for chosen_model in models:
+        try:
+            stream = _stream_cursor_sdk(user_content, model=chosen_model)
+            raw = ""
+            answer_streamer = _AnswerFieldStreamer()
+            while True:
+                try:
+                    delta = next(stream)
+                except StopIteration as exc:
+                    raw = str(exc.value or "")
+                    break
+                answer_delta = answer_streamer.push(delta)
+                if answer_delta:
+                    yield {"type": "delta", "text": answer_delta}
+
+            if not raw.strip():
+                raise RuntimeError("Cursor SDK returned an empty response")
+            result = _parse_and_finalize(raw, chunks)
+            yield {"type": "done", **result}
+            return
+        except Exception as exc:
+            errors.append(f"sdk-stream/{chosen_model}: {exc}")
+            if "Cannot use this model" not in str(exc):
+                break
+
+    result = _generate_answer(question, chunks, history=history)
+    yield {"type": "done", **result}

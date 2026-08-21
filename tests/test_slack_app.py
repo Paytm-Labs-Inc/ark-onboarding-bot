@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import threading
 
@@ -14,6 +14,7 @@ from src.slack_app import (
     run_in_background,
     safe_answer,
     should_answer_dm,
+    stream_answer_to_slack,
     strip_mention,
 )
 
@@ -70,6 +71,30 @@ class SlackHelpersTests(unittest.TestCase):
         self.assertFalse(should_answer_dm({"channel_type": "im", "bot_id": "B1"}))
         # Edited/system message
         self.assertFalse(should_answer_dm({"channel_type": "im", "subtype": "message_changed"}))
+
+    @patch("src.slack_app.ask_stream")
+    def test_stream_answer_to_slack_updates_message_in_place(self, mock_stream) -> None:
+        mock_stream.return_value = iter(
+            [
+                {"type": "delta", "text": "Run ark host enroll."},
+                {
+                    "type": "done",
+                    "answer": "Run ark host enroll.",
+                    "citations": ["getting-started -- https://x"],
+                },
+            ]
+        )
+        client = MagicMock()
+        stream_answer_to_slack(
+            client,
+            channel="C1",
+            message_ts="123.456",
+            raw_question="how do I enroll a host?",
+        )
+        self.assertGreaterEqual(client.chat_update.call_count, 1)
+        final_text = client.chat_update.call_args_list[-1].kwargs["text"]
+        self.assertIn("Run ark host enroll.", final_text)
+        self.assertIn("*Sources*", final_text)
 
 
 if __name__ == "__main__":

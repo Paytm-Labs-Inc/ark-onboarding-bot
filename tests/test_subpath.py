@@ -34,8 +34,8 @@ class StripModeTests(unittest.TestCase):
         self.assertIn(f'<base href="{PREFIX}/">', text)
         self.assertIn('href="reviews"', text)
         self.assertNotIn('href="/reviews"', text)
-        self.assertIn('fetch("api/ask"', text)
-        self.assertNotIn('fetch("/api/ask"', text)
+        self.assertIn('fetch("api/ask/stream"', text)
+        self.assertNotIn('fetch("/api/ask/stream"', text)
 
     def test_login_and_reviews_pages_have_prefixed_base(self) -> None:
         self.assertIn(f'<base href="{PREFIX}/">', self.client.get("/login").text)

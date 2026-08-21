@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from collections.abc import Iterator
 from typing import Any
 
-from src.ask import ask
+from src.ask import ask, ask_stream
 from src.citations import parse_citation
 
 MAX_HISTORY_TURNS = 4
@@ -86,3 +87,36 @@ def ask_in_session(session_id: str | None, question: str) -> dict[str, Any]:
         "retrieved_sources": retrieved_sources,
         "sources": enrich_citations(citations),
     }
+
+
+def ask_in_session_stream(
+    session_id: str | None, question: str
+) -> Iterator[dict[str, Any]]:
+    """Like ask_in_session, but yields delta events then a final done payload."""
+    sid, session = get_session(session_id)
+    final: dict[str, Any] | None = None
+
+    for event in ask_stream(
+        question,
+        history=session.history_for_prompt(),
+        channel="web",
+        session_id=sid,
+    ):
+        if event.get("type") == "done":
+            answer_text = str(event.get("answer", ""))
+            citations = [str(item) for item in event.get("citations", [])]
+            retrieved_sources = [
+                str(item) for item in event.get("retrieved_sources", [])
+            ]
+            session.add_turn(question, answer_text, citations, retrieved_sources)
+            final = {
+                "type": "done",
+                "session_id": sid,
+                "answer": answer_text,
+                "citations": citations,
+                "retrieved_sources": retrieved_sources,
+                "sources": enrich_citations(citations),
+            }
+            yield final
+        else:
+            yield event

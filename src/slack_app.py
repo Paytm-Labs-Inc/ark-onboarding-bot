@@ -19,8 +19,9 @@ from __future__ import annotations
 import os
 import re
 import threading
+import time
 
-from src.ask import ask
+from src.ask import ask, ask_stream
 
 _MENTION_RE = re.compile(r"^\s*<@[^>]+>\s*")
 
@@ -62,6 +63,7 @@ def should_answer_dm(event: dict) -> bool:
 
 
 WORKING_NOTE = "Looking that up in the docs… (this takes ~1-2 min)"
+STREAM_UPDATE_INTERVAL_SECONDS = 0.75
 
 
 def safe_answer(raw_question: str) -> str:
@@ -70,6 +72,77 @@ def safe_answer(raw_question: str) -> str:
         return answer_text(raw_question)
     except (ValueError, RuntimeError, TimeoutError) as exc:
         return f"Sorry — I hit an error answering that: {exc}"
+
+
+def _format_stream_preview(answer_text: str) -> str:
+    preview = answer_text.strip()
+    if not preview:
+        return WORKING_NOTE
+    if len(preview) > 3500:
+        preview = preview[:3497] + "…"
+    return preview
+
+
+def stream_answer_to_slack(
+    client,
+    *,
+    channel: str,
+    message_ts: str,
+    raw_question: str,
+    thread_ts: str | None = None,
+) -> None:
+    """Edit a Slack message in place as answer tokens arrive."""
+    question = strip_mention(raw_question)
+    if not question:
+        client.chat_update(channel=channel, ts=message_ts, text=PROMPT_HINT)
+        return
+
+    preview = WORKING_NOTE
+    accumulated = ""
+    last_update = 0.0
+    final: dict | None = None
+
+    try:
+        for event in ask_stream(question, channel="slack"):
+            if event.get("type") == "delta":
+                accumulated += event.get("text", "")
+                preview = _format_stream_preview(accumulated)
+                now = time.monotonic()
+                if now - last_update < STREAM_UPDATE_INTERVAL_SECONDS:
+                    continue
+                client.chat_update(
+                    channel=channel,
+                    ts=message_ts,
+                    text=preview,
+                    thread_ts=thread_ts,
+                )
+                last_update = now
+            elif event.get("type") == "done":
+                final = event
+    except (ValueError, RuntimeError, TimeoutError) as exc:
+        client.chat_update(
+            channel=channel,
+            ts=message_ts,
+            text=f"Sorry — I hit an error answering that: {exc}",
+            thread_ts=thread_ts,
+        )
+        return
+
+    if final is None:
+        client.chat_update(
+            channel=channel,
+            ts=message_ts,
+            text="Sorry — the answer stream ended unexpectedly.",
+            thread_ts=thread_ts,
+        )
+        return
+
+    client.chat_update(
+        channel=channel,
+        ts=message_ts,
+        text=format_response(final),
+        thread_ts=thread_ts,
+    )
 
 
 def run_in_background(target) -> None:
@@ -88,28 +161,57 @@ def build_app():
     from slack_bolt import App
 
     app = App(token=os.environ["SLACK_BOT_TOKEN"])
+    client = app.client
 
     @app.command("/askark")
-    def handle_command(ack, command, respond):
+    def handle_command(ack, command):
         ack()
+        channel = command["channel_id"]
+        posted = client.chat_postMessage(channel=channel, text=WORKING_NOTE)
+        message_ts = posted["ts"]
         text = command.get("text", "")
-        respond(WORKING_NOTE)
-        run_in_background(lambda: respond(safe_answer(text)))
+        run_in_background(
+            lambda: stream_answer_to_slack(
+                client,
+                channel=channel,
+                message_ts=message_ts,
+                raw_question=text,
+            )
+        )
 
     @app.event("app_mention")
     def handle_mention(event, say):
         thread_ts = event.get("ts")
+        channel = event["channel"]
+        posted = say(text=WORKING_NOTE, thread_ts=thread_ts)
+        message_ts = posted["ts"]
         text = event.get("text", "")
-        say(text=WORKING_NOTE, thread_ts=thread_ts)
-        run_in_background(lambda: say(text=safe_answer(text), thread_ts=thread_ts))
+        run_in_background(
+            lambda: stream_answer_to_slack(
+                client,
+                channel=channel,
+                message_ts=message_ts,
+                raw_question=text,
+                thread_ts=thread_ts,
+            )
+        )
 
     @app.event("message")
     def handle_direct_message(event, say):
         if not should_answer_dm(event):
             return
+        channel = event["channel"]
+        posted = say(WORKING_NOTE)
+        message_ts = posted["ts"]
         text = event.get("text", "")
-        say(WORKING_NOTE)
-        run_in_background(lambda: say(safe_answer(text)))
+        run_in_background(
+            lambda: stream_answer_to_slack(
+                client,
+                channel=channel,
+                message_ts=message_ts,
+                raw_question=text,
+            )
+        )
 
     return app
 

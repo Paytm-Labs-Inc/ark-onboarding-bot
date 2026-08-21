@@ -7,7 +7,16 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-from src.answer import REFUSAL_PHRASE, SYSTEM_PROMPT, _call_cursor_agent, _model_candidates, _parse_json_response, answer
+from src.answer import (
+    REFUSAL_PHRASE,
+    SYSTEM_PROMPT,
+    _AnswerFieldStreamer,
+    _call_cursor_agent,
+    _model_candidates,
+    _parse_json_response,
+    answer,
+    stream_answer,
+)
 
 
 class AnswerLayerTests(unittest.TestCase):
@@ -142,6 +151,59 @@ class AnswerLayerTests(unittest.TestCase):
         os.environ.pop("CURSOR_API_KEY", None)
         with self.assertRaises(ValueError):
             answer("test", [{"source": "s", "text": "t"}])
+
+    def test_answer_field_streamer_emits_incremental_text(self) -> None:
+        streamer = _AnswerFieldStreamer()
+        self.assertEqual(streamer.push('{"answer": "Run '), "Run ")
+        self.assertEqual(streamer.push('ark host enroll."'), 'ark host enroll.')
+
+    @patch("src.answer._generate_answer")
+    @patch("src.answer._stream_cursor_sdk")
+    def test_stream_answer_yields_deltas_then_done(
+        self, mock_stream: MagicMock, mock_generate: MagicMock
+    ) -> None:
+        def fake_stream(_prompt: str, *, model: str):
+            yield '{"answer": "Run '
+            yield 'ark host enroll.", "citations": ["getting-started -- https://x"]}'
+            return (
+                '{"answer": "Run ark host enroll.", '
+                '"citations": ["getting-started -- https://x"]}'
+            )
+
+        mock_stream.side_effect = fake_stream
+        chunks = [
+            {
+                "source": "getting-started -- https://x",
+                "text": "Run ark host enroll.",
+            }
+        ]
+        events = list(stream_answer("how do I enroll?", chunks))
+        self.assertGreaterEqual(len(events), 2)
+        self.assertEqual(events[0]["type"], "delta")
+        self.assertIn("Run", events[0]["text"])
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertIn("ark host enroll", events[-1]["answer"])
+        mock_generate.assert_not_called()
+
+    @patch("src.answer._generate_answer")
+    @patch("src.answer._stream_cursor_sdk", side_effect=RuntimeError("stream failed"))
+    def test_stream_answer_falls_back_to_blocking(
+        self, _mock_stream: MagicMock, mock_generate: MagicMock
+    ) -> None:
+        mock_generate.return_value = {
+            "answer": "Fallback answer.",
+            "citations": ["getting-started -- https://x"],
+        }
+        chunks = [{"source": "getting-started -- https://x", "text": "t"}]
+        events = list(stream_answer("question", chunks))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "done")
+        self.assertEqual(events[0]["answer"], "Fallback answer.")
+        mock_generate.assert_called_once()
+
+    def test_stream_answer_empty_chunks(self) -> None:
+        events = list(stream_answer("question", []))
+        self.assertEqual(events, [{"type": "done", "answer": REFUSAL_PHRASE, "citations": []}])
 
 
 if __name__ == "__main__":

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.auth import (
@@ -19,7 +20,7 @@ from src.auth import (
     request_authorized,
     token_valid,
 )
-from src.chat import ask_in_session, reset_session
+from src.chat import ask_in_session, ask_in_session_stream, reset_session
 from src.feedback import append_feedback, read_feedback
 from src.warmup import check_retrieval_ready, warm_services
 
@@ -206,6 +207,38 @@ def api_ask(body: AskRequest) -> dict:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def _sse_event(payload: dict[str, object]) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _ask_stream_events(session_id: str | None, question: str) -> Iterator[str]:
+    try:
+        for event in ask_in_session_stream(session_id, question):
+            yield _sse_event(event)
+    except ValueError as exc:
+        yield _sse_event({"type": "error", "detail": str(exc)})
+    except TimeoutError as exc:
+        yield _sse_event({"type": "error", "detail": str(exc)})
+    except RuntimeError as exc:
+        yield _sse_event({"type": "error", "detail": str(exc)})
+
+
+@app.post("/api/ask/stream")
+def api_ask_stream(body: AskRequest) -> StreamingResponse:
+    question = body.question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+
+    return StreamingResponse(
+        _ask_stream_events(body.session_id, question),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/reset")
