@@ -181,6 +181,18 @@ def main() -> int:
         f"({blocking['time_to_first_token_ms']:.0f}ms -> "
         f"{streaming['time_to_first_token_ms']:.0f}ms)"
     )
+    if streaming["delta_count"] == 0:
+        print(
+            "\nNote: delta_count=0 means no incremental tokens were streamed — "
+            "the run likely fell back to a blocking answer. Pull the latest branch "
+            "and re-run after the streaming fix.",
+            file=sys.stderr,
+        )
+    elif streaming["time_to_first_token_ms"] >= streaming["total_ms"] * 0.9:
+        print(
+            f"\nNote: first token arrived near the end ({streaming['delta_count']} deltas). "
+            "Streaming is working but chunks may be large.",
+        )
     return 0
 
 

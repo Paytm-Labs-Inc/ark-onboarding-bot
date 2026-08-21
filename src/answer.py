@@ -374,15 +374,31 @@ def _stream_cursor_sdk(prompt: str, *, model: str) -> Iterator[str]:
     raw_parts: list[str] = []
     try:
         run = agent.send(prompt)
+        last_assistant_text = ""
         for event in run.events():
             update = event.interaction_update
-            if update is None or getattr(update, "type", None) != "text-delta":
+            if update is not None and getattr(update, "type", None) == "text-delta":
+                text = getattr(update, "text", "")
+                if text:
+                    raw_parts.append(text)
+                    yield text
                 continue
-            text = getattr(update, "text", "")
-            if not text:
+
+            msg = event.sdk_message
+            if msg is None or getattr(msg, "type", "") != "assistant":
                 continue
-            raw_parts.append(text)
-            yield text
+            content = getattr(getattr(msg, "message", None), "content", ())
+            block_text = "".join(getattr(block, "text", "") for block in content)
+            if not block_text:
+                continue
+            if block_text.startswith(last_assistant_text):
+                delta = block_text[len(last_assistant_text) :]
+            else:
+                delta = block_text
+            last_assistant_text = block_text
+            if delta:
+                raw_parts.append(delta)
+                yield delta
 
         result = run.wait()
         if getattr(result, "status", None) == "error":
