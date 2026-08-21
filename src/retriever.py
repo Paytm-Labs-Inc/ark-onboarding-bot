@@ -19,13 +19,15 @@ _default_index: "Index | None" = None
 
 ONBOARDING_STEPS_RE = re.compile(
     r"(?i)"
-    r"\b(steps?|how\s+(?:do\s+i|to))\b.*\b(onboard(?:ing)?|get\s+started)\b|"
-    r"\bonboarding\s+(?:steps?|path|order|checklist)\b|"
-    r"\bwhat\s+(?:is|are)\s+the\s+(?:steps?|order)\b.*\bonboard"
+    r"\b(steps?|how\s+(?:do\s+i|to))\b.*\b(onboa?rd(?:ing)?|get\s+started)\b|"
+    r"\bonboa?rding\s+(?:steps?|path|order|checklist)\b|"
+    r"\bwhat\s+(?:is|are)\s+the\s+(?:steps?|order)\b.*\bonboa?rd"
 )
 
 PINNED_MARKERS = (
     "## Onboarding path",
+    "## Start here",
+    "Four steps stand between a new account and a session",
     "correct onboarding order to follow",
 )
 
@@ -41,13 +43,14 @@ USAGE_RE = re.compile(
 
 ENROLL_HOST_RE = re.compile(
     r"(?i)"
-    r"\b(?:how\s+(?:do\s+i|to)\s+)?(?:enroll|register)\b.*\b(?:host|compute|machine|box)\b|"
-    r"\b(?:host|compute|machine|box)\b.*\b(?:enroll|register)\b|"
+    r"\b(?:how\s+(?:do\s+i|to)\s+)?(?:enroll|enrole|enrol|register)\b.*\b(?:host|compute|machine|box)\b|"
+    r"\b(?:host|compute|machine|box)\b.*\b(?:enroll|enrole|enrol|register)\b|"
     r"\benroll\s+(?:a\s+)?host\b"
 )
 
 ENROLL_PINNED_MARKERS = (
     "ark host enroll",
+    "One-command enrollment",
     "not able to enroll compute",
     "enroll a machine for themselves",
 )
@@ -87,6 +90,26 @@ CURSOR_PINNED_MARKERS = (
     "Add the ark MCP server to Cursor",
     ".cursor/mcp.json",
     "Cursor Settings - > MCP",
+)
+
+MCP_TOOLS_FAIL_RE = re.compile(
+    r"(?i)tools\s+fetch\s+failed|ark\s+connected\b.*failed"
+)
+
+MCP_TOOLS_FAIL_PINNED_MARKERS = (
+    "tools fetch failed",
+)
+
+WRONG_TENANT_RE = re.compile(
+    r"(?i)"
+    r"\b(?:can'?t|cannot|not able to)\s+see\b.*\b(?:flow|machine|compute)|"
+    r"\bwrong tenant\b|"
+    r"\benrolled\b.*\b(?:can'?t|cannot|not)\s+see\b"
+)
+
+WRONG_TENANT_PINNED_MARKERS = (
+    "I am not able to see my compute / flows anywhere",
+    "wrong tenant or team",
 )
 
 JIRA_MCP_VPN_RE = re.compile(
@@ -239,6 +262,14 @@ def retrieve_scored(
         results = _pin_markers(results, index, WORKSPACE_PINNED_MARKERS, top_k=top_k)
     if CURSOR_RE.search(question):
         results = _pin_markers(results, index, CURSOR_PINNED_MARKERS, top_k=top_k)
+    if MCP_TOOLS_FAIL_RE.search(question):
+        results = _pin_markers(
+            results, index, MCP_TOOLS_FAIL_PINNED_MARKERS, top_k=top_k
+        )
+    if WRONG_TENANT_RE.search(question):
+        results = _pin_markers(
+            results, index, WRONG_TENANT_PINNED_MARKERS, top_k=top_k
+        )
     if JIRA_MCP_VPN_RE.search(question):
         results = _pin_markers(
             results, index, JIRA_MCP_VPN_PINNED_MARKERS, top_k=top_k

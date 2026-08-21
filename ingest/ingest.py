@@ -60,6 +60,72 @@ SOURCES: tuple[Source, ...] = (
         local_relpath="doc-site/onboarding/updating-cli-plugin.md",
     ),
     Source(
+        slug="secrets",
+        url=f"{FOUNDRY_SITE}/onboarding/secrets",
+        markdown_name="onboarding_secrets.md",
+        local_relpath="doc-site/onboarding/secrets.md",
+    ),
+    Source(
+        slug="slack-bot",
+        url=f"{FOUNDRY_SITE}/onboarding/slack-bot",
+        markdown_name="onboarding_slack-bot.md",
+        local_relpath="doc-site/onboarding/slack-bot.md",
+    ),
+    Source(
+        slug="team-infra",
+        url=f"{FOUNDRY_SITE}/onboarding/team-infra",
+        markdown_name="onboarding_team-infra.md",
+        local_relpath="doc-site/onboarding/team-infra.md",
+    ),
+    Source(
+        slug="compute",
+        url=f"{FOUNDRY_SITE}/onboarding/compute",
+        markdown_name="onboarding_compute.md",
+        local_relpath="doc-site/onboarding/compute.md",
+    ),
+    Source(
+        slug="k8s-compute",
+        url=f"{FOUNDRY_SITE}/onboarding/k8s-compute",
+        markdown_name="onboarding_k8s-compute.md",
+        local_relpath="doc-site/onboarding/k8s-compute.md",
+    ),
+    Source(
+        slug="registering-compute",
+        url=f"{FOUNDRY_SITE}/onboarding/registering-compute",
+        markdown_name="onboarding_registering-compute.md",
+        local_relpath="doc-site/onboarding/registering-compute.md",
+    ),
+    Source(
+        slug="admin",
+        url=f"{FOUNDRY_SITE}/onboarding/admin",
+        markdown_name="onboarding_admin.md",
+        local_relpath="doc-site/onboarding/admin.md",
+    ),
+    Source(
+        slug="first-run",
+        url=f"{FOUNDRY_SITE}/onboarding/getting-started",
+        markdown_name="onboarding_getting-started.md",
+        local_relpath="doc-site/onboarding/getting-started.md",
+    ),
+    Source(
+        slug="authoring-your-own",
+        url=f"{FOUNDRY_SITE}/onboarding/authoring-your-own",
+        markdown_name="onboarding_authoring-your-own.md",
+        local_relpath="doc-site/onboarding/authoring-your-own.md",
+    ),
+    Source(
+        slug="troubleshooting",
+        url=f"{FOUNDRY_SITE}/onboarding/troubleshooting",
+        markdown_name="onboarding_troubleshooting.md",
+        local_relpath="doc-site/onboarding/troubleshooting.md",
+    ),
+    Source(
+        slug="roadmap",
+        url=f"{FOUNDRY_SITE}/roadmap/",
+        markdown_name="roadmap_index.md",
+        local_relpath="doc-site/roadmap/index.md",
+    ),
+    Source(
         slug="faq",
         url=f"{FOUNDRY_SITE}/faq",
         markdown_name="faq.md",
@@ -150,6 +216,10 @@ def _unescape_js_template(raw: str) -> str:
                 out.append("`")
             elif nxt == "\\":
                 out.append("\\")
+            elif nxt == "'":
+                out.append("'")
+            elif nxt == '"':
+                out.append('"')
             else:
                 out.append(nxt)
             i += 2
@@ -159,12 +229,45 @@ def _unescape_js_template(raw: str) -> str:
     return "".join(out)
 
 
+_HTML_HINT = re.compile(r"<h[1-6]|<p>|<ul>|<ol>|<table", re.IGNORECASE)
+_BACKTICK_OPEN = re.compile(r"\w+\(`")
+_BACKTICK_CLOSE = re.compile(r"`\s*(?:,\s*\d+)?\)")
+_SINGLE_QUOTE_OPEN = re.compile(r"\w+\('")
+_DOUBLE_QUOTE_OPEN = re.compile(r'\w+\("')
+
+
+def _quoted_js_string(js: str, start: int, quote: str) -> str | None:
+    """Return the raw contents of a JS string starting at start (after the opener)."""
+    i = start
+    n = len(js)
+    while i < n:
+        ch = js[i]
+        if ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if ch == quote:
+            return js[start:i]
+        i += 1
+    return None
+
+
 def extract_html_from_vitepress_js(js: str) -> str:
     candidates: list[str] = []
-    for match in re.finditer(r"\w+\(`((?:\\.|[^`\\])*)`(?:,\d+)?\)", js, re.DOTALL):
-        html = _unescape_js_template(match.group(1))
-        if re.search(r"<h[1-6]|<p>|<ul>|<ol>|<table", html):
+    for match in _BACKTICK_OPEN.finditer(js):
+        closer = _BACKTICK_CLOSE.search(js, match.end())
+        if closer is None:
+            continue
+        html = _unescape_js_template(js[match.end() : closer.start()])
+        if _HTML_HINT.search(html):
             candidates.append(html)
+    for opener, quote in ((_SINGLE_QUOTE_OPEN, "'"), (_DOUBLE_QUOTE_OPEN, '"')):
+        for match in opener.finditer(js):
+            raw = _quoted_js_string(js, match.end(), quote)
+            if raw is None:
+                continue
+            html = _unescape_js_template(raw)
+            if _HTML_HINT.search(html):
+                candidates.append(html)
     if not candidates:
         raise RuntimeError("No VitePress content block found in JS bundle")
     return max(candidates, key=len)
@@ -180,6 +283,254 @@ def fetch_vitepress_markdown(source: Source, hash_map: dict[str, str]) -> str:
     return html_to_markdown(html)
 
 
+def _extract_js_bracket(src: str, open_idx: int) -> str:
+    """Return the substring of a [...] or {...} literal starting at open_idx."""
+    opener = src[open_idx]
+    closer = "]" if opener == "[" else "}"
+    depth = 0
+    in_str: str | None = None
+    escape = False
+    for i in range(open_idx, len(src)):
+        ch = src[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == in_str:
+                in_str = None
+            continue
+        if ch in ('"', "'"):
+            in_str = ch
+            continue
+        if ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                return src[open_idx : i + 1]
+    raise RuntimeError("Unbalanced JS bracket in roadmap bundle")
+
+
+def _parse_js_string_array(raw: str) -> list[str]:
+    return [
+        _unescape_js_template(match.group(1))
+        for match in re.finditer(r'"((?:\\.|[^"\\])*)"', raw)
+    ]
+
+
+def _parse_js_object(raw: str) -> dict[str, str | list[str]]:
+    """Parse a minified JS object of string / string-array / boolean fields."""
+    body = raw.strip()
+    if body.startswith("{") and body.endswith("}"):
+        body = body[1:-1]
+    out: dict[str, str | list[str]] = {}
+    i = 0
+    n = len(body)
+    while i < n:
+        key_match = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*:", body[i:])
+        if not key_match:
+            i += 1
+            continue
+        key = key_match.group(1)
+        i += key_match.end()
+        while i < n and body[i] in " \t\n":
+            i += 1
+        if i >= n:
+            break
+        if body[i] == "[":
+            block = _extract_js_bracket(body, i)
+            out[key] = _parse_js_string_array(block)
+            i += len(block)
+        elif body[i] in ('"', "'"):
+            quote = body[i]
+            m = re.match(rf"{quote}((?:\\.|[^{quote}\\])*){quote}", body[i:])
+            if not m:
+                break
+            out[key] = _unescape_js_template(m.group(1))
+            i += m.end()
+        else:
+            # boolean / number — skip to next comma at depth 0
+            start = i
+            while i < n and body[i] not in ",}":
+                i += 1
+            token = body[start:i].strip()
+            if token:
+                out[key] = token
+        if i < n and body[i] == ",":
+            i += 1
+    return out
+
+
+def _parse_js_object_array(raw: str) -> list[dict[str, str | list[str]]]:
+    inner = raw.strip()
+    if inner.startswith("[") and inner.endswith("]"):
+        inner = inner[1:-1].strip()
+    if not inner:
+        return []
+    objects: list[dict[str, str | list[str]]] = []
+    i = 0
+    while i < len(inner):
+        if inner[i] == "{":
+            block = _extract_js_bracket(inner, i)
+            objects.append(_parse_js_object(block))
+            i += len(block)
+            continue
+        i += 1
+    return objects
+
+
+def _md_list(items: list[str]) -> str:
+    return "\n".join(f"- {item}" for item in items)
+
+
+def roadmap_js_to_markdown(theme_js: str) -> str:
+    """Turn the Vue Roadmap component's data + hero copy into markdown."""
+    start = theme_js.find('{__name:"Roadmap"')
+    if start < 0:
+        raise RuntimeError("Roadmap component not found in theme bundle")
+    setup_at = theme_js.find("setup(e){", start)
+    if setup_at < 0:
+        raise RuntimeError("Roadmap setup() not found in theme bundle")
+    setup = theme_js[setup_at:]
+
+    gdoc_match = re.search(
+        r'const t="(https://docs\.google\.com/document/d/[^"]+)"', setup
+    )
+    gdoc = gdoc_match.group(1) if gdoc_match else ""
+
+    def _array_after(needle: str) -> list[dict[str, str | list[str]]]:
+        idx = setup.find(needle)
+        if idx < 0:
+            return []
+        bracket = setup.find("[", idx)
+        return _parse_js_object_array(_extract_js_bracket(setup, bracket))
+
+    pipeline = _array_after(",n=[") or _array_after("n=[")
+    bets = _array_after(",a=[") or _array_after("a=[")
+    matrix = _array_after(",s=[") or _array_after("s=[")
+    decisions = _array_after(",c=[") or _array_after("c=[")
+    sequence = _array_after(",u=[") or _array_after("u=[")
+
+    lede_match = re.search(
+        r'rm-hero-lede[^>]*>(.*?)</p>', setup, flags=re.DOTALL
+    )
+    lede = ""
+    if lede_match:
+        lede = re.sub(r"\s+", " ", lede_match.group(1)).strip()
+        lede = (
+            lede.replace("&#39;", "'")
+            .replace("&quot;", '"')
+            .replace("&amp;", "&")
+        )
+
+    parts: list[str] = ["# Ark Roadmap", ""]
+    if lede:
+        parts.extend([lede, ""])
+    if gdoc:
+        parts.extend([f"Live tracker: {gdoc}", ""])
+
+    if pipeline:
+        parts.append("## How work flows")
+        parts.append("")
+        for step in pipeline:
+            label = str(step.get("label", "")).strip()
+            detail = str(step.get("detail", "")).strip()
+            if label and detail:
+                parts.append(f"- **{label}:** {detail}")
+            elif label:
+                parts.append(f"- **{label}**")
+        parts.append("")
+
+    if bets:
+        parts.append("## Product bets")
+        parts.append("")
+        for bet in bets:
+            tag = str(bet.get("tag", "")).strip()
+            title = str(bet.get("title", "")).strip()
+            heading = f"{tag}. {title}".strip(". ")
+            parts.append(f"### {heading}")
+            parts.append("")
+            goal = str(bet.get("goal", "")).strip()
+            if goal:
+                parts.append(f"**Goal:** {goal}")
+                parts.append("")
+            bullets = bet.get("bullets")
+            if isinstance(bullets, list) and bullets:
+                parts.append(_md_list([str(item) for item in bullets]))
+                parts.append("")
+            success = str(bet.get("success", "")).strip()
+            if success:
+                parts.append(f"**Done when:** {success}")
+                parts.append("")
+
+    if matrix:
+        parts.append("## Eighteen areas, gap to done")
+        parts.append("")
+        for area in matrix:
+            title = str(area.get("title", "")).strip()
+            if not title:
+                continue
+            parts.append(f"### {title}")
+            parts.append("")
+            gaps = str(area.get("gaps", "")).strip()
+            capability = str(area.get("capability", "")).strip()
+            done = str(area.get("done", "")).strip()
+            if gaps:
+                parts.append(f"**Gap today:** {gaps}")
+            if capability:
+                parts.append(f"**What we will build:** {capability}")
+            if done:
+                parts.append(f"**Done when:** {done}")
+            parts.append("")
+
+    if decisions:
+        parts.append("## Decisions (these are decided, not open)")
+        parts.append("")
+        for item in decisions:
+            label = str(item.get("label", "")).strip()
+            text = str(item.get("text", "")).strip()
+            if label and text:
+                parts.append(f"- **{label}:** {text}")
+        parts.append("")
+
+    if sequence:
+        parts.append("## Sequence")
+        parts.append("")
+        for item in sequence:
+            when = str(item.get("when", "")).strip()
+            title = str(item.get("title", "")).strip()
+            heading = " — ".join(p for p in (when, title) if p)
+            parts.append(f"### {heading}")
+            parts.append("")
+            tasks = item.get("tasks")
+            if isinstance(tasks, list) and tasks:
+                parts.append(_md_list([str(task) for task in tasks]))
+                parts.append("")
+
+    text = "\n".join(parts).strip() + "\n"
+    if len(text) < 400:
+        raise RuntimeError("Roadmap markdown came out empty or too short")
+    return text
+
+
+def fetch_theme_js(site: str = FOUNDRY_SITE) -> str:
+    html = fetch_url(f"{site}/roadmap/")
+    app_match = re.search(r'src="(/assets/app\.[^"]+\.js)"', html)
+    if not app_match:
+        raise RuntimeError("Could not find VitePress app.js on /roadmap/")
+    app_js = fetch_url(f"{site}{app_match.group(1)}")
+    theme_match = re.search(r"chunks/theme\.[A-Za-z0-9_-]+\.js", app_js)
+    if not theme_match:
+        raise RuntimeError("Could not find theme chunk in app.js")
+    return fetch_url(f"{site}/assets/{theme_match.group(0)}")
+
+
+def fetch_roadmap_markdown() -> str:
+    """The /roadmap/ page is a Vue component, not a markdown article."""
+    return roadmap_js_to_markdown(fetch_theme_js())
+
+
 def read_local_markdown(platform_root: Path, source: Source) -> str | None:
     path = platform_root / source.local_relpath
     if not path.is_file():
@@ -193,6 +544,15 @@ def ingest_foundry_page(
     platform_root: Path | None,
     hash_map: dict[str, str],
 ) -> str:
+    if source.slug == "roadmap":
+        if platform_root is not None:
+            local = read_local_markdown(platform_root, source)
+            # The local file is often a Vue stub with no article body.
+            if local is not None and len(local) > 400 and "Ark Roadmap" in local:
+                print(f"  local: {platform_root / source.local_relpath}")
+                return local
+        print("  web:   roadmap Vue component via theme bundle")
+        return fetch_roadmap_markdown()
     if platform_root is not None:
         local = read_local_markdown(platform_root, source)
         if local is not None:
