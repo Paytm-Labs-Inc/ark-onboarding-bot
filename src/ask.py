@@ -228,14 +228,17 @@ def ask(
 
     top_k = _default_top_k() if k is None else k
 
-    if not history:
-        cached = _get_cached_answer(question, top_k)
-        if cached is not None:
-            if log:
-                _log_ask_result(
-                    question, cached, channel=channel, session_id=session_id
-                )
-            return cached
+    # Hit on the question text even when this chat already has history, so
+    # asking the same thing again in the web UI does not re-call the model.
+    # Only *store* standalone answers: a follow-up like "where does it go?"
+    # is context-specific and must not become the global answer for that text.
+    cached = _get_cached_answer(question, top_k)
+    if cached is not None:
+        if log:
+            _log_ask_result(
+                question, cached, channel=channel, session_id=session_id
+            )
+        return cached
 
     scored = _cached_retrieve_scored(_retrieval_query(question, history), k=top_k)
     result = _result_from_retrieval(question, scored, history=history)
@@ -262,11 +265,10 @@ def run_question(
 
     top_k = _default_top_k() if k is None else k
 
-    if not history:
-        cached = _get_cached_answer(question, top_k)
-        if cached is not None:
-            _log_ask_result(question, cached, channel=channel, session_id=session_id)
-            return cached
+    cached = _get_cached_answer(question, top_k)
+    if cached is not None:
+        _log_ask_result(question, cached, channel=channel, session_id=session_id)
+        return cached
 
     if verbose:
         print("Retrieving relevant docs...", flush=True)

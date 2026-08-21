@@ -212,7 +212,7 @@ warmup (`WARM_ON_STARTUP=1`, `WARM_AGENT_ON_STARTUP=1`, `ASK_RETRIEVAL_CACHE=1`,
 | Answer model | `composer-2.5` (~73s) | `composer-2.5-fast` (~35–55s steady state) |
 | Retrieval (first ask, warm process) | ~250ms | ~250ms |
 | Retrieval (repeat same question) | ~250ms | **~5ms** (LRU cache hit) |
-| **Full ask (repeat same question, no history)** | ~25–35s | **~0–1s** (answer LRU cache hit) |
+| **Full ask (repeat same question)** | ~25–35s | **~0–1s** (answer LRU cache hit) |
 | Startup warmup (one-time per restart) | none | ~20–90s (embed model + agent ping) |
 | First user ask after warmup | ~60–90s if cold | ~25–55s |
 
@@ -225,7 +225,8 @@ warmup (`WARM_ON_STARTUP=1`, `WARM_AGENT_ON_STARTUP=1`, `ASK_RETRIEVAL_CACHE=1`,
 - `CURSOR_MODEL=composer-2.5-fast` — answer generation model (`claude-haiku-4-5` is blocked in the agent CLI)
 
 Retrieval cache saves search time only (~240ms). Answer cache skips the model call on
-**exact repeat** questions (no session history). New questions still pay ~25–35s for Haiku.
+**exact repeat** questions, including the same question asked again in an existing
+chat. New questions still pay ~25–35s for Haiku.
 Disable caches with `ASK_RETRIEVAL_CACHE=0` or `ASK_ANSWER_CACHE=0` when debugging.
 
 ### Slack (Socket Mode)

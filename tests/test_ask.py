@@ -170,7 +170,27 @@ class AskTests(unittest.TestCase):
     @patch("src.ask.log_query")
     @patch("src.ask.answer")
     @patch("src.ask.retrieve_scored")
-    def test_answer_cache_misses_when_history_present(
+    def test_answer_cache_hits_repeat_even_with_history(
+        self, mock_retrieve_scored: MagicMock, mock_answer: MagicMock, _mock_log: MagicMock
+    ) -> None:
+        chunks = [{"source": "getting-started -- https://example.com", "text": "enroll host"}]
+        mock_retrieve_scored.return_value = RetrievalResult(chunks=chunks, top_score=0.82)
+        mock_answer.return_value = {
+            "answer": "Run ark host enroll.",
+            "citations": ["getting-started -- https://example.com"],
+        }
+        history = [{"question": "how do I enroll a host?", "answer": "Run ark host enroll."}]
+
+        ask("how do I enroll a host?")
+        ask("how do I enroll a host?", history=history)
+
+        mock_retrieve_scored.assert_called_once()
+        mock_answer.assert_called_once()
+
+    @patch("src.ask.log_query")
+    @patch("src.ask.answer")
+    @patch("src.ask.retrieve_scored")
+    def test_answer_cache_does_not_store_follow_up_answers(
         self, mock_retrieve_scored: MagicMock, mock_answer: MagicMock, _mock_log: MagicMock
     ) -> None:
         chunks = [{"source": "set-up-cursor -- https://example.com", "text": "mcp.json"}]
