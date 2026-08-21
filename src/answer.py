@@ -7,6 +7,8 @@ import os
 import re
 import shutil
 import subprocess
+import time
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -319,6 +321,77 @@ def _call_cursor_agent_cli(prompt: str, *, model: str) -> str:
     raise RuntimeError(f"Cursor generation failed: {last_detail}")
 
 
+def _stream_cursor_agent_cli(prompt: str, *, model: str) -> Iterator[str]:
+    """Stream stdout from the agent CLI as tokens arrive."""
+    agent_bin = os.environ.get("CURSOR_AGENT_BIN") or shutil.which("agent")
+    if not agent_bin:
+        raise ValueError(
+            "Cursor agent CLI not found on PATH. Install Cursor and ensure `agent` is available."
+        )
+
+    workspace = os.environ.get("CURSOR_WORKSPACE", os.getcwd())
+    env = os.environ.copy()
+    api_key = os.environ.get("CURSOR_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("CURSOR_API_KEY not set")
+    env["CURSOR_API_KEY"] = api_key
+    timeout = int(os.environ.get("CURSOR_TIMEOUT_SECONDS", "180"))
+
+    command = [
+        agent_bin,
+        "-p",
+        "--mode",
+        "ask",
+        "--output-format",
+        "text",
+        "--trust",
+        "--model",
+        model,
+        "--workspace",
+        workspace,
+        prompt,
+    ]
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        bufsize=1,
+    )
+    raw_parts: list[str] = []
+    deadline = time.monotonic() + timeout
+    try:
+        assert proc.stdout is not None
+        while True:
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    "Cursor generation timed out. Try again or increase CURSOR_TIMEOUT_SECONDS."
+                )
+            chunk = proc.stdout.read(256)
+            if chunk:
+                raw_parts.append(chunk)
+                yield chunk
+                continue
+            if proc.poll() is not None:
+                break
+        if proc.returncode not in (0, None):
+            err = proc.stderr.read() if proc.stderr is not None else ""
+            raise RuntimeError(f"Cursor CLI stream failed: {err.strip() or 'unknown CLI error'}")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        if proc.stderr is not None:
+            proc.stderr.close()
+        if proc.stdout is not None:
+            proc.stdout.close()
+
+    raw = "".join(raw_parts).strip()
+    if not raw:
+        raise RuntimeError("Cursor CLI returned an empty response")
+    return raw
+
+
 def _call_cursor_agent(prompt: str, *, model: str | None = None) -> str:
     """Generate via Cursor SDK (preferred) with agent CLI fallback."""
     backend = _cursor_backend()
@@ -429,13 +502,12 @@ def _format_history(history: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _generate_answer(
+def _build_user_content(
     question: str,
     chunks: list[dict[str, Any]],
     *,
     history: list[dict[str, str]] | None = None,
-    model: str | None = None,
-) -> dict[str, Any]:
+) -> str:
     history_block = ""
     if history:
         formatted = _format_history(history)
@@ -446,23 +518,141 @@ def _generate_answer(
                 f"{formatted}\n\n"
             )
 
-    user_content = (
+    return (
         f"{SYSTEM_PROMPT}\n\n"
         f"Document chunks:\n\n{_format_chunks(chunks)}\n\n"
         f"{history_block}"
         f"Question: {question}"
     )
 
-    raw = _call_model(user_content, model=model)
-    try:
-        parsed = _parse_json_response(raw)
-    except (json.JSONDecodeError, IndexError, KeyError) as exc:
-        raise ValueError(f"Could not parse model response as JSON: {raw!r}") from exc
 
+def _generate_answer(
+    question: str,
+    chunks: list[dict[str, Any]],
+    *,
+    history: list[dict[str, str]] | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    user_content = _build_user_content(question, chunks, history=history)
+    raw = _call_model(user_content, model=model)
+    return _parse_and_finalize(raw, chunks)
+
+
+def _finalize_parsed(
+    parsed: dict[str, Any], chunks: list[dict[str, Any]]
+) -> dict[str, Any]:
     answer_text = str(parsed.get("answer", "")).strip()
     citations = _resolve_citations(parsed, chunks)
 
     return {"answer": answer_text or REFUSAL_PHRASE, "citations": citations}
+
+
+def _answer_text_from_partial_json(raw: str) -> str:
+    """Best-effort extract of the answer string from incomplete JSON."""
+    match = re.search(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)', raw)
+    if not match:
+        return ""
+    fragment = match.group(1)
+    try:
+        return json.loads(f'"{fragment}"')
+    except json.JSONDecodeError:
+        return (
+            fragment.replace("\\n", "\n")
+            .replace('\\"', '"')
+            .replace("\\\\", "\\")
+        )
+
+
+class _AnswerFieldStreamer:
+    """Map raw JSON token deltas to incremental answer-field text."""
+
+    def __init__(self) -> None:
+        self._raw = ""
+        self._answer_text = ""
+
+    def push(self, delta: str) -> str:
+        self._raw += delta
+        current = _answer_text_from_partial_json(self._raw)
+        if not current.startswith(self._answer_text):
+            # Model restarted or JSON shape shifted — emit the whole visible answer.
+            new_text = current
+        else:
+            new_text = current[len(self._answer_text) :]
+        self._answer_text = current
+        return new_text
+
+
+def _parse_and_finalize(raw: str, chunks: list[dict[str, Any]]) -> dict[str, Any]:
+    try:
+        parsed = _parse_json_response(raw)
+    except (json.JSONDecodeError, IndexError, KeyError) as exc:
+        raise ValueError(f"Could not parse model response as JSON: {raw!r}") from exc
+    return _finalize_parsed(parsed, chunks)
+
+
+def _stream_cursor_sdk(prompt: str, *, model: str) -> Iterator[str]:
+    """Yield text-delta tokens; return value is the full raw model response."""
+    try:
+        from cursor_sdk import Agent, AgentOptions, LocalAgentOptions
+    except ImportError as exc:
+        raise RuntimeError(
+            "cursor-sdk is not installed. Run: pip install cursor-sdk"
+        ) from exc
+
+    api_key = os.environ.get("CURSOR_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("CURSOR_API_KEY not set")
+
+    workspace = os.environ.get("CURSOR_WORKSPACE", os.getcwd())
+    agent = Agent.create(
+        AgentOptions(
+            api_key=api_key,
+            model=model,
+            local=LocalAgentOptions(cwd=workspace),
+        )
+    )
+
+    raw_parts: list[str] = []
+    try:
+        run = agent.send(prompt)
+        last_assistant_text = ""
+        for event in run.events():
+            update = event.interaction_update
+            if update is not None and getattr(update, "type", None) == "text-delta":
+                text = getattr(update, "text", "")
+                if text:
+                    raw_parts.append(text)
+                    yield text
+                continue
+
+            msg = event.sdk_message
+            if msg is None or getattr(msg, "type", "") != "assistant":
+                continue
+            content = getattr(getattr(msg, "message", None), "content", ())
+            block_text = "".join(getattr(block, "text", "") for block in content)
+            if not block_text:
+                continue
+            if block_text.startswith(last_assistant_text):
+                delta = block_text[len(last_assistant_text) :]
+            else:
+                delta = block_text
+            last_assistant_text = block_text
+            if delta:
+                raw_parts.append(delta)
+                yield delta
+
+        result = run.wait()
+        if getattr(result, "status", None) == "error":
+            detail = getattr(result, "result", None) or "unknown SDK error"
+            raise RuntimeError(f"Cursor SDK generation failed: {detail}")
+        terminal = (getattr(result, "result", None) or "").strip()
+        if terminal and not raw_parts:
+            raw_parts.append(terminal)
+            yield terminal
+    finally:
+        agent.close()
+
+    return "".join(raw_parts).strip()
 
 
 def answer(
@@ -476,3 +666,99 @@ def answer(
         return {"answer": REFUSAL_PHRASE, "citations": []}
 
     return _generate_answer(question, chunks, history=history)
+
+
+def _emit_streamed_raw(
+    raw_chunks: Iterator[str],
+    chunks: list[dict[str, Any]],
+    *,
+    stream_mode: str,
+) -> Iterator[dict[str, Any]]:
+    """Turn raw model chunks into answer-field delta events plus a done event."""
+    answer_streamer = _AnswerFieldStreamer()
+    raw = ""
+    while True:
+        try:
+            delta = next(raw_chunks)
+        except StopIteration as exc:
+            raw = str(exc.value or "")
+            break
+        answer_delta = answer_streamer.push(delta)
+        if answer_delta:
+            yield {"type": "delta", "text": answer_delta}
+
+    if not raw.strip():
+        raise RuntimeError("Cursor returned an empty response")
+    result = _parse_and_finalize(raw, chunks)
+    yield {"type": "done", **result, "stream_mode": stream_mode}
+
+
+def stream_answer(
+    question: str,
+    chunks: list[dict[str, Any]],
+    *,
+    history: list[dict[str, str]] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Stream grounded answer token deltas, then a final parsed result.
+
+    Yields ``{"type": "delta", "text": "..."}`` events while the model
+    generates, then ``{"type": "done", "answer": "...", "citations": [...]}``.
+    Falls back to blocking ``answer()`` when SDK streaming is unavailable.
+    """
+    if not chunks:
+        yield {"type": "done", "answer": REFUSAL_PHRASE, "citations": [], "stream_mode": "none"}
+        return
+
+    user_content = _build_user_content(question, chunks, history=history)
+    errors: list[str] = []
+
+    if _answer_backend() != "cursor":
+        result = _generate_answer(question, chunks, history=history)
+        answer_text = str(result.get("answer", ""))
+        if answer_text and not is_non_answer(answer_text):
+            step = max(24, len(answer_text) // 40)
+            for index in range(0, len(answer_text), step):
+                yield {"type": "delta", "text": answer_text[index : index + step]}
+        yield {
+            "type": "done",
+            **result,
+            "stream_mode": "blocking-chunked",
+            "stream_errors": errors,
+        }
+        return
+
+    cursor_backend = _cursor_backend()
+    models = _model_candidates(None)
+
+    streamers: list[tuple[str, Any]] = []
+    if cursor_backend in ("auto", "sdk"):
+        streamers.append(("sdk", _stream_cursor_sdk))
+    if cursor_backend in ("auto", "cli"):
+        streamers.append(("cli", _stream_cursor_agent_cli))
+
+    for chosen_model in models:
+        for mode_name, stream_fn in streamers:
+            try:
+                yield from _emit_streamed_raw(
+                    stream_fn(user_content, model=chosen_model),
+                    chunks,
+                    stream_mode=mode_name,
+                )
+                return
+            except Exception as exc:
+                errors.append(f"{mode_name}/{chosen_model}: {exc}")
+        if errors and "Cannot use this model" not in " ".join(errors):
+            break
+
+    result = _generate_answer(question, chunks, history=history)
+    answer_text = str(result.get("answer", ""))
+    if answer_text and not is_non_answer(answer_text):
+        step = max(24, len(answer_text) // 40)
+        for index in range(0, len(answer_text), step):
+            yield {"type": "delta", "text": answer_text[index : index + step]}
+    yield {
+        "type": "done",
+        **result,
+        "stream_mode": "blocking-chunked",
+        "stream_errors": errors,
+    }

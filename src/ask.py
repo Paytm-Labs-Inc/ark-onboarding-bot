@@ -7,9 +7,10 @@ import os
 import sys
 import warnings
 from collections import OrderedDict
+from collections.abc import Iterator
 from typing import IO, Any
 
-from src.answer import REFUSAL_PHRASE, answer, is_non_answer
+from src.answer import REFUSAL_PHRASE, answer, is_non_answer, stream_answer
 from src.query_log import log_query
 from src.retrieve import RetrievalResult, retrieve_scored
 
@@ -204,6 +205,60 @@ def _result_from_retrieval(
     result["top_score"] = top_score
     result["chunk_count"] = chunk_count
     return result
+
+
+def ask_stream(
+    question: str,
+    *,
+    k: int | None = None,
+    history: list[dict[str, str]] | None = None,
+    channel: str = "cli",
+    session_id: str | None = None,
+    log: bool = True,
+) -> Iterator[dict[str, Any]]:
+    """Retrieve relevant chunks, then stream a grounded answer."""
+    question = question.strip()
+    if not question:
+        yield {
+            "type": "done",
+            "answer": REFUSAL_PHRASE,
+            "citations": [],
+            "retrieved_sources": [],
+            "top_score": None,
+            "chunk_count": 0,
+        }
+        return
+
+    top_k = _default_top_k() if k is None else k
+    scored = _cached_retrieve_scored(_retrieval_query(question, history), k=top_k)
+    chunks = scored.chunks
+    retrieved_sources = [str(chunk["source"]) for chunk in chunks if chunk.get("source")]
+    meta = {
+        "retrieved_sources": retrieved_sources,
+        "top_score": scored.top_score,
+        "chunk_count": len(chunks),
+    }
+
+    if not chunks:
+        done = {
+            "type": "done",
+            "answer": REFUSAL_PHRASE,
+            "citations": [],
+            **meta,
+        }
+        if log:
+            _log_ask_result(question, done, channel=channel, session_id=session_id)
+        yield done
+        return
+
+    for event in stream_answer(question, chunks, history=history):
+        if event.get("type") == "done":
+            result = {**event, **meta}
+            if log:
+                _log_ask_result(question, result, channel=channel, session_id=session_id)
+            yield result
+        else:
+            yield event
 
 
 def ask(

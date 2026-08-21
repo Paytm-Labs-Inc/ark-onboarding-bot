@@ -80,6 +80,41 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(len(payload["sources"]), 1)
         mock_ask.assert_called_once_with("sess-1", "how do I set up Cursor?")
 
+    @patch("src.web.ask_in_session_stream")
+    def test_api_ask_stream_emits_sse_events(self, mock_stream) -> None:
+        def fake_stream(_session_id, _question):
+            yield {"type": "delta", "text": "Run "}
+            yield {
+                "type": "done",
+                "session_id": "sess-2",
+                "answer": "Run ark host enroll.",
+                "citations": ["getting-started -- https://x"],
+                "retrieved_sources": ["getting-started -- https://x"],
+                "sources": [
+                    {
+                        "slug": "getting-started",
+                        "url": "https://x",
+                        "label": "getting-started -- https://x",
+                    }
+                ],
+            }
+
+        mock_stream.side_effect = fake_stream
+
+        with self.client.stream(
+            "POST",
+            "/api/ask/stream",
+            json={"question": "how do I enroll a host?", "session_id": "sess-2"},
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("text/event-stream", response.headers.get("content-type", ""))
+            body = "".join(response.iter_text())
+
+        self.assertIn('"type": "delta"', body)
+        self.assertIn('"type": "done"', body)
+        self.assertIn("Run ark host enroll.", body)
+        mock_stream.assert_called_once_with("sess-2", "how do I enroll a host?")
+
     def test_api_ask_rejects_blank_question(self) -> None:
         response = self.client.post("/api/ask", json={"question": "   "})
         self.assertEqual(response.status_code, 400)
