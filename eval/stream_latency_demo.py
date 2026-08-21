@@ -6,11 +6,14 @@ from __future__ import annotations
 import os
 import sys
 import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
 
 try:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    load_dotenv(ROOT / ".env")
 except ImportError:
     pass
 
@@ -68,8 +71,26 @@ def measure_streaming(question: str) -> dict[str, float | str]:
 
 
 def main() -> int:
-    if not os.environ.get("CURSOR_API_KEY", "").strip():
+    env_path = ROOT / ".env"
+    api_key = os.environ.get("CURSOR_API_KEY", "").strip()
+    if not api_key:
         print("CURSOR_API_KEY is not set.", file=sys.stderr)
+        if env_path.is_file():
+            print(
+                f"Found {env_path} but CURSOR_API_KEY is empty or missing.\n"
+                "Edit the file so the line looks like:\n"
+                "  CURSOR_API_KEY=crsr_your_key_here\n"
+                "(no quotes, no spaces around =)",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"No .env at {env_path}\n"
+                "Create one with:\n"
+                "  cp .env.example .env\n"
+                "  nano .env",
+                file=sys.stderr,
+            )
         return 1
 
     print(f"Question: {QUESTION}\n")
