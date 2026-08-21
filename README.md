@@ -13,6 +13,7 @@ Ask it "how do I enroll a host?" or "how do I set up Cursor?" → it retrieves r
 ## Knowledge sources
 
 - Onboarding docs: https://foundry.mypaytm.com/onboarding/
+- Roadmap: https://foundry.mypaytm.com/roadmap/
 - FAQ doc: https://docs.google.com/document/d/1cFO96__cGuADEFvR_ahHcc0ILmYWvIrodjwMguihVbY/edit
 
 ## Layout
