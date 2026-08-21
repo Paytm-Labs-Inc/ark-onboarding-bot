@@ -9,10 +9,41 @@ import shutil
 import subprocess
 from typing import Any
 
-REFUSAL_PHRASE = "I don't have an answer for that yet."
+import httpx
 
-# Answer generation uses the Cursor SDK (preferred) or agent CLI (fallback).
-# Override with CURSOR_ANSWER_BACKEND=sdk|cli|auto and CURSOR_MODEL.
+# Two ways to decline. Out-of-scope questions get REFUSAL_PHRASE; on-topic Ark
+# questions we simply have no material for get ROADMAP_PHRASE, so a missing
+# feature reads as "not yet" rather than "no".
+REFUSAL_PHRASE = "I don't have an answer for that yet."
+ROADMAP_PHRASE = "We have this on our roadmap and are working towards it."
+
+
+def is_non_answer(text: str) -> bool:
+    """True when the answer is a decline rather than a grounded answer."""
+    return text.strip() in (REFUSAL_PHRASE, ROADMAP_PHRASE)
+
+# Which provider generates the answer. `pi` posts to the Pi Inference gateway,
+# an OpenAI-compatible completions endpoint. `cursor` drives the Cursor agent,
+# which boots a workspace session per question and is roughly 10x slower.
+# Override with ANSWER_BACKEND=pi|cursor.
+DEFAULT_BACKEND = "pi"
+
+# Pi Inference. Note the host: app.inference.paytm.com is the control plane and
+# 404s on completions; inference lives on api.inference.paytm.com.
+PI_DEFAULT_BASE_URL = "https://api.inference.paytm.com"
+PI_DEFAULT_MODEL = "qwen/qwen3-32b"
+
+# Request parameters certain models need. Qwen3 is a hybrid reasoning model:
+# without these it spends the token budget on a <think> block and never emits
+# the JSON payload. Setting them also cuts output tokens ~30x.
+PI_MODEL_PARAMS: dict[str, dict[str, Any]] = {
+    "qwen/qwen3-32b": {
+        "reasoning_effort": "none",
+        "response_format": {"type": "json_object"},
+    },
+}
+
+# Cursor backend. Override with CURSOR_ANSWER_BACKEND=sdk|cli|auto and CURSOR_MODEL.
 DEFAULT_MODEL = "claude-haiku-4-5"
 
 SYSTEM_PROMPT = f"""You answer Ark setup and usage questions using ONLY the document chunks provided.
@@ -23,11 +54,18 @@ Rules:
 3. Document chunks are provided — you MUST synthesize an answer from them when any chunk
    mentions the topic, even if the answer is partial or spread across chunks. Do not refuse
    merely because no single chunk is a perfect match.
-4. Refuse (set answer to exactly "{REFUSAL_PHRASE}") ONLY when:
-   (a) the question is genuinely out of scope for Ark onboarding — e.g. resetting a Jira or
-       Bitbucket password, deploying an app to AWS production, internal prod connection
-       strings, bypassing Ark auth, or generic CI setup unrelated to Ark; OR
-   (b) the chunks contain zero facts relevant to the question (nothing on-topic to synthesize).
+4. Decline ONLY in these two cases, and use the exact wording given:
+   (a) The question is not about Ark at all — resetting a Jira or Bitbucket password,
+       general programming help, company or financial information, deploying an app to AWS
+       production, generic CI setup — or it asks you to subvert Ark, such as bypassing auth
+       or revealing internal connection strings.
+       Answer exactly: "{REFUSAL_PHRASE}"
+   (b) The question IS about Ark — a capability, integration, platform behaviour or
+       supported tool — but the chunks contain nothing on it.
+       Answer exactly: "{ROADMAP_PHRASE}"
+   Deciding between them: if the question asks what Ark can do, supports, or integrates
+   with, it is (b) even when the chunks say nothing. Only use (a) when the subject is not
+   Ark, or when answering would undermine it. Never promise a roadmap for (a).
 5. When you answer, list the NUMBER of every chunk you used in chunks_used, e.g. [1, 3].
 6. chunks_used must contain only chunk numbers shown above — never source names or URLs.
 7. Respond with JSON only — no markdown fences, no extra text. Do not put triple-backtick
@@ -114,7 +152,79 @@ def _model_candidates(explicit: str | None) -> list[str]:
 
 
 def _answer_backend() -> str:
+    """Which provider generates the answer: 'pi' or 'cursor'."""
+    return os.environ.get("ANSWER_BACKEND", DEFAULT_BACKEND).strip().lower()
+
+
+def _cursor_backend() -> str:
+    """Which Cursor transport to use once the cursor provider is selected."""
     return os.environ.get("CURSOR_ANSWER_BACKEND", "auto").strip().lower()
+
+
+def _pi_request_params(model: str) -> dict[str, Any]:
+    """Per-model request parameters, overridable with PI_EXTRA_PARAMS (JSON)."""
+    params = dict(PI_MODEL_PARAMS.get(model, {}))
+    raw = os.environ.get("PI_EXTRA_PARAMS", "").strip()
+    if raw:
+        try:
+            override = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"PI_EXTRA_PARAMS is not valid JSON: {exc}") from exc
+        if not isinstance(override, dict):
+            raise ValueError("PI_EXTRA_PARAMS must be a JSON object")
+        params.update(override)
+    return params
+
+
+def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
+    """Generate via the Pi Inference gateway's OpenAI-compatible endpoint."""
+    api_key = os.environ.get("PI_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError(
+            "PI_API_KEY not set. Set it, or set ANSWER_BACKEND=cursor to use the Cursor agent."
+        )
+
+    chosen = (model or os.environ.get("PI_MODEL") or PI_DEFAULT_MODEL).strip()
+    base_url = os.environ.get("PI_BASE_URL", PI_DEFAULT_BASE_URL).rstrip("/")
+    timeout = int(os.environ.get("PI_TIMEOUT_SECONDS", "60"))
+
+    body: dict[str, Any] = {
+        "model": chosen,
+        "max_tokens": int(os.environ.get("PI_MAX_TOKENS", "800")),
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    body.update(_pi_request_params(chosen))
+
+    try:
+        response = httpx.post(
+            f"{base_url}/v1/chat/completions",
+            json=body,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=timeout,
+        )
+    except httpx.TimeoutException as exc:
+        raise TimeoutError(
+            f"Pi Inference timed out after {timeout}s. "
+            "Retry or increase PI_TIMEOUT_SECONDS."
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"Pi Inference request failed: {exc}") from exc
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Pi Inference generation failed for model {chosen!r}: "
+            f"HTTP {response.status_code} {response.text[:200]}"
+        )
+
+    try:
+        text = response.json()["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, ValueError) as exc:
+        raise RuntimeError(
+            f"Pi Inference returned an unexpected payload: {response.text[:200]}"
+        ) from exc
+    if not text:
+        raise RuntimeError("Pi Inference returned an empty response")
+    return str(text).strip()
 
 
 def _call_cursor_sdk(prompt: str, *, model: str) -> str:
@@ -211,7 +321,7 @@ def _call_cursor_agent_cli(prompt: str, *, model: str) -> str:
 
 def _call_cursor_agent(prompt: str, *, model: str | None = None) -> str:
     """Generate via Cursor SDK (preferred) with agent CLI fallback."""
-    backend = _answer_backend()
+    backend = _cursor_backend()
     models = _model_candidates(model)
     errors: list[str] = []
 
@@ -237,8 +347,25 @@ def _call_cursor_agent(prompt: str, *, model: str | None = None) -> str:
     raise RuntimeError(f"Cursor generation failed: {detail}")
 
 
+def _call_model(prompt: str, *, model: str | None = None) -> str:
+    """Generate the answer through whichever backend is configured."""
+    backend = _answer_backend()
+    if backend == "pi":
+        return _call_pi_inference(prompt, model=model)
+    if backend == "cursor":
+        return _call_cursor_agent(prompt, model=model)
+    raise ValueError(
+        f"Unknown ANSWER_BACKEND {backend!r}; expected 'pi' or 'cursor'"
+    )
+
+
 def warm_agent() -> None:
-    """Ping the Cursor agent CLI so the first user ask is not cold."""
+    """Ping the Cursor agent CLI so the first user ask is not cold.
+
+    The Pi Inference backend is a stateless HTTP call with nothing to warm.
+    """
+    if _answer_backend() != "cursor":
+        return
     if not os.environ.get("CURSOR_API_KEY", "").strip():
         return
     raw = os.environ.get("WARM_AGENT_ON_STARTUP", "1").strip().lower()
@@ -326,7 +453,7 @@ def _generate_answer(
         f"Question: {question}"
     )
 
-    raw = _call_cursor_agent(user_content, model=model)
+    raw = _call_model(user_content, model=model)
     try:
         parsed = _parse_json_response(raw)
     except (json.JSONDecodeError, IndexError, KeyError) as exc:
