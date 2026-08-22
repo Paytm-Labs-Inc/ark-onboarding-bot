@@ -552,5 +552,33 @@ class PiRetryTests(unittest.TestCase):
         self.assertIn("attempt(s)", str(ctx.exception))
 
 
+
+
+class PiStreamFrameSizeTests(unittest.TestCase):
+    """The existing streamer, driven at the frame sizes an SSE stream produces."""
+
+    PAYLOAD = (
+        '{"answer": "Run `ark host enroll`.\\nThen check \\"status\\" done.",'
+        ' "chunks_used": [1, 3]}'
+    )
+
+    def test_matches_json_at_every_frame_size(self) -> None:
+        from src.answer import _AnswerFieldStreamer
+
+        expected = json.loads(self.PAYLOAD)["answer"]
+        for size in (1, 2, 5, 7, 13, len(self.PAYLOAD)):
+            st = _AnswerFieldStreamer()
+            out = "".join(
+                st.push(self.PAYLOAD[i : i + size])
+                for i in range(0, len(self.PAYLOAD), size)
+            )
+            self.assertEqual(out, expected, f"frame size {size}")
+
+    def test_emits_nothing_before_the_field_appears(self) -> None:
+        from src.answer import _AnswerFieldStreamer
+
+        self.assertEqual(_AnswerFieldStreamer().push('{"chunks_'), "")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -163,6 +163,11 @@ def _cursor_backend() -> str:
     return os.environ.get("CURSOR_ANSWER_BACKEND", "auto").strip().lower()
 
 
+def _pi_streaming_enabled() -> bool:
+    """Real token streaming on the Pi backend. Set PI_STREAM=0 to fall back."""
+    return os.environ.get("PI_STREAM", "1").strip().lower() not in ("0", "false", "no")
+
+
 def _pi_request_params(model: str) -> dict[str, Any]:
     """Per-model request parameters, overridable with PI_EXTRA_PARAMS (JSON)."""
     params = dict(PI_MODEL_PARAMS.get(model, {}))
@@ -736,9 +741,74 @@ def _emit_streamed_raw(
             yield {"type": "delta", "text": answer_delta}
 
     if not raw.strip():
-        raise RuntimeError("Cursor returned an empty response")
+        raise RuntimeError("Model stream returned an empty response")
     result = _parse_and_finalize(raw, chunks)
     yield {"type": "done", **result, "stream_mode": stream_mode}
+
+
+
+def _stream_pi_inference(prompt: str, *, model: str | None = None) -> Iterator[str]:
+    """Yield answer-text deltas from the gateway as the model produces them.
+
+    Raises before yielding anything if the request cannot be established, so the
+    caller can fall back cleanly. Once a delta has been emitted there is no safe
+    retry -- the user has already seen text -- which is why the retry in
+    _call_pi_inference lives on the blocking path and this one does not repeat.
+    """
+    api_key = os.environ.get("PI_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("PI_API_KEY not set. Set it, or set ANSWER_BACKEND=cursor.")
+
+    chosen = (model or os.environ.get("PI_MODEL") or PI_DEFAULT_MODEL).strip()
+    base_url = os.environ.get("PI_BASE_URL", PI_DEFAULT_BASE_URL).rstrip("/")
+    timeout = int(os.environ.get("PI_TIMEOUT_SECONDS", "20"))
+
+    body: dict[str, Any] = {
+        "model": chosen,
+        "max_tokens": int(os.environ.get("PI_MAX_TOKENS", "800")),
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": True,
+    }
+    params = _pi_request_params(chosen)
+    # response_format=json_object turns streaming off at this gateway: the whole
+    # answer arrives as a single frame. Measured 1 frame vs 58, and first-frame
+    # 1294ms vs 614ms. The prompt already demands JSON and reasoning_effort=none
+    # still suppresses the <think> trace, so drop only this one param here. If the
+    # payload comes back unparseable the caller falls back to the blocking path,
+    # which keeps JSON mode and its retry.
+    params.pop("response_format", None)
+    body.update(params)
+
+    raw_parts: list[str] = []
+    with httpx.stream(
+        "POST",
+        f"{base_url}/v1/chat/completions",
+        json=body,
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=timeout,
+    ) as response:
+        if response.status_code != 200:
+            response.read()
+            raise RuntimeError(
+                f"Pi Inference stream failed for model {chosen!r}: "
+                f"HTTP {response.status_code} {response.text[:200]}"
+            )
+        for line in response.iter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                delta = json.loads(payload)["choices"][0]["delta"].get("content")
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
+            if not delta:
+                continue
+            raw_parts.append(delta)
+            yield delta
+
+    return "".join(raw_parts)
 
 
 def stream_answer(
@@ -761,6 +831,23 @@ def stream_answer(
     errors: list[str] = []
 
     if _answer_backend() != "cursor":
+        # Real token streaming first. If the request cannot be established we
+        # have emitted nothing, so falling back to the blocking path is
+        # invisible to the user and keeps its retry behaviour.
+        if _pi_streaming_enabled():
+            try:
+                yield from _emit_streamed_raw(
+                    _stream_pi_inference(user_content),
+                    chunks,
+                    stream_mode="pi-stream",
+                )
+                return
+            except Exception as exc:  # noqa: BLE001 -- any transport or parse failure
+                # Only safe because _emit_streamed_raw raises before its done
+                # event; if deltas were already shown the fallback would repeat
+                # them, so this relies on failures surfacing at connect or parse.
+                errors.append(f"pi-stream: {exc}")
+
         result = _generate_answer(question, chunks, history=history)
         answer_text = str(result.get("answer", ""))
         if answer_text and not is_non_answer(answer_text):
