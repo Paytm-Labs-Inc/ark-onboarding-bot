@@ -3,97 +3,163 @@
     "id": "cursor-setup",
     "question": "how do I get Cursor working with Ark?",
     "expected_source": "set-up-cursor",
-    "notes": "Cursor MCP config and verification"
+    "notes": "Cursor MCP config and verification",
+    "answer_must_include": [
+      "mcp.json"
+    ]
   },
   {
     "id": "cursor-mcp-json",
     "question": "where do I put the ark MCP config in Cursor?",
     "expected_source": "set-up-cursor",
-    "notes": "~/.cursor/mcp.json or project .cursor/mcp.json"
+    "notes": "~/.cursor/mcp.json or project .cursor/mcp.json",
+    "answer_must_include": [
+      ".cursor/mcp.json"
+    ]
   },
   {
     "id": "update-cli-plugin",
     "question": "how do I update the Ark CLI and plugin?",
     "expected_source": "updating-cli-plugin",
-    "notes": "CLI + ark-superpowers update script"
+    "notes": "CLI + ark-superpowers update script",
+    "answer_must_include": [
+      "ark install-claude-code",
+      "ark --version",
+      "ark-superpowers"
+    ]
   },
   {
     "id": "install-plugin-only",
     "question": "how do I reinstall just the ark-superpowers Claude Code plugin?",
     "expected_source": "updating-cli-plugin",
-    "notes": "ark install-claude-code subcommand"
+    "notes": "ark install-claude-code subcommand",
+    "answer_must_include": [
+      "ark install-claude-code"
+    ]
   },
   {
     "id": "get-ark-account",
     "question": "how do I get an Ark account?",
     "expected_source": "getting-access",
-    "notes": "Open Ark URL, email invite, contact Bhurva"
+    "notes": "Open Ark URL, email invite, contact Bhurva",
+    "answer_must_include": [
+      "ark login",
+      "cnoc@paytm.com",
+      "invite"
+    ]
   },
   {
     "id": "mcp-tools-fetch-failed",
     "question": "why does Claude Code show ark connected but tools fetch failed?",
     "expected_source": "getting-access",
-    "notes": "MCP troubleshooting section"
+    "notes": "MCP troubleshooting section",
+    "answer_must_include": [
+      "mint",
+      "API key",
+      "ark_t-"
+    ]
   },
   {
     "id": "session-stuck-ready",
     "question": "why is my session stuck at Ready?",
     "expected_source": "faq-google-doc",
-    "notes": "FAQ Q1 / sessions section"
+    "notes": "FAQ Q1 / sessions section",
+    "answer_must_include": [
+      "retry",
+      "couple of minutes",
+      "capacity"
+    ]
   },
   {
     "id": "enrolled-no-dispatch",
     "question": "I enrolled my compute but sessions are not getting dispatched, what should I check?",
     "expected_source": "faq-google-doc",
-    "notes": "FAQ Q2 — capacity and health"
+    "notes": "FAQ Q2 — capacity and health",
+    "answer_must_include": [
+      "capacity",
+      "health"
+    ]
   },
   {
     "id": "bitbucket-credentials",
     "question": "where should I add my Bitbucket and Jira credentials?",
     "expected_source": "faq-google-doc",
-    "notes": "FAQ Q5 — user scope not team scope"
+    "notes": "FAQ Q5 — user scope not team scope",
+    "answer_must_include": [
+      "user secret",
+      "user scope",
+      "BITBUCKET_SSH_KEY"
+    ]
   },
   {
     "id": "onboard-team-members",
     "question": "who can onboard new team members — do I need tenant-admin?",
     "expected_source": "faq-google-doc",
-    "notes": "FAQ Q7 — team admins can"
+    "notes": "FAQ Q7 — team admins can",
+    "answer_must_include": [
+      "team admin",
+      "team-admin"
+    ]
   },
   {
     "id": "laptop-vs-managed",
     "question": "should I use my laptop or managed EC2 for Ark sessions?",
     "expected_source": "faq-google-doc",
-    "notes": "FAQ Q8 — managed recommended"
+    "notes": "FAQ Q8 — managed recommended",
+    "answer_must_include": [
+      "managed"
+    ]
   },
   {
     "id": "compute-disk",
     "question": "how much disk space do I need on compute?",
     "expected_source": "faq-google-doc",
-    "notes": "FAQ Q10 — 100 GB minimum"
+    "notes": "FAQ Q10 — 100 GB minimum",
+    "answer_must_include": [
+      "100 GB"
+    ]
   },
   {
     "id": "onboarding-order",
     "question": "what is the correct onboarding order to follow?",
     "expected_source": "faq-google-doc",
-    "notes": "FAQ Q13 — secrets, compute, doctor, flows"
+    "notes": "FAQ Q13 — secrets, compute, doctor, flows",
+    "answer_must_include": [
+      "workspace doctor",
+      "doctor"
+    ]
   },
   {
     "id": "ark-roles",
     "question": "what is the difference between member, team-admin, and tenant-admin?",
     "expected_source": "getting-started",
-    "notes": "Roles section on getting started page"
+    "notes": "Roles section on getting started page",
+    "answer_must_include": [
+      "team-admin",
+      "tenant-admin"
+    ]
   },
   {
     "id": "onboarding-steps",
     "question": "what are the steps to onboard ark",
     "expected_source": "getting-started",
-    "notes": "Onboarding path numbered list (steps 1-7) on getting started page"
+    "notes": "Onboarding path numbered list (steps 1-7) on getting started page",
+    "answer_must_include": [
+      "secrets",
+      "compute"
+    ]
   },
   {
     "id": "post-onboarding-usage",
     "question": "how to use ark once onboarding is done",
     "expected_source": "authoring-your-own",
-    "notes": "Bring your own agents and flows after the first-run path"
+    "notes": "Bring your own agents and flows after the first-run path",
+    "answer_must_include": [
+      "ark agent",
+      "ark flow",
+      "ark workspace",
+      "registered agents"
+    ]
   },
   {
     "id": "out-of-scope-jira-password",
@@ -141,103 +207,172 @@
     "id": "adversarial-cursor-typo",
     "question": "how do i set up curser with ark mcp",
     "expected_source": "set-up-cursor",
-    "notes": "Typo — should still retrieve Cursor setup doc"
+    "notes": "Typo — should still retrieve Cursor setup doc",
+    "answer_must_include": [
+      "mcp.json"
+    ]
   },
   {
     "id": "adversarial-ssh-clone-fail",
     "question": "workspace prepare failed with ssh authentication failed when cloning",
     "expected_source": "faq",
-    "notes": "FAQ repository access — SSH key, username git"
+    "notes": "FAQ repository access — SSH key, username git",
+    "answer_must_include": [
+      "key name",
+      "BITBUCKET_SSH_KEY",
+      "passphrase",
+      "private key",
+      "ssh -"
+    ]
   },
   {
     "id": "adversarial-secret-cache",
     "question": "i added my jira token but ark still cant find the secret after 2 minutes",
     "expected_source": "faq",
-    "notes": "FAQ Q6 — ~10 minute secrets cache"
+    "notes": "FAQ Q6 — ~10 minute secrets cache",
+    "answer_must_include": [
+      "10-minute",
+      "10 minute",
+      "cache"
+    ]
   },
   {
     "id": "adversarial-wrong-tenant",
     "question": "i enrolled compute but i cant see my flows or machines anywhere",
     "expected_source": "faq",
-    "notes": "FAQ Q11 — wrong tenant or team"
+    "notes": "FAQ Q11 — wrong tenant or team",
+    "answer_must_include": [
+      "tenant"
+    ]
   },
   {
     "id": "tricky-workspace-doctor",
     "question": "when should I run workspace doctor during onboarding?",
     "expected_source": "faq",
-    "notes": "FAQ Q13 — before first PR review"
+    "notes": "FAQ Q13 — before first PR review",
+    "answer_must_include": [
+      "doctor"
+    ]
   },
   {
     "id": "tricky-slack-channel",
     "question": "where should I ask ark onboarding questions slack or whatsapp",
     "expected_source": "faq",
-    "notes": "FAQ Q14 — Foundry Slack for onboarding"
+    "notes": "FAQ Q14 — Foundry Slack for onboarding",
+    "answer_must_include": [
+      "Foundry",
+      "Slack"
+    ]
   },
   {
     "id": "tricky-compute-workspace-flow",
     "question": "what is the difference between compute workspace and flow in ark",
     "expected_source": "getting-started",
-    "notes": "Getting started — Compute → Workspace → Flows"
+    "notes": "Getting started — Compute → Workspace → Flows",
+    "answer_must_include": [
+      "workspace",
+      "flow"
+    ]
   },
   {
     "id": "cursor-access",
     "question": "how to access cursor?",
     "expected_source": "set-up-cursor",
-    "notes": "Cursor MCP setup — pinned despite vague wording"
+    "notes": "Cursor MCP setup — pinned despite vague wording",
+    "answer_must_include": [
+      "mcp.json",
+      "API key"
+    ]
   },
   {
     "id": "tricky-register-agent",
     "question": "how do i register my own agent yaml with ark",
     "expected_source": "authoring-your-own",
-    "notes": "Bring your own agents — ark agent create --from"
+    "notes": "Bring your own agents — ark agent create --from",
+    "answer_must_include": [
+      "ark agent create"
+    ]
   },
   {
     "id": "adversarial-enroll-typo",
     "question": "how do i enrole a compute host on ark",
     "expected_source": "registering-compute",
-    "notes": "Typo — registering-compute enroll page"
+    "notes": "Typo — registering-compute enroll page",
+    "answer_must_include": [
+      "ark-enroll-host.sh",
+      "ark host enroll",
+      "enroll"
+    ]
   },
   {
     "id": "adversarial-no-compute",
     "question": "it is saying no compute available what do i do",
     "expected_source": "faq-google-doc",
-    "notes": "FAQ Q12 voice — wait or use another box"
+    "notes": "FAQ Q12 voice — wait or use another box",
+    "answer_must_include": [
+      "capacity",
+      "another"
+    ]
   },
   {
     "id": "adversarial-host-unhealthy",
     "question": "my machine is showing unhealthy in ark what should i check",
     "expected_source": "faq-google-doc",
-    "notes": "FAQ Q3.8 voice — run host doctor"
+    "notes": "FAQ Q3.8 voice — run host doctor",
+    "answer_must_include": [
+      "doctor"
+    ]
   },
   {
     "id": "adversarial-slack-401",
     "question": "ark slack link returns 401 on a member key",
     "expected_source": "faq",
-    "notes": "FAQ troubleshooting — mint fresh identity-bound key"
+    "notes": "FAQ troubleshooting — mint fresh identity-bound key",
+    "answer_must_include": [
+      "ark slack link",
+      "mint"
+    ]
   },
   {
     "id": "adversarial-jira-vpn-blocked",
     "question": "jira mcp is blocked from ark pods not on vpn how to fix",
     "expected_source": "faq-google-doc",
-    "notes": "FAQ 12.4 — NAT gateway + IP whitelisting"
+    "notes": "FAQ 12.4 — NAT gateway + IP whitelisting",
+    "answer_must_include": [
+      "NAT gateway",
+      "whitelist"
+    ]
   },
   {
     "id": "adversarial-onboarding-typo",
     "question": "what are the onbording steps for ark",
     "expected_source": "getting-started",
-    "notes": "Typo — should still retrieve onboarding path"
+    "notes": "Typo — should still retrieve onboarding path",
+    "answer_must_include": [
+      "secrets",
+      "compute"
+    ]
   },
   {
     "id": "tricky-k8s-compute-pool",
     "question": "what is needed to set up a k8s compute pool for ark",
     "expected_source": "k8s-compute",
-    "notes": "Creating Kubernetes compute — cluster, namespace, image"
+    "notes": "Creating Kubernetes compute — cluster, namespace, image",
+    "answer_must_include": [
+      "namespace",
+      "cluster"
+    ]
   },
   {
     "id": "tricky-slack-bot-approvals",
     "question": "how does the ark slack bot handle approvals and session notifications",
     "expected_source": "slack-bot",
-    "notes": "Slack bot page — DMs for completions and gate approvals"
+    "notes": "Slack bot page — DMs for completions and gate approvals",
+    "answer_must_include": [
+      "DM",
+      "approval",
+      "gate"
+    ]
   },
   {
     "id": "out-of-scope-weather",
