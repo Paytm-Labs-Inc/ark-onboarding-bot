@@ -125,8 +125,8 @@
     "expected_source": "faq-google-doc",
     "notes": "FAQ Q13 — secrets, compute, doctor, flows",
     "answer_must_include": [
-      "secret",
-      "compute"
+      "workspace doctor",
+      "doctor"
     ]
   },
   {
