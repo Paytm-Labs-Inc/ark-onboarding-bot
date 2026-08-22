@@ -206,7 +206,10 @@ def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
 
     chosen = (model or os.environ.get("PI_MODEL") or PI_DEFAULT_MODEL).strip()
     base_url = os.environ.get("PI_BASE_URL", PI_DEFAULT_BASE_URL).rstrip("/")
-    timeout = int(os.environ.get("PI_TIMEOUT_SECONDS", "60"))
+    # 20s, not 60. Measured p95 on this workload is ~2.3s, so a request still
+    # open at 20s is not coming back -- waiting a further 40s only turns a fast
+    # failure into a hung request holding a worker thread.
+    timeout = int(os.environ.get("PI_TIMEOUT_SECONDS", "20"))
 
     body: dict[str, Any] = {
         "model": chosen,
