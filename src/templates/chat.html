@@ -6,195 +6,276 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ark Onboarding Bot</title>
   <style>
+    /* ─────────────────────────────────────────────────────────────
+       Ark design tokens. Values copied from ~/Documents/ark-ui
+       src/styles/tokens.css so this page matches the console exactly.
+       Dark is the base; light overrides only the values it must, so no
+       rule below needs a theme-aware selector.
+       ───────────────────────────────────────────────────────────── */
     :root {
-      color-scheme: light;
-      --bg: #f6f7f9;
-      --panel: #ffffff;
-      --text: #1f2937;
-      --muted: #6b7280;
-      --border: #e5e7eb;
-      --accent: #2563eb;
-      --accent-hover: #1d4ed8;
-      --user: #eff6ff;
-      --bot: #ffffff;
+      color-scheme: dark;
+      --ark-bg: #0c0b14;
+      --ark-panel: #14131e;
+      --ark-elevated: #1c1a2b;
+      --ark-pressed: #262338;
+      --ark-line: #232134;
+      --ark-line-strong: #34314c;
+      --ark-fg: #f2f1f7;
+      --ark-fg-muted: #8b87a3;
+      --ark-fg-faint: #5c5877;          /* placeholders + decoration ONLY */
+      --ark-violet-700: #5b46c0;
+      --ark-violet-500: #705bd6;
+      --ark-violet-400: #8e79e3;
+      --ark-violet-300: #a794ea;
+      --ark-accent-ink: var(--ark-violet-300);
+      --ark-on-accent: #ffffff;
+      --ark-ink: var(--ark-violet-700);
+      --ark-ink-2: var(--ark-violet-300);
+      --ark-success: #2ed49b;
+      --ark-danger: #f97272;
+      --ark-shadow-card: 0 1px 2px rgba(0,0,0,.3);
+      --ark-shadow-modal: 0 12px 48px rgba(0,0,0,.6);
+
+      --ark-font-sans: -apple-system, 'Segoe UI', 'Inter', 'Helvetica Neue', sans-serif;
+      --ark-font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+      --ark-text-xs: .6875rem;  --ark-text-sm: .78125rem; --ark-text-base: .875rem;
+      --ark-text-md: 1rem;      --ark-text-lg: 1.375rem;
+      --ark-tracking-caps: .08em; --ark-tracking-lg: -.014em; --ark-tracking-md: -.008em;
+      --ark-leading-base: 1.5;  --ark-leading-md: 1.35; --ark-leading-lg: 1.2;
+
+      --ark-radius-sm: 6px; --ark-radius: 8px; --ark-radius-lg: 10px;
+      --ark-space-1: 4px; --ark-space-2: 8px; --ark-space-3: 12px;
+      --ark-space-4: 16px; --ark-space-5: 24px; --ark-space-6: 32px;
+
+      --ark-ease: cubic-bezier(.32,.72,0,1);
+      --ark-duration-1: 120ms; --ark-duration-2: 200ms; --ark-duration-3: 320ms;
+      --ark-focus-ring: 0 0 0 2px var(--ark-bg), 0 0 0 4px var(--ark-violet-500);
     }
+
+    /* Light is the chosen console direction, so it wins whenever the
+       viewer has not explicitly asked for dark. */
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme='dark']) { --ark-theme-light: 1; }
+    }
+    :root:not([data-theme='dark']) {
+      color-scheme: light;
+      --ark-bg: #fafafc;
+      --ark-panel: #ffffff;
+      --ark-elevated: #f1f0f6;
+      --ark-pressed: #e5e3ee;
+      --ark-line: #e8e6ef;
+      --ark-line-strong: #c9c5d8;
+      --ark-fg: #161520;
+      --ark-fg-muted: #6b6683;
+      --ark-fg-faint: #a29eb4;
+      --ark-accent-ink: var(--ark-violet-700);
+      --ark-success: #0b8457;
+      --ark-danger: #d91f2b;
+      --ark-shadow-card: 0 1px 2px rgba(22,21,32,.05);
+      --ark-shadow-modal: 0 16px 48px rgba(22,21,32,.18);
+      --ark-focus-ring: 0 0 0 2px var(--ark-bg), 0 0 0 4px var(--ark-violet-700);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme='light']) {
+        color-scheme: dark;
+        --ark-bg: #0c0b14; --ark-panel: #14131e; --ark-elevated: #1c1a2b;
+        --ark-pressed: #262338; --ark-line: #232134; --ark-line-strong: #34314c;
+        --ark-fg: #f2f1f7; --ark-fg-muted: #8b87a3; --ark-fg-faint: #5c5877;
+        --ark-accent-ink: var(--ark-violet-300);
+        --ark-success: #2ed49b; --ark-danger: #f97272;
+        --ark-shadow-card: 0 1px 2px rgba(0,0,0,.3);
+        --ark-shadow-modal: 0 12px 48px rgba(0,0,0,.6);
+        --ark-focus-ring: 0 0 0 2px var(--ark-bg), 0 0 0 4px var(--ark-violet-500);
+      }
+    }
+
     * { box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
+      background: var(--ark-bg);
+      color: var(--ark-fg);
+      font-family: var(--ark-font-sans);
+      font-size: var(--ark-text-base);
+      line-height: var(--ark-leading-base);
+      -webkit-font-smoothing: antialiased;
     }
+
     .wrap {
-      max-width: 760px;
+      max-width: 860px;
       margin: 0 auto;
-      padding: 24px 16px 32px;
-    }
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 20px;
-    }
-    h1 {
-      font-size: 1.35rem;
-      margin: 0;
-      font-weight: 650;
-    }
-    .subtitle {
-      margin: 4px 0 0;
-      color: var(--muted);
-      font-size: 0.92rem;
-    }
-    button.secondary {
-      background: var(--panel);
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 12px;
-      font-size: 0.88rem;
-      cursor: pointer;
-    }
-    button.secondary:hover { background: #f9fafb; }
-    .header-actions { display: flex; align-items: center; gap: 10px; }
-    .header-actions a {
-      color: var(--muted);
-      text-decoration: none;
-      font-size: 0.88rem;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 12px;
-      background: var(--panel);
-    }
-    .header-actions a:hover { border-color: var(--accent); color: var(--accent); }
-    #chat {
+      padding: var(--ark-space-5) var(--ark-space-4) var(--ark-space-4);
+      height: 100%;
       display: flex;
       flex-direction: column;
-      gap: 14px;
-      min-height: 280px;
-      margin-bottom: 16px;
+      gap: var(--ark-space-4);
     }
-    .empty {
-      border: 1px dashed var(--border);
-      border-radius: 12px;
-      padding: 28px 20px;
-      text-align: center;
-      color: var(--muted);
-      background: var(--panel);
+
+    /* ── header ─────────────────────────────────────────────── */
+    header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: var(--ark-space-4); flex-wrap: wrap;
+      padding-bottom: var(--ark-space-4);
+      border-bottom: 1px solid var(--ark-line);
     }
-    .turn {
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      overflow: hidden;
-      background: var(--panel);
+    .lockup { display: flex; align-items: center; gap: var(--ark-space-3); }
+    .lockup svg { width: 26px; height: 26px; flex: none; }
+    header h1 {
+      margin: 0; font-size: var(--ark-text-lg); font-weight: 600;
+      letter-spacing: var(--ark-tracking-lg); line-height: var(--ark-leading-lg);
     }
-    .question, .answer {
-      padding: 14px 16px;
-      line-height: 1.55;
-      white-space: pre-wrap;
+    .subtitle {
+      margin: 2px 0 0; color: var(--ark-fg-muted); font-size: var(--ark-text-sm);
     }
+    .header-actions { display: flex; align-items: center; gap: var(--ark-space-2); }
+
+    /* ── buttons ────────────────────────────────────────────── */
+    button, .header-actions a {
+      font: inherit; font-size: var(--ark-text-base);
+      border-radius: var(--ark-radius-sm);
+      border: 1px solid var(--ark-line-strong);
+      background: var(--ark-panel); color: var(--ark-fg);
+      padding: var(--ark-space-2) var(--ark-space-3);
+      cursor: pointer; text-decoration: none; white-space: nowrap;
+      transition: background var(--ark-duration-1) var(--ark-ease),
+                  border-color var(--ark-duration-1) var(--ark-ease);
+    }
+    button:hover, .header-actions a:hover { background: var(--ark-elevated); }
+    button:active { background: var(--ark-pressed); }
+    button.primary {
+      background: var(--ark-violet-500); border-color: var(--ark-violet-500);
+      color: var(--ark-on-accent); font-weight: 500;
+    }
+    button.primary:hover { background: var(--ark-violet-400); border-color: var(--ark-violet-400); }
+    button.primary:disabled { opacity: .5; cursor: not-allowed; }
+    button:focus-visible, a:focus-visible, textarea:focus-visible {
+      outline: none; box-shadow: var(--ark-focus-ring);
+    }
+
+    /* ── transcript ─────────────────────────────────────────── */
+    #chat {
+      flex: 1; min-height: 0; overflow-y: auto;
+      display: flex; flex-direction: column; gap: var(--ark-space-5);
+      padding-right: var(--ark-space-1);
+    }
+    .turn { display: flex; flex-direction: column; gap: var(--ark-space-3); }
+
     .question {
-      background: var(--user);
-      border-bottom: 1px solid var(--border);
-      font-weight: 600;
+      align-self: flex-end; max-width: 78%;
+      background: var(--ark-elevated);
+      border: 1px solid var(--ark-line);
+      border-radius: var(--ark-radius-lg) var(--ark-radius-lg) var(--ark-radius-sm) var(--ark-radius-lg);
+      padding: var(--ark-space-3) var(--ark-space-4);
+      white-space: pre-wrap; overflow-wrap: anywhere;
+    }
+
+    .answer {
+      background: var(--ark-panel);
+      border: 1px solid var(--ark-line);
+      border-radius: var(--ark-radius-sm) var(--ark-radius-lg) var(--ark-radius-lg) var(--ark-radius-lg);
+      padding: var(--ark-space-4);
+      box-shadow: var(--ark-shadow-card);
     }
     .answer-label {
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: var(--muted);
-      margin-bottom: 6px;
+      font-size: var(--ark-text-xs); font-weight: 600;
+      letter-spacing: var(--ark-tracking-caps); text-transform: uppercase;
+      color: var(--ark-fg-muted); margin-bottom: var(--ark-space-2);
     }
+    .answer-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+    /* Caret only while the last answer is still streaming. The feedback row is
+       appended when the stream completes, so its absence is the signal —
+       which also covers refusals, where no citations ever arrive. */
+    .turn:last-child .answer:not(:has(~ .feedback)) .answer-text::after {
+      content: ''; display: inline-block; width: 2px; height: 1em;
+      margin-left: 2px; vertical-align: text-bottom;
+      background: var(--ark-accent-ink);
+      animation: caret 1s steps(2, start) infinite;
+    }
+    @keyframes caret { 0%,100% { opacity: 1 } 50% { opacity: 0 } }
+
+    /* ── citations ──────────────────────────────────────────── */
     .citations {
-      margin-top: 10px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
+      display: flex; flex-wrap: wrap; gap: var(--ark-space-2);
+      margin-top: var(--ark-space-4);
+      padding-top: var(--ark-space-3);
+      border-top: 1px solid var(--ark-line);
     }
-    .citations a {
-      display: inline-block;
-      font-size: 0.84rem;
-      color: var(--accent);
-      text-decoration: none;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      padding: 4px 10px;
-      background: #f8fafc;
+    .citations a, .citations span {
+      font-size: var(--ark-text-sm); font-family: var(--ark-font-mono);
+      color: var(--ark-accent-ink); text-decoration: none;
+      background: var(--ark-elevated);
+      border: 1px solid var(--ark-line);
+      border-radius: var(--ark-radius-sm);
+      padding: var(--ark-space-1) var(--ark-space-2);
+      transition: border-color var(--ark-duration-1) var(--ark-ease);
     }
-    .citations a:hover { border-color: var(--accent); }
+    .citations a:hover { border-color: var(--ark-violet-400); }
+
+    /* ── feedback ───────────────────────────────────────────── */
     .feedback {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 0 16px 12px;
-      color: var(--muted);
-      font-size: 0.84rem;
+      display: flex; align-items: center; gap: var(--ark-space-2);
+      font-size: var(--ark-text-sm); color: var(--ark-fg-muted);
     }
     .feedback button {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 4px 10px;
-      cursor: pointer;
-      font-size: 0.9rem;
+      padding: var(--ark-space-1) var(--ark-space-2);
+      font-size: var(--ark-text-sm); background: transparent;
+      border-color: transparent; color: var(--ark-fg-muted);
     }
-    .feedback button:hover { border-color: var(--accent); }
-    .feedback button:disabled {
-      opacity: 0.55;
-      cursor: default;
+    .feedback button:hover { background: var(--ark-elevated); border-color: var(--ark-line); }
+    .feedback button[disabled] { opacity: .6; cursor: default; }
+
+    /* ── empty state ────────────────────────────────────────── */
+    .empty {
+      margin: auto; text-align: center; max-width: 46ch;
+      color: var(--ark-fg-muted); font-size: var(--ark-text-md);
+      line-height: var(--ark-leading-md);
     }
-    form {
-      display: flex;
-      gap: 10px;
-      align-items: flex-end;
+
+    /* ── composer ───────────────────────────────────────────── */
+    #ask-form {
+      display: flex; gap: var(--ark-space-2); align-items: flex-end;
+      background: var(--ark-panel);
+      border: 1px solid var(--ark-line-strong);
+      border-radius: var(--ark-radius-lg);
+      padding: var(--ark-space-2);
+      box-shadow: var(--ark-shadow-card);
+      transition: border-color var(--ark-duration-1) var(--ark-ease);
     }
-    textarea {
-      flex: 1;
-      min-height: 52px;
-      max-height: 160px;
-      resize: vertical;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 14px;
-      font: inherit;
-      background: var(--panel);
+    #ask-form:focus-within { border-color: var(--ark-violet-500); }
+    #question {
+      flex: 1; resize: none; border: 0; outline: none; background: transparent;
+      color: var(--ark-fg); font: inherit; font-size: var(--ark-text-base);
+      line-height: var(--ark-leading-base);
+      padding: var(--ark-space-2); max-height: 40vh;
     }
-    textarea:focus {
-      outline: 2px solid rgba(37, 99, 235, 0.25);
-      border-color: var(--accent);
-    }
-    button.primary {
-      background: var(--accent);
-      color: white;
-      border: none;
-      border-radius: 10px;
-      padding: 12px 18px;
-      font: inherit;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    button.primary:hover { background: var(--accent-hover); }
-    button.primary:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
+    #question::placeholder { color: var(--ark-fg-faint); }
+    #submit-btn { flex: none; }
+
     .status {
-      min-height: 1.2rem;
-      margin-top: 10px;
-      font-size: 0.88rem;
-      color: var(--muted);
+      min-height: 1.25em; font-size: var(--ark-text-sm);
+      color: var(--ark-fg-muted); text-align: center;
     }
-    .status.error { color: #b91c1c; }
+    .status.error { color: var(--ark-danger); }
+
+    @media (max-width: 640px) {
+      .wrap { padding: var(--ark-space-4) var(--ark-space-3); }
+      .question { max-width: 90%; }
+      header { gap: var(--ark-space-3); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::after { animation: none !important; transition: none !important; }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <header>
-      <div>
-        <h1>Ark Onboarding Bot</h1>
-        <p class="subtitle">Ask anything about getting started with Ark</p>
+      <div class="lockup">
+        <svg viewBox="0 0 100 100" aria-hidden="true" focusable="false"><path d="M46 4 L46 80 L8 80 Z" fill="var(--ark-ink, currentColor)"/><path d="M54 20 L54 96 L92 96 Z" fill="var(--ark-ink-2, #A794EA)"/></svg>
+        <div>
+          <h1>Ark Onboarding Bot</h1>
+          <p class="subtitle">Ask anything about getting started with Ark</p>
+        </div>
       </div>
       <div class="header-actions">
         <a href="reviews">Reviews</a>
