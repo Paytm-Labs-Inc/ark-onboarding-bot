@@ -224,8 +224,12 @@ def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
     detail = "unknown error"
 
     def _exhausted(message: str) -> str:
-        """Say how many attempts ran, but only when more than one actually did."""
-        return f"{message} after {attempt} attempt(s)" if attempt > 1 else message
+        """Say how many attempts ran, but only when more than one actually did.
+
+        "on N attempt(s)", not "after": the timeout message already ends with
+        "after {timeout}s", and two afters in one sentence reads as garbage.
+        """
+        return f"{message} on {attempt} attempt(s)" if attempt > 1 else message
 
     for attempt in range(1, attempts + 1):
         last = attempt == attempts
@@ -240,7 +244,9 @@ def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
             detail = f"timeout after {timeout}s"
         except httpx.HTTPError as exc:
             if last:
-                raise RuntimeError(_exhausted(f"Pi Inference request failed: {exc}")) from exc
+                raise RuntimeError(
+                    _exhausted("Pi Inference request failed") + f": {exc}"
+                ) from exc
             detail = str(exc)
         else:
             if response.status_code == 200:
@@ -267,7 +273,7 @@ def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
         time.sleep(min(2.0, 0.25 * (2 ** (attempt - 1))))
 
     raise RuntimeError(
-        f"Pi Inference generation failed for model {chosen!r} after {attempts} attempt(s): {detail}"
+        f"Pi Inference generation failed for model {chosen!r} on {attempts} attempt(s): {detail}"
     )
 
 

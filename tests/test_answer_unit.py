@@ -529,7 +529,7 @@ class PiRetryTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             answer("q", self.CHUNKS)
         self.assertEqual(mock_post.call_count, 3)
-        self.assertIn("after 3 attempt(s)", str(ctx.exception))
+        self.assertIn("on 3 attempt(s)", str(ctx.exception))
 
     @patch("src.answer.time.sleep", lambda *_: None)
     @patch("src.answer.httpx.post")
