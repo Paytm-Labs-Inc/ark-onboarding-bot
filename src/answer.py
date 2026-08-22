@@ -223,6 +223,10 @@ def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
     headers = {"Authorization": f"Bearer {api_key}"}
     detail = "unknown error"
 
+    def _exhausted(message: str) -> str:
+        """Say how many attempts ran, but only when more than one actually did."""
+        return f"{message} after {attempt} attempt(s)" if attempt > 1 else message
+
     for attempt in range(1, attempts + 1):
         last = attempt == attempts
         try:
@@ -230,13 +234,13 @@ def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
         except httpx.TimeoutException as exc:
             if last:
                 raise TimeoutError(
-                    f"Pi Inference timed out after {timeout}s on {attempts} attempt(s). "
-                    "Retry or increase PI_TIMEOUT_SECONDS."
+                    _exhausted(f"Pi Inference timed out after {timeout}s")
+                    + ". Retry or increase PI_TIMEOUT_SECONDS."
                 ) from exc
             detail = f"timeout after {timeout}s"
         except httpx.HTTPError as exc:
             if last:
-                raise RuntimeError(f"Pi Inference request failed: {exc}") from exc
+                raise RuntimeError(_exhausted(f"Pi Inference request failed: {exc}")) from exc
             detail = str(exc)
         else:
             if response.status_code == 200:
@@ -250,23 +254,20 @@ def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
                     return str(text).strip()
                 detail = "empty response"
                 if last:
-                    raise RuntimeError("Pi Inference returned an empty response")
+                    raise RuntimeError(_exhausted("Pi Inference returned an empty response"))
             else:
                 detail = f"HTTP {response.status_code} {response.text[:200]}"
-                retryable = _pi_is_retryable(response.status_code, response.text)
-                if last or not retryable:
-                    # Say how many attempts were made when we actually retried, so a
-                    # persistent outage reads differently from a config mistake.
-                    tried = f" after {attempts} attempts" if retryable else ""
+                if last or not _pi_is_retryable(response.status_code, response.text):
                     raise RuntimeError(
-                        f"Pi Inference generation failed for model {chosen!r}{tried}: {detail}"
+                        _exhausted(f"Pi Inference generation failed for model {chosen!r}")
+                        + f": {detail}"
                     )
         # Exponential backoff, capped. Short because these are sampling and
         # rate-limit failures, not a service that needs time to come back.
         time.sleep(min(2.0, 0.25 * (2 ** (attempt - 1))))
 
     raise RuntimeError(
-        f"Pi Inference generation failed for model {chosen!r} after {attempts} attempts: {detail}"
+        f"Pi Inference generation failed for model {chosen!r} after {attempts} attempt(s): {detail}"
     )
 
 

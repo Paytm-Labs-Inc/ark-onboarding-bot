@@ -455,8 +455,6 @@ class DeclineWordingTests(unittest.TestCase):
         self.assertFalse(is_refused("Use `ark workspace apply`."))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class PiRetryTests(unittest.TestCase):
@@ -531,4 +529,28 @@ class PiRetryTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             answer("q", self.CHUNKS)
         self.assertEqual(mock_post.call_count, 3)
-        self.assertIn("after 3 attempts", str(ctx.exception))
+        self.assertIn("after 3 attempt(s)", str(ctx.exception))
+
+    @patch("src.answer.time.sleep", lambda *_: None)
+    @patch("src.answer.httpx.post")
+    def test_single_attempt_failure_omits_the_count(self, mock_post: MagicMock) -> None:
+        """A config mistake fails on the first try, so no attempt count is added."""
+        mock_post.return_value = self._resp(404, text='{"error":{"message":"Model not found"}}')
+        with self.assertRaises(RuntimeError) as ctx:
+            answer("q", self.CHUNKS)
+        self.assertNotIn("attempt", str(ctx.exception))
+
+    @patch("src.answer.time.sleep", lambda *_: None)
+    @patch("src.answer.httpx.post")
+    def test_exhausted_network_error_reports_attempts(self, mock_post: MagicMock) -> None:
+        """The count must appear on the network path too, not just on status codes."""
+        import httpx as _httpx
+
+        mock_post.side_effect = _httpx.ConnectError("connection refused")
+        with self.assertRaises(RuntimeError) as ctx:
+            answer("q", self.CHUNKS)
+        self.assertIn("attempt(s)", str(ctx.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()
