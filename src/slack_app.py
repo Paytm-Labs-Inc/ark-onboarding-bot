@@ -20,6 +20,8 @@ import os
 import re
 import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from src.ask import ask, ask_stream
 
@@ -66,6 +68,14 @@ WORKING_NOTE = "Looking that up in the docs… (this takes ~1-2 min)"
 STREAM_UPDATE_INTERVAL_SECONDS = 0.75
 
 
+@dataclass(frozen=True)
+class SlackStreamTarget:
+    """How to edit the working Slack message while an answer generates."""
+
+    update_message: Callable[[str], None]
+    incremental_updates: bool = True
+
+
 def safe_answer(raw_question: str) -> str:
     """answer_text() but never raises — surface errors as a message instead."""
     try:
@@ -84,20 +94,17 @@ def _format_stream_preview(answer_text: str) -> str:
 
 
 def stream_answer_to_slack(
-    client,
     *,
-    channel: str,
-    message_ts: str,
     raw_question: str,
-    thread_ts: str | None = None,
+    update_message: Callable[[str], None],
+    incremental_updates: bool = True,
 ) -> None:
     """Edit a Slack message in place as answer tokens arrive."""
     question = strip_mention(raw_question)
     if not question:
-        client.chat_update(channel=channel, ts=message_ts, text=PROMPT_HINT)
+        update_message(PROMPT_HINT)
         return
 
-    preview = WORKING_NOTE
     accumulated = ""
     last_update = 0.0
     final: dict | None = None
@@ -106,42 +113,84 @@ def stream_answer_to_slack(
         for event in ask_stream(question, channel="slack"):
             if event.get("type") == "delta":
                 accumulated += event.get("text", "")
+                if not incremental_updates:
+                    continue
                 preview = _format_stream_preview(accumulated)
                 now = time.monotonic()
                 if now - last_update < STREAM_UPDATE_INTERVAL_SECONDS:
                     continue
-                client.chat_update(
-                    channel=channel,
-                    ts=message_ts,
-                    text=preview,
-                    thread_ts=thread_ts,
-                )
+                update_message(preview)
                 last_update = now
             elif event.get("type") == "done":
                 final = event
     except (ValueError, RuntimeError, TimeoutError) as exc:
-        client.chat_update(
-            channel=channel,
-            ts=message_ts,
-            text=f"Sorry — I hit an error answering that: {exc}",
-            thread_ts=thread_ts,
-        )
+        update_message(f"Sorry — I hit an error answering that: {exc}")
         return
 
     if final is None:
-        client.chat_update(
-            channel=channel,
-            ts=message_ts,
-            text="Sorry — the answer stream ended unexpectedly.",
-            thread_ts=thread_ts,
-        )
+        update_message("Sorry — the answer stream ended unexpectedly.")
         return
 
-    client.chat_update(
-        channel=channel,
-        ts=message_ts,
-        text=format_response(final),
-        thread_ts=thread_ts,
+    update_message(format_response(final))
+
+
+def _chat_message_updater(
+    client,
+    *,
+    channel: str,
+    message_ts: str,
+    thread_ts: str | None = None,
+) -> Callable[[str], None]:
+    """Return an updater that edits a bot message via ``chat.update``."""
+
+    def update_message(text: str) -> None:
+        kwargs = {"channel": channel, "ts": message_ts, "text": text}
+        if thread_ts is not None:
+            kwargs["thread_ts"] = thread_ts
+        client.chat_update(**kwargs)
+
+    return update_message
+
+
+def _setup_slash_command_stream(
+    client,
+    respond,
+    *,
+    channel: str,
+    text: str,
+) -> SlackStreamTarget:
+    """Post the working note and return how to stream the answer back.
+
+    Prefer ``chat_postMessage`` when the bot is already in the channel so later
+    edits can use ``chat.update``. When Slack returns ``not_in_channel``, post
+    via Bolt ``respond()`` and replace the working note once at the end.
+    Slash-command ``response_url`` posts are limited to five total uses, so
+    token-by-token preview updates are not possible on that path.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    try:
+        posted = client.chat_postMessage(channel=channel, text=text)
+        return SlackStreamTarget(
+            update_message=_chat_message_updater(
+                client,
+                channel=channel,
+                message_ts=str(posted["ts"]),
+            ),
+            incremental_updates=True,
+        )
+    except SlackApiError as exc:
+        if exc.response.get("error") != "not_in_channel":
+            raise
+
+    respond(text=text, response_type="in_channel")
+
+    def update_message(body: str) -> None:
+        respond(text=body, replace_original=True)
+
+    return SlackStreamTarget(
+        update_message=update_message,
+        incremental_updates=False,
     )
 
 
@@ -164,18 +213,18 @@ def build_app():
     client = app.client
 
     @app.command("/askark")
-    def handle_command(ack, command):
+    def handle_command(ack, command, respond):
         ack()
         channel = command["channel_id"]
-        posted = client.chat_postMessage(channel=channel, text=WORKING_NOTE)
-        message_ts = posted["ts"]
         text = command.get("text", "")
+        stream_target = _setup_slash_command_stream(
+            client, respond, channel=channel, text=WORKING_NOTE
+        )
         run_in_background(
             lambda: stream_answer_to_slack(
-                client,
-                channel=channel,
-                message_ts=message_ts,
                 raw_question=text,
+                update_message=stream_target.update_message,
+                incremental_updates=stream_target.incremental_updates,
             )
         )
 
@@ -186,13 +235,16 @@ def build_app():
         posted = say(text=WORKING_NOTE, thread_ts=thread_ts)
         message_ts = posted["ts"]
         text = event.get("text", "")
+        update_message = _chat_message_updater(
+            client,
+            channel=channel,
+            message_ts=message_ts,
+            thread_ts=thread_ts,
+        )
         run_in_background(
             lambda: stream_answer_to_slack(
-                client,
-                channel=channel,
-                message_ts=message_ts,
                 raw_question=text,
-                thread_ts=thread_ts,
+                update_message=update_message,
             )
         )
 
@@ -204,12 +256,15 @@ def build_app():
         posted = say(WORKING_NOTE)
         message_ts = posted["ts"]
         text = event.get("text", "")
+        update_message = _chat_message_updater(
+            client,
+            channel=channel,
+            message_ts=message_ts,
+        )
         run_in_background(
             lambda: stream_answer_to_slack(
-                client,
-                channel=channel,
-                message_ts=message_ts,
                 raw_question=text,
+                update_message=update_message,
             )
         )
 

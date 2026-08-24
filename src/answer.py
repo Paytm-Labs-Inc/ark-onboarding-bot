@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import select
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -405,30 +407,52 @@ def _stream_cursor_agent_cli(prompt: str, *, model: str) -> Iterator[str]:
         stderr=subprocess.PIPE,
         text=True,
         env=env,
-        bufsize=1,
     )
     raw_parts: list[str] = []
+    stderr_parts: list[str] = []
     deadline = time.monotonic() + timeout
+
+    def _drain_stderr() -> None:
+        assert proc.stderr is not None
+        try:
+            for line in proc.stderr:
+                stderr_parts.append(line)
+        except (OSError, ValueError):
+            pass
+
+    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    stderr_thread.start()
+
     try:
         assert proc.stdout is not None
+        stdout_fd = proc.stdout.fileno()
         while True:
-            if time.monotonic() > deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 raise TimeoutError(
                     "Cursor generation timed out. Try again or increase CURSOR_TIMEOUT_SECONDS."
                 )
-            chunk = proc.stdout.read(256)
-            if chunk:
-                raw_parts.append(chunk)
-                yield chunk
-                continue
+            ready, _, _ = select.select([stdout_fd], [], [], min(remaining, 0.25))
+            if ready:
+                chunk = proc.stdout.read(256)
+                if chunk:
+                    raw_parts.append(chunk)
+                    yield chunk
+                    continue
             if proc.poll() is not None:
+                tail = proc.stdout.read()
+                if tail:
+                    raw_parts.append(tail)
+                    yield tail
                 break
         if proc.returncode not in (0, None):
-            err = proc.stderr.read() if proc.stderr is not None else ""
-            raise RuntimeError(f"Cursor CLI stream failed: {err.strip() or 'unknown CLI error'}")
+            stderr_thread.join(timeout=1)
+            err = "".join(stderr_parts).strip()
+            raise RuntimeError(f"Cursor CLI stream failed: {err or 'unknown CLI error'}")
     finally:
         if proc.poll() is None:
             proc.kill()
+        stderr_thread.join(timeout=1)
         if proc.stderr is not None:
             proc.stderr.close()
         if proc.stdout is not None:

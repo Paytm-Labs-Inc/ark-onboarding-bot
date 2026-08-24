@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import threading
 
 from src.slack_app import (
     PROMPT_HINT,
+    WORKING_NOTE,
+    _setup_slash_command_stream,
     answer_text,
     format_response,
     run_in_background,
@@ -85,16 +87,79 @@ class SlackHelpersTests(unittest.TestCase):
             ]
         )
         client = MagicMock()
+        update_message = MagicMock()
         stream_answer_to_slack(
-            client,
-            channel="C1",
-            message_ts="123.456",
             raw_question="how do I enroll a host?",
+            update_message=update_message,
         )
-        self.assertGreaterEqual(client.chat_update.call_count, 1)
-        final_text = client.chat_update.call_args_list[-1].kwargs["text"]
+        self.assertGreaterEqual(update_message.call_count, 1)
+        final_text = update_message.call_args_list[-1].args[0]
         self.assertIn("Run ark host enroll.", final_text)
         self.assertIn("*Sources*", final_text)
+
+    def test_setup_slash_command_stream_uses_chat_update_when_bot_is_in_channel(self) -> None:
+        client = MagicMock()
+        client.chat_postMessage.return_value = {"ts": "111.222"}
+        respond = MagicMock()
+
+        stream_target = _setup_slash_command_stream(
+            client, respond, channel="C1", text=WORKING_NOTE
+        )
+
+        self.assertTrue(stream_target.incremental_updates)
+        stream_target.update_message("updated answer")
+        client.chat_postMessage.assert_called_once_with(channel="C1", text=WORKING_NOTE)
+        client.chat_update.assert_called_once_with(
+            channel="C1",
+            ts="111.222",
+            text="updated answer",
+        )
+        respond.assert_not_called()
+
+    @patch("src.slack_app.ask_stream")
+    def test_setup_slash_command_stream_uses_response_url_when_not_in_channel(
+        self, mock_stream
+    ) -> None:
+        from slack_sdk.errors import SlackApiError
+
+        mock_stream.return_value = iter(
+            [
+                {"type": "delta", "text": "Run ark host enroll."},
+                {
+                    "type": "done",
+                    "answer": "Run ark host enroll.",
+                    "citations": ["getting-started -- https://x"],
+                },
+            ]
+        )
+        client = MagicMock()
+        client.chat_postMessage.side_effect = SlackApiError(
+            message="not_in_channel",
+            response={"error": "not_in_channel"},
+        )
+        respond = MagicMock()
+
+        stream_target = _setup_slash_command_stream(
+            client, respond, channel="C1", text=WORKING_NOTE
+        )
+        self.assertFalse(stream_target.incremental_updates)
+
+        stream_answer_to_slack(
+            raw_question="how do I enroll a host?",
+            update_message=stream_target.update_message,
+            incremental_updates=stream_target.incremental_updates,
+        )
+
+        respond.assert_any_call(text=WORKING_NOTE, response_type="in_channel")
+        self.assertEqual(respond.call_count, 2)
+        respond.assert_called_with(
+            text=ANY,
+            replace_original=True,
+        )
+        final_text = respond.call_args.kwargs["text"]
+        self.assertIn("Run ark host enroll.", final_text)
+        self.assertIn("*Sources*", final_text)
+        client.chat_update.assert_not_called()
 
 
 if __name__ == "__main__":
