@@ -727,9 +727,16 @@ def _emit_streamed_raw(
     *,
     stream_mode: str,
 ) -> Iterator[dict[str, Any]]:
-    """Turn raw model chunks into answer-field delta events plus a done event."""
+    """Turn raw model chunks into answer-field delta events plus a done event.
+
+    Raises only while nothing has been emitted, so the caller may fall back
+    invisibly. Once a delta is out the user has seen text, and any fallback
+    would replay the whole answer on top of it -- so a parse failure after
+    that point finalizes best-effort from the raw text instead of raising.
+    """
     answer_streamer = _AnswerFieldStreamer()
     raw = ""
+    emitted = False
     while True:
         try:
             delta = next(raw_chunks)
@@ -738,11 +745,19 @@ def _emit_streamed_raw(
             break
         answer_delta = answer_streamer.push(delta)
         if answer_delta:
+            emitted = True
             yield {"type": "delta", "text": answer_delta}
 
     if not raw.strip():
         raise RuntimeError("Model stream returned an empty response")
-    result = _parse_and_finalize(raw, chunks)
+    try:
+        result = _parse_and_finalize(raw, chunks)
+    except ValueError:
+        if not emitted:
+            raise
+        result = _finalize_parsed(
+            {"answer": _answer_text_from_partial_json(raw)}, chunks
+        )
     yield {"type": "done", **result, "stream_mode": stream_mode}
 
 
@@ -774,8 +789,9 @@ def _stream_pi_inference(prompt: str, *, model: str | None = None) -> Iterator[s
     # answer arrives as a single frame. Measured 1 frame vs 58, and first-frame
     # 1294ms vs 614ms. The prompt already demands JSON and reasoning_effort=none
     # still suppresses the <think> trace, so drop only this one param here. If the
-    # payload comes back unparseable the caller falls back to the blocking path,
-    # which keeps JSON mode and its retry.
+    # payload comes back unparseable before any delta streams, the caller falls
+    # back to the blocking path, which keeps JSON mode and its retry; after a
+    # delta the stream finalizes best-effort instead of replaying.
     params.pop("response_format", None)
     body.update(params)
 
@@ -843,9 +859,10 @@ def stream_answer(
                 )
                 return
             except Exception as exc:  # noqa: BLE001 -- any transport or parse failure
-                # Only safe because _emit_streamed_raw raises before its done
-                # event; if deltas were already shown the fallback would repeat
-                # them, so this relies on failures surfacing at connect or parse.
+                # Only safe because _emit_streamed_raw raises only while zero
+                # deltas have been emitted; after the first delta it finalizes
+                # best-effort itself, so falling back here never replays text
+                # the user has already seen.
                 errors.append(f"pi-stream: {exc}")
 
         result = _generate_answer(question, chunks, history=history)
