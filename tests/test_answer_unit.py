@@ -552,5 +552,46 @@ class PiRetryTests(unittest.TestCase):
         self.assertIn("attempt(s)", str(ctx.exception))
 
 
+class CursorCliStreamTests(unittest.TestCase):
+    def setUp(self) -> None:
+        os.environ["CURSOR_API_KEY"] = "crsr_test_key"
+        os.environ["CURSOR_ANSWER_BACKEND"] = "cli"
+        os.environ["CURSOR_TIMEOUT_SECONDS"] = "0"
+
+    def tearDown(self) -> None:
+        os.environ.pop("CURSOR_API_KEY", None)
+        os.environ.pop("CURSOR_ANSWER_BACKEND", None)
+        os.environ.pop("CURSOR_TIMEOUT_SECONDS", None)
+
+    @patch("src.answer.subprocess.Popen")
+    @patch("src.answer.shutil.which", return_value="/usr/bin/agent")
+    def test_stream_cursor_agent_cli_times_out_when_stdout_is_silent(
+        self, _mock_which: MagicMock, mock_popen: MagicMock
+    ) -> None:
+        import os as _os
+
+        from src.answer import _stream_cursor_agent_cli
+
+        read_fd, write_fd = _os.pipe()
+        _os.close(write_fd)
+        mock_stdout = MagicMock()
+        mock_stdout.fileno.return_value = read_fd
+        mock_stdout.read.return_value = ""
+        mock_stderr = MagicMock()
+        mock_stderr.__iter__ = MagicMock(return_value=iter([]))
+        proc = MagicMock()
+        proc.stdout = mock_stdout
+        proc.stderr = mock_stderr
+        proc.poll.return_value = None
+        proc.returncode = None
+        mock_popen.return_value = proc
+
+        with self.assertRaises(TimeoutError):
+            list(_stream_cursor_agent_cli("prompt", model="auto"))
+
+        proc.kill.assert_called_once()
+        _os.close(read_fd)
+
+
 if __name__ == "__main__":
     unittest.main()

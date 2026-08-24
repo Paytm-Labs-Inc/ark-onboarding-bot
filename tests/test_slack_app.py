@@ -9,6 +9,8 @@ import threading
 
 from src.slack_app import (
     PROMPT_HINT,
+    WORKING_NOTE,
+    _post_slash_working_note,
     answer_text,
     format_response,
     run_in_background,
@@ -95,6 +97,27 @@ class SlackHelpersTests(unittest.TestCase):
         final_text = client.chat_update.call_args_list[-1].kwargs["text"]
         self.assertIn("Run ark host enroll.", final_text)
         self.assertIn("*Sources*", final_text)
+
+    @patch("src.slack_app.ask_stream")
+    def test_post_slash_working_note_falls_back_to_respond_on_not_in_channel(
+        self, _mock_stream
+    ) -> None:
+        from slack_sdk.errors import SlackApiError
+
+        client = MagicMock()
+        client.chat_postMessage.side_effect = SlackApiError(
+            message="not_in_channel",
+            response={"error": "not_in_channel"},
+        )
+        respond = MagicMock(return_value={"ts": "111.222"})
+
+        ts = _post_slash_working_note(
+            client, respond, channel="C1", text=WORKING_NOTE
+        )
+
+        self.assertEqual(ts, "111.222")
+        respond.assert_called_once_with(text=WORKING_NOTE, response_type="in_channel")
+        client.chat_postMessage.assert_called_once_with(channel="C1", text=WORKING_NOTE)
 
 
 if __name__ == "__main__":

@@ -145,6 +145,32 @@ def stream_answer_to_slack(
     )
 
 
+def _post_slash_working_note(client, respond, *, channel: str, text: str) -> str:
+    """Post the in-channel working note for a slash command.
+
+    Prefer ``chat_postMessage`` when the bot is already in the channel so we
+    get a stable ``ts`` for ``chat.update``. Fall back to Bolt ``respond()``
+    (response_url) when Slack returns ``not_in_channel``.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    try:
+        posted = client.chat_postMessage(channel=channel, text=text)
+        return str(posted["ts"])
+    except SlackApiError as exc:
+        if exc.response.get("error") != "not_in_channel":
+            raise
+    response = respond(text=text, response_type="in_channel")
+    if isinstance(response, dict):
+        ts = response.get("ts")
+        if ts:
+            return str(ts)
+        message = response.get("message")
+        if isinstance(message, dict) and message.get("ts"):
+            return str(message["ts"])
+    raise RuntimeError("Slack did not return a message timestamp for the working note")
+
+
 def run_in_background(target) -> None:
     """Run the slow answer off the Slack handler so the socket stays responsive.
 
@@ -164,11 +190,12 @@ def build_app():
     client = app.client
 
     @app.command("/askark")
-    def handle_command(ack, command):
+    def handle_command(ack, command, respond):
         ack()
         channel = command["channel_id"]
-        posted = client.chat_postMessage(channel=channel, text=WORKING_NOTE)
-        message_ts = posted["ts"]
+        message_ts = _post_slash_working_note(
+            client, respond, channel=channel, text=WORKING_NOTE
+        )
         text = command.get("text", "")
         run_in_background(
             lambda: stream_answer_to_slack(
