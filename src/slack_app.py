@@ -20,6 +20,7 @@ import os
 import re
 import threading
 import time
+from collections.abc import Callable
 
 from src.ask import ask, ask_stream
 
@@ -84,17 +85,14 @@ def _format_stream_preview(answer_text: str) -> str:
 
 
 def stream_answer_to_slack(
-    client,
     *,
-    channel: str,
-    message_ts: str,
     raw_question: str,
-    thread_ts: str | None = None,
+    update_message: Callable[[str], None],
 ) -> None:
     """Edit a Slack message in place as answer tokens arrive."""
     question = strip_mention(raw_question)
     if not question:
-        client.chat_update(channel=channel, ts=message_ts, text=PROMPT_HINT)
+        update_message(PROMPT_HINT)
         return
 
     preview = WORKING_NOTE
@@ -110,65 +108,73 @@ def stream_answer_to_slack(
                 now = time.monotonic()
                 if now - last_update < STREAM_UPDATE_INTERVAL_SECONDS:
                     continue
-                client.chat_update(
-                    channel=channel,
-                    ts=message_ts,
-                    text=preview,
-                    thread_ts=thread_ts,
-                )
+                update_message(preview)
                 last_update = now
             elif event.get("type") == "done":
                 final = event
     except (ValueError, RuntimeError, TimeoutError) as exc:
-        client.chat_update(
-            channel=channel,
-            ts=message_ts,
-            text=f"Sorry — I hit an error answering that: {exc}",
-            thread_ts=thread_ts,
-        )
+        update_message(f"Sorry — I hit an error answering that: {exc}")
         return
 
     if final is None:
-        client.chat_update(
-            channel=channel,
-            ts=message_ts,
-            text="Sorry — the answer stream ended unexpectedly.",
-            thread_ts=thread_ts,
-        )
+        update_message("Sorry — the answer stream ended unexpectedly.")
         return
 
-    client.chat_update(
-        channel=channel,
-        ts=message_ts,
-        text=format_response(final),
-        thread_ts=thread_ts,
-    )
+    update_message(format_response(final))
 
 
-def _post_slash_working_note(client, respond, *, channel: str, text: str) -> str:
-    """Post the in-channel working note for a slash command.
+def _chat_message_updater(
+    client,
+    *,
+    channel: str,
+    message_ts: str,
+    thread_ts: str | None = None,
+) -> Callable[[str], None]:
+    """Return an updater that edits a bot message via ``chat.update``."""
 
-    Prefer ``chat_postMessage`` when the bot is already in the channel so we
-    get a stable ``ts`` for ``chat.update``. Fall back to Bolt ``respond()``
-    (response_url) when Slack returns ``not_in_channel``.
+    def update_message(text: str) -> None:
+        kwargs = {"channel": channel, "ts": message_ts, "text": text}
+        if thread_ts is not None:
+            kwargs["thread_ts"] = thread_ts
+        client.chat_update(**kwargs)
+
+    return update_message
+
+
+def _setup_slash_command_stream(
+    client,
+    respond,
+    *,
+    channel: str,
+    text: str,
+) -> Callable[[str], None]:
+    """Post the working note and return an updater for in-place streaming.
+
+    Prefer ``chat_postMessage`` when the bot is already in the channel so later
+    edits can use ``chat.update``. When Slack returns ``not_in_channel``, post
+    via Bolt ``respond()`` and stream updates with ``replace_original=True``
+    on the slash command ``response_url`` (those messages are not editable via
+    ``chat.update``).
     """
     from slack_sdk.errors import SlackApiError
 
     try:
         posted = client.chat_postMessage(channel=channel, text=text)
-        return str(posted["ts"])
+        return _chat_message_updater(
+            client,
+            channel=channel,
+            message_ts=str(posted["ts"]),
+        )
     except SlackApiError as exc:
         if exc.response.get("error") != "not_in_channel":
             raise
-    response = respond(text=text, response_type="in_channel")
-    if isinstance(response, dict):
-        ts = response.get("ts")
-        if ts:
-            return str(ts)
-        message = response.get("message")
-        if isinstance(message, dict) and message.get("ts"):
-            return str(message["ts"])
-    raise RuntimeError("Slack did not return a message timestamp for the working note")
+
+    respond(text=text, response_type="in_channel")
+
+    def update_message(body: str) -> None:
+        respond(text=body, replace_original=True)
+
+    return update_message
 
 
 def run_in_background(target) -> None:
@@ -193,16 +199,14 @@ def build_app():
     def handle_command(ack, command, respond):
         ack()
         channel = command["channel_id"]
-        message_ts = _post_slash_working_note(
+        text = command.get("text", "")
+        update_message = _setup_slash_command_stream(
             client, respond, channel=channel, text=WORKING_NOTE
         )
-        text = command.get("text", "")
         run_in_background(
             lambda: stream_answer_to_slack(
-                client,
-                channel=channel,
-                message_ts=message_ts,
                 raw_question=text,
+                update_message=update_message,
             )
         )
 
@@ -213,13 +217,16 @@ def build_app():
         posted = say(text=WORKING_NOTE, thread_ts=thread_ts)
         message_ts = posted["ts"]
         text = event.get("text", "")
+        update_message = _chat_message_updater(
+            client,
+            channel=channel,
+            message_ts=message_ts,
+            thread_ts=thread_ts,
+        )
         run_in_background(
             lambda: stream_answer_to_slack(
-                client,
-                channel=channel,
-                message_ts=message_ts,
                 raw_question=text,
-                thread_ts=thread_ts,
+                update_message=update_message,
             )
         )
 
@@ -231,12 +238,15 @@ def build_app():
         posted = say(WORKING_NOTE)
         message_ts = posted["ts"]
         text = event.get("text", "")
+        update_message = _chat_message_updater(
+            client,
+            channel=channel,
+            message_ts=message_ts,
+        )
         run_in_background(
             lambda: stream_answer_to_slack(
-                client,
-                channel=channel,
-                message_ts=message_ts,
                 raw_question=text,
+                update_message=update_message,
             )
         )
 

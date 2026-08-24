@@ -10,7 +10,7 @@ import threading
 from src.slack_app import (
     PROMPT_HINT,
     WORKING_NOTE,
-    _post_slash_working_note,
+    _setup_slash_command_stream,
     answer_text,
     format_response,
     run_in_background,
@@ -87,19 +87,36 @@ class SlackHelpersTests(unittest.TestCase):
             ]
         )
         client = MagicMock()
+        update_message = MagicMock()
         stream_answer_to_slack(
-            client,
-            channel="C1",
-            message_ts="123.456",
             raw_question="how do I enroll a host?",
+            update_message=update_message,
         )
-        self.assertGreaterEqual(client.chat_update.call_count, 1)
-        final_text = client.chat_update.call_args_list[-1].kwargs["text"]
+        self.assertGreaterEqual(update_message.call_count, 1)
+        final_text = update_message.call_args_list[-1].args[0]
         self.assertIn("Run ark host enroll.", final_text)
         self.assertIn("*Sources*", final_text)
 
+    def test_setup_slash_command_stream_uses_chat_update_when_bot_is_in_channel(self) -> None:
+        client = MagicMock()
+        client.chat_postMessage.return_value = {"ts": "111.222"}
+        respond = MagicMock()
+
+        update_message = _setup_slash_command_stream(
+            client, respond, channel="C1", text=WORKING_NOTE
+        )
+
+        update_message("updated answer")
+        client.chat_postMessage.assert_called_once_with(channel="C1", text=WORKING_NOTE)
+        client.chat_update.assert_called_once_with(
+            channel="C1",
+            ts="111.222",
+            text="updated answer",
+        )
+        respond.assert_not_called()
+
     @patch("src.slack_app.ask_stream")
-    def test_post_slash_working_note_falls_back_to_respond_on_not_in_channel(
+    def test_setup_slash_command_stream_uses_response_url_when_not_in_channel(
         self, _mock_stream
     ) -> None:
         from slack_sdk.errors import SlackApiError
@@ -109,15 +126,16 @@ class SlackHelpersTests(unittest.TestCase):
             message="not_in_channel",
             response={"error": "not_in_channel"},
         )
-        respond = MagicMock(return_value={"ts": "111.222"})
+        respond = MagicMock()
 
-        ts = _post_slash_working_note(
+        update_message = _setup_slash_command_stream(
             client, respond, channel="C1", text=WORKING_NOTE
         )
+        update_message("updated answer")
 
-        self.assertEqual(ts, "111.222")
-        respond.assert_called_once_with(text=WORKING_NOTE, response_type="in_channel")
-        client.chat_postMessage.assert_called_once_with(channel="C1", text=WORKING_NOTE)
+        respond.assert_any_call(text=WORKING_NOTE, response_type="in_channel")
+        respond.assert_any_call(text="updated answer", replace_original=True)
+        client.chat_update.assert_not_called()
 
 
 if __name__ == "__main__":
