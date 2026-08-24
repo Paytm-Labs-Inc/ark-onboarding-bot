@@ -755,11 +755,13 @@ def _emit_streamed_raw(
 
     Raises only while nothing has been emitted, so the caller may fall back
     invisibly. Once a delta is out the user has seen text, and any fallback
-    would replay the whole answer on top of it -- so a parse failure after
-    that point finalizes best-effort from the raw text instead of raising.
+    would replay the whole answer on top of it -- so a parse or transport
+    failure after that point finalizes best-effort from the raw text seen so
+    far instead of raising.
     """
     answer_streamer = _AnswerFieldStreamer()
     raw = ""
+    seen = ""
     emitted = False
     while True:
         try:
@@ -767,6 +769,16 @@ def _emit_streamed_raw(
         except StopIteration as exc:
             raw = str(exc.value or "")
             break
+        except Exception:  # noqa: BLE001 -- any mid-stream transport failure
+            # The read timeout at PI_TIMEOUT_SECONDS surfaces here, not at the
+            # parse below, and it is the failure long answers actually hit. The
+            # rule is the same either way: falling back is only invisible while
+            # nothing has been shown.
+            if not emitted:
+                raise
+            raw = seen
+            break
+        seen += delta
         answer_delta = answer_streamer.push(delta)
         if answer_delta:
             emitted = True
