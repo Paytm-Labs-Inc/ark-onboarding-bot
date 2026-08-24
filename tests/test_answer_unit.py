@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import unittest
+
+import httpx
 from unittest.mock import MagicMock, patch
 
 from src.answer import (
@@ -642,6 +644,57 @@ class PiStreamFallbackGuardTests(unittest.TestCase):
         self.assertEqual(events[-1]["answer"], "Fallback answer.")
         self.assertEqual(events[-1]["stream_mode"], "blocking-chunked")
         self.assertTrue(events[-1]["stream_errors"])
+        mock_generate.assert_called_once()
+
+
+    @patch("src.answer._generate_answer")
+    @patch("src.answer._stream_pi_inference")
+    def test_transport_failure_after_deltas_does_not_replay(
+        self, mock_stream: MagicMock, mock_generate: MagicMock
+    ) -> None:
+        """A read timeout mid-stream must not replay either.
+
+        This is the failure the PI_TIMEOUT_SECONDS budget actually produces on
+        long answers: it surfaces from next(raw_chunks), not from the parse, so
+        the ValueError guard above does not cover it.
+        """
+
+        def fake_stream(_prompt: str):
+            yield '{"answer": "Run ark host enroll.'
+            yield ' Then dispatch a session."'
+            raise httpx.ReadTimeout("read timed out")
+
+        mock_stream.side_effect = fake_stream
+        mock_generate.return_value = {"answer": "Fallback answer.", "citations": []}
+        events = list(stream_answer("how do I enroll?", self.CHUNKS))
+
+        deltas = "".join(e["text"] for e in events if e["type"] == "delta")
+        dones = [e for e in events if e["type"] == "done"]
+        self.assertEqual(deltas.count("Run ark host enroll"), 1)
+        self.assertNotIn("Fallback answer.", deltas)
+        self.assertEqual(len(dones), 1)
+        self.assertEqual(dones[0]["stream_mode"], "pi-stream")
+        self.assertEqual(
+            dones[0]["answer"], "Run ark host enroll. Then dispatch a session."
+        )
+        mock_generate.assert_not_called()
+
+    @patch("src.answer._generate_answer")
+    @patch("src.answer._stream_pi_inference")
+    def test_transport_failure_with_zero_deltas_still_falls_back(
+        self, mock_stream: MagicMock, mock_generate: MagicMock
+    ) -> None:
+        def fake_stream(_prompt: str):
+            raise httpx.ConnectError("connection refused")
+            yield ""  # pragma: no cover -- makes this a generator
+
+        mock_stream.side_effect = fake_stream
+        mock_generate.return_value = {"answer": "Fallback answer.", "citations": []}
+        events = list(stream_answer("question", self.CHUNKS))
+
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(events[-1]["answer"], "Fallback answer.")
+        self.assertEqual(events[-1]["stream_mode"], "blocking-chunked")
         mock_generate.assert_called_once()
 
 
