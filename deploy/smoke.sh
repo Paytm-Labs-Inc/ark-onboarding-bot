@@ -169,6 +169,129 @@ else
   note "$(printf '%s' "$answer" | head -c 200)"
 fi
 
+# ---------------------------------------------------------- stream latency ---
+# TTFT (time to first token) is the number streaming exists to improve, and it
+# is invisible to the /api/ask checks above -- those only see total time. This
+# samples /api/ask/stream so a deploy reports both, and so a regression in
+# first-token latency is caught by the same gate that catches a broken corpus.
+#
+# Each sample uses a fresh session id and rotates the question, because #26
+# caches answers per question per chat: reusing either would measure the cache
+# rather than the model.
+echo
+echo "6. Streaming latency"
+SAMPLES="${SMOKE_LATENCY_SAMPLES:-10}"
+lat_out=$(SMOKE_BASE="$BASE" SMOKE_TOKEN="$TOKEN" SMOKE_LATENCY_SAMPLES="$SAMPLES" \
+  SMOKE_TIMEOUT_SECONDS="$TIMEOUT" python3 - <<'PY' 2>&1
+import json, os, sys, time, urllib.error, urllib.request
+
+base = os.environ["SMOKE_BASE"].rstrip("/")
+token = os.environ.get("SMOKE_TOKEN", "")
+samples = int(os.environ.get("SMOKE_LATENCY_SAMPLES", "10"))
+timeout = float(os.environ.get("SMOKE_TIMEOUT_SECONDS", "90"))
+
+QUESTIONS = [
+    "How do I enroll a host?",
+    "How do I get started with Ark?",
+    "What is a workspace?",
+    "How do I run a session with Claude Code?",
+    "What is a flow?",
+    # Deliberately a long-answer question: it is the shape that pushes the
+    # gateway toward PI_TIMEOUT_SECONDS, so leaving it out would report a p95
+    # that flatters the tail we actually care about.
+    "How do I get Cursor working with Ark?",
+]
+
+
+def sample(index):
+    """Return (ttft_seconds, total_seconds, completed) for one streamed ask."""
+    payload = json.dumps(
+        {
+            "session_id": "smoke-latency-%d" % index,
+            "question": QUESTIONS[index % len(QUESTIONS)],
+        }
+    ).encode()
+    request = urllib.request.Request(
+        base + "/api/ask/stream",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    if token:
+        request.add_header("Authorization", "Bearer " + token)
+
+    start = time.monotonic()
+    ttft = None
+    completed = False
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        for line in response:
+            if not line.startswith(b"data:"):
+                continue
+            try:
+                event = json.loads(line[5:].decode("utf-8").strip())
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            kind = event.get("type")
+            if kind == "delta" and ttft is None:
+                ttft = time.monotonic() - start
+            elif kind == "done":
+                completed = True
+            elif kind == "error":
+                return ttft, time.monotonic() - start, False
+    return ttft, time.monotonic() - start, completed
+
+
+def pct(values, q):
+    """Nearest-rank percentile. Honest for the small n a smoke run affords."""
+    ordered = sorted(values)
+    rank = int(round(q * (len(ordered) - 1)))
+    return ordered[max(0, min(len(ordered) - 1, rank))]
+
+
+ttfts, totals, incomplete = [], [], 0
+for index in range(samples):
+    try:
+        ttft, total, completed = sample(index)
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        print("ERR sample %d failed: %s" % (index, exc))
+        incomplete += 1
+        continue
+    totals.append(total)
+    if ttft is not None:
+        ttfts.append(ttft)
+    if not completed:
+        incomplete += 1
+
+if not totals:
+    print("ERR no sample completed")
+    sys.exit(1)
+
+ms = lambda v: int(round(v * 1000))
+if ttfts:
+    print("TTFT   p50 %dms  p95 %dms  (n=%d)" % (ms(pct(ttfts, 0.5)), ms(pct(ttfts, 0.95)), len(ttfts)))
+else:
+    print("TTFT   no delta events seen -- the backend is not token-streaming")
+print("Total  p50 %dms  p95 %dms  (n=%d)" % (ms(pct(totals, 0.5)), ms(pct(totals, 0.95)), len(totals)))
+if incomplete:
+    print("ERR %d of %d streams did not complete" % (incomplete, samples))
+PY
+)
+lat_status=$?
+
+printf '%s\n' "$lat_out" | while IFS= read -r line; do
+  case "$line" in ERR*) : ;; *) note "$line" ;; esac
+done
+
+# The numbers themselves are reported, not gated: we have no agreed budget yet,
+# and a threshold invented here would either never fire or block a deploy on
+# gateway weather. A stream that never completes is a different thing -- that is
+# a broken answer path, so it fails.
+if [ "$lat_status" -ne 0 ] || printf '%s' "$lat_out" | grep -q '^ERR'; then
+  bad "streaming latency probe reported incomplete streams"
+  printf '%s\n' "$lat_out" | grep '^ERR' | while IFS= read -r line; do note "$line"; done
+else
+  ok "sampled $SAMPLES streamed answers"
+fi
+
 # ----------------------------------------------------------------- result ----
 echo
 echo "-------------------------------------------"
