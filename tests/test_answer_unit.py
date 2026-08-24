@@ -552,6 +552,99 @@ class PiRetryTests(unittest.TestCase):
         self.assertIn("attempt(s)", str(ctx.exception))
 
 
+
+
+class PiStreamFrameSizeTests(unittest.TestCase):
+    """The existing streamer, driven at the frame sizes an SSE stream produces."""
+
+    PAYLOAD = (
+        '{"answer": "Run `ark host enroll`.\\nThen check \\"status\\" done.",'
+        ' "chunks_used": [1, 3]}'
+    )
+
+    def test_matches_json_at_every_frame_size(self) -> None:
+        from src.answer import _AnswerFieldStreamer
+
+        expected = json.loads(self.PAYLOAD)["answer"]
+        for size in (1, 2, 5, 7, 13, len(self.PAYLOAD)):
+            st = _AnswerFieldStreamer()
+            out = "".join(
+                st.push(self.PAYLOAD[i : i + size])
+                for i in range(0, len(self.PAYLOAD), size)
+            )
+            self.assertEqual(out, expected, f"frame size {size}")
+
+    def test_emits_nothing_before_the_field_appears(self) -> None:
+        from src.answer import _AnswerFieldStreamer
+
+        self.assertEqual(_AnswerFieldStreamer().push('{"chunks_'), "")
+
+
+class PiStreamFallbackGuardTests(unittest.TestCase):
+    """A parse failure falls back to blocking only when no delta was emitted.
+
+    The Pi stream drops JSON mode, so an unparseable payload is an expected
+    tail case. Once deltas have streamed, falling back would replay the whole
+    answer and the Slack preview (which accumulates deltas) renders it twice.
+    """
+
+    CHUNKS = [{"source": "getting-started -- https://x", "text": "Run ark host enroll."}]
+
+    def setUp(self) -> None:
+        os.environ["ANSWER_BACKEND"] = "pi"
+
+    def tearDown(self) -> None:
+        os.environ.pop("ANSWER_BACKEND", None)
+
+    @patch("src.answer._generate_answer")
+    @patch("src.answer._stream_pi_inference")
+    def test_parse_failure_after_deltas_does_not_replay(
+        self, mock_stream: MagicMock, mock_generate: MagicMock
+    ) -> None:
+        def fake_stream(_prompt: str):
+            yield '{"answer": "Run ark host enroll.'
+            yield ' Then dispatch a session."'
+            yield ', "chunks_used": [1'  # truncated: the full payload never parses
+            return (
+                '{"answer": "Run ark host enroll. Then dispatch a session."'
+                ', "chunks_used": [1'
+            )
+
+        mock_stream.side_effect = fake_stream
+        mock_generate.return_value = {"answer": "Fallback answer.", "citations": []}
+        events = list(stream_answer("how do I enroll?", self.CHUNKS))
+
+        deltas = "".join(e["text"] for e in events if e["type"] == "delta")
+        dones = [e for e in events if e["type"] == "done"]
+        self.assertEqual(deltas, "Run ark host enroll. Then dispatch a session.")
+        self.assertEqual(deltas.count("Run ark host enroll"), 1)
+        self.assertEqual(len(dones), 1)
+        self.assertEqual(dones[0]["stream_mode"], "pi-stream")
+        self.assertEqual(
+            dones[0]["answer"], "Run ark host enroll. Then dispatch a session."
+        )
+        mock_generate.assert_not_called()
+
+    @patch("src.answer._generate_answer")
+    @patch("src.answer._stream_pi_inference")
+    def test_parse_failure_with_zero_deltas_still_falls_back(
+        self, mock_stream: MagicMock, mock_generate: MagicMock
+    ) -> None:
+        def fake_stream(_prompt: str):
+            yield "not json, and no answer field"
+            return "not json, and no answer field"
+
+        mock_stream.side_effect = fake_stream
+        mock_generate.return_value = {"answer": "Fallback answer.", "citations": []}
+        events = list(stream_answer("question", self.CHUNKS))
+
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(events[-1]["answer"], "Fallback answer.")
+        self.assertEqual(events[-1]["stream_mode"], "blocking-chunked")
+        self.assertTrue(events[-1]["stream_errors"])
+        mock_generate.assert_called_once()
+
+
 class CursorCliStreamTests(unittest.TestCase):
     def setUp(self) -> None:
         os.environ["CURSOR_API_KEY"] = "crsr_test_key"
