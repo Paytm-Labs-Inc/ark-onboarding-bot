@@ -21,6 +21,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from src.ask import ask, ask_stream
 
@@ -67,6 +68,14 @@ WORKING_NOTE = "Looking that up in the docs… (this takes ~1-2 min)"
 STREAM_UPDATE_INTERVAL_SECONDS = 0.75
 
 
+@dataclass(frozen=True)
+class SlackStreamTarget:
+    """How to edit the working Slack message while an answer generates."""
+
+    update_message: Callable[[str], None]
+    incremental_updates: bool = True
+
+
 def safe_answer(raw_question: str) -> str:
     """answer_text() but never raises — surface errors as a message instead."""
     try:
@@ -88,6 +97,7 @@ def stream_answer_to_slack(
     *,
     raw_question: str,
     update_message: Callable[[str], None],
+    incremental_updates: bool = True,
 ) -> None:
     """Edit a Slack message in place as answer tokens arrive."""
     question = strip_mention(raw_question)
@@ -95,7 +105,6 @@ def stream_answer_to_slack(
         update_message(PROMPT_HINT)
         return
 
-    preview = WORKING_NOTE
     accumulated = ""
     last_update = 0.0
     final: dict | None = None
@@ -104,6 +113,8 @@ def stream_answer_to_slack(
         for event in ask_stream(question, channel="slack"):
             if event.get("type") == "delta":
                 accumulated += event.get("text", "")
+                if not incremental_updates:
+                    continue
                 preview = _format_stream_preview(accumulated)
                 now = time.monotonic()
                 if now - last_update < STREAM_UPDATE_INTERVAL_SECONDS:
@@ -147,23 +158,26 @@ def _setup_slash_command_stream(
     *,
     channel: str,
     text: str,
-) -> Callable[[str], None]:
-    """Post the working note and return an updater for in-place streaming.
+) -> SlackStreamTarget:
+    """Post the working note and return how to stream the answer back.
 
     Prefer ``chat_postMessage`` when the bot is already in the channel so later
     edits can use ``chat.update``. When Slack returns ``not_in_channel``, post
-    via Bolt ``respond()`` and stream updates with ``replace_original=True``
-    on the slash command ``response_url`` (those messages are not editable via
-    ``chat.update``).
+    via Bolt ``respond()`` and replace the working note once at the end.
+    Slash-command ``response_url`` posts are limited to five total uses, so
+    token-by-token preview updates are not possible on that path.
     """
     from slack_sdk.errors import SlackApiError
 
     try:
         posted = client.chat_postMessage(channel=channel, text=text)
-        return _chat_message_updater(
-            client,
-            channel=channel,
-            message_ts=str(posted["ts"]),
+        return SlackStreamTarget(
+            update_message=_chat_message_updater(
+                client,
+                channel=channel,
+                message_ts=str(posted["ts"]),
+            ),
+            incremental_updates=True,
         )
     except SlackApiError as exc:
         if exc.response.get("error") != "not_in_channel":
@@ -174,7 +188,10 @@ def _setup_slash_command_stream(
     def update_message(body: str) -> None:
         respond(text=body, replace_original=True)
 
-    return update_message
+    return SlackStreamTarget(
+        update_message=update_message,
+        incremental_updates=False,
+    )
 
 
 def run_in_background(target) -> None:
@@ -200,13 +217,14 @@ def build_app():
         ack()
         channel = command["channel_id"]
         text = command.get("text", "")
-        update_message = _setup_slash_command_stream(
+        stream_target = _setup_slash_command_stream(
             client, respond, channel=channel, text=WORKING_NOTE
         )
         run_in_background(
             lambda: stream_answer_to_slack(
                 raw_question=text,
-                update_message=update_message,
+                update_message=stream_target.update_message,
+                incremental_updates=stream_target.incremental_updates,
             )
         )
 
