@@ -117,6 +117,11 @@ def ask_in_session_stream(
                 "retrieved_sources": retrieved_sources,
                 "sources": enrich_citations(citations),
             }
+            # Rebuilt from an explicit field list, so anything the answer layer
+            # adds has to be carried across deliberately or the browser never
+            # sees it. Kept absent when clean, matching the stream contract.
+            if event.get("degraded"):
+                final["degraded"] = event["degraded"]
             yield final
         else:
             yield event
