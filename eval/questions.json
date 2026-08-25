@@ -41,11 +41,11 @@
     "id": "get-ark-account",
     "question": "how do I get an Ark account?",
     "expected_source": "getting-access",
-    "notes": "Open Ark URL, email invite, contact Bhurva",
+    "notes": "Open Ark URL, ask a tenant admin listed under Settings → Your admins, send email and team name",
     "answer_must_include": [
-      "ark login",
-      "cnoc@paytm.com",
-      "invite"
+      "Your admins",
+      "Settings",
+      "email and team"
     ]
   },
   {
@@ -199,9 +199,13 @@
   {
     "id": "out-of-scope-ci-tooling",
     "question": "how do I set up a custom CI pipeline for my team's repo?",
-    "expected_source": null,
-    "expect_refusal": true,
-    "notes": "Generic CI setup — not in onboarding corpus"
+    "expected_source": "authoring-your-own",
+    "notes": "Team pipeline maps to a workspace plus a flow; in-scope after the #23 corpus ingest",
+    "answer_must_include": [
+      "ark workspace apply",
+      "ark flow create",
+      "named actions"
+    ]
   },
   {
     "id": "adversarial-cursor-typo",

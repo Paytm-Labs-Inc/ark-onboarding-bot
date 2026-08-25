@@ -9,7 +9,7 @@ from pathlib import Path
 QUESTIONS_PATH = Path(__file__).resolve().parent.parent / "eval" / "questions.json"
 MIN_GOLD_QUESTIONS = 44
 MIN_SCORED_QUESTIONS = 32
-MIN_REFUSAL_QUESTIONS = 12
+MIN_REFUSAL_QUESTIONS = 11
 
 
 class EvalGoldSetTests(unittest.TestCase):
