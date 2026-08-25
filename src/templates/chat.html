@@ -194,6 +194,13 @@
     @keyframes caret { 0%,100% { opacity: 1 } 50% { opacity: 0 } }
 
     /* ── citations ──────────────────────────────────────────── */
+    .degraded-note {
+      margin-top: var(--ark-space-4);
+      padding-top: var(--ark-space-3);
+      border-top: 1px solid var(--ark-line);
+      font-size: var(--ark-text-sm);
+      color: var(--ark-fg-muted);
+    }
     .citations {
       display: flex; flex-wrap: wrap; gap: var(--ark-space-2);
       margin-top: var(--ark-space-4);
@@ -421,8 +428,24 @@
       return turn.querySelector(".answer-text");
     }
 
+    function renderDegradedNote(degraded, sources) {
+      // Only "salvaged" is worth showing. A blocking-chunked fallback produced a
+      // complete answer, so telling the reader about it would be noise.
+      if (degraded !== "salvaged") return "";
+      const missing = !sources || !sources.length;
+      const detail = missing
+        ? "It may be cut short, and its sources could not be recovered."
+        : "It may be cut short.";
+      return '<p class="degraded-note">The connection dropped while this answer '
+        + "was being written. " + detail + "</p>";
+    }
+
     function finishStreamingTurn(turn, answerEl, sources, meta) {
       const answerBlock = turn.querySelector(".answer");
+      const degradedHtml = renderDegradedNote(meta && meta.degraded, sources);
+      if (degradedHtml) {
+        answerBlock.insertAdjacentHTML("beforeend", degradedHtml);
+      }
       const citationsHtml = renderCitations(sources);
       if (citationsHtml) {
         answerBlock.insertAdjacentHTML("beforeend", citationsHtml);
@@ -511,6 +534,7 @@
           sources: payload.citations || [],
           retrieved_sources: payload.retrieved_sources || [],
           session_id: payload.session_id,
+          degraded: payload.degraded || null,
         };
         if (payload.answer && answerEl.textContent !== payload.answer) {
           answerEl.textContent = payload.answer;

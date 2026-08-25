@@ -72,5 +72,40 @@ class QueryLogTests(unittest.TestCase):
         self.assertFalse(payload["gold_set_candidate"])
 
 
+class DegradedFieldTests(unittest.TestCase):
+    """The log has to make a degraded answer countable, not just visible."""
+
+    def test_record_carries_stream_provenance(self) -> None:
+        record = query_log_module.build_record(
+            question="how do I enroll a host?",
+            answer="Run ark host enroll",
+            citations=[],
+            retrieved_sources=["getting-started"],
+            top_score=0.61,
+            chunk_count=8,
+            channel="web",
+            stream_mode="pi-stream",
+            stream_errors=[],
+            degraded="salvaged",
+        )
+        self.assertEqual(record["stream_mode"], "pi-stream")
+        self.assertEqual(record["degraded"], "salvaged")
+        self.assertEqual(record["stream_errors"], [])
+
+    def test_record_defaults_when_not_supplied(self) -> None:
+        record = query_log_module.build_record(
+            question="q",
+            answer="a",
+            citations=[],
+            retrieved_sources=[],
+            top_score=None,
+            chunk_count=0,
+            channel="cli",
+        )
+        self.assertIsNone(record["stream_mode"])
+        self.assertIsNone(record["degraded"])
+        self.assertEqual(record["stream_errors"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

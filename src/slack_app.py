@@ -36,6 +36,18 @@ def format_response(result: dict) -> str:
     citations = [str(c) for c in result.get("citations", []) if c]
     if not answer:
         return PROMPT_HINT
+    # Only a salvaged answer is flagged. A blocking-chunked fallback still
+    # produced a complete answer, so saying so would be noise to the reader.
+    if result.get("degraded") == "salvaged":
+        detail = (
+            "it may be cut short, and its sources could not be recovered"
+            if not citations
+            else "it may be cut short"
+        )
+        answer = (
+            f"{answer}\n\n_The connection dropped while this answer was being "
+            f"written — {detail}._"
+        )
     if citations:
         cites = "\n".join(f"• {c}" for c in citations)
         return f"{answer}\n\n*Sources*\n{cites}"
