@@ -72,3 +72,37 @@ jobs:
           if [ -n "$PI_API_KEY" ]; then export ANSWER_BACKEND=pi; else export ANSWER_BACKEND=cursor; fi
           echo "Refusal gate running on ANSWER_BACKEND=$ANSWER_BACKEND"
           python eval/run_eval.py --full --only-refusals --quiet-retriever
+
+  full-eval:
+    runs-on: ubuntu-latest
+    # Citations + answer_must_include. Same skip-when-no-key pattern as refusal-eval.
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Cache sentence-transformers model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: huggingface-${{ runner.os }}-all-MiniLM-L6-v2
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Full eval (citations + answer facts)
+        env:
+          PI_API_KEY: ${{ secrets.PI_API_KEY }}
+        run: |
+          if [ -z "$PI_API_KEY" ]; then
+            echo "::warning title=Full eval skipped::No PI_API_KEY configured. Citation and answer scoring are UNVERIFIED. Add PI_API_KEY as a repository secret to turn this on."
+            exit 0
+          fi
+          export ANSWER_BACKEND=pi
+          echo "Full eval running on ANSWER_BACKEND=$ANSWER_BACKEND"
+          python eval/run_eval.py --full --only-scored --quiet-retriever
