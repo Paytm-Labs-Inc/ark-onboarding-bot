@@ -9,8 +9,11 @@ from unittest.mock import patch
 
 from eval.run_eval import (
     QuestionResult,
+    chunk_metrics,
     detail_status,
+    evaluate_question,
     filter_questions,
+    first_relevant_rank,
     full_eval_ready,
     main,
     print_report,
@@ -112,3 +115,39 @@ class RunEvalFilterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChunkLevelMetricsTests(unittest.TestCase):
+    """Chunk-level rank uses the answer markers as the relevance label."""
+
+    def _result(self, rank, markers=("mcp.json",)):
+        return QuestionResult(
+            id="q", question="q", expected_source="x", expect_refusal=False,
+            retrieval_hit=True, retrieved_sources=[], citation_hit=None,
+            citations=[], answer_hit=None, answer_preview=None,
+            chunk_rank=rank, answer_markers=list(markers),
+        )
+
+    def test_first_relevant_rank_is_one_based_and_case_insensitive(self) -> None:
+        chunks = [{"text": "nothing here"}, {"text": "Put it in MCP.JSON"}, {"text": "mcp.json"}]
+        self.assertEqual(first_relevant_rank(chunks, ["mcp.json"]), 2)
+        self.assertIsNone(first_relevant_rank(chunks, ["absent"]))
+
+    def test_chunk_metrics_recall_and_mrr(self) -> None:
+        scored = [self._result(1), self._result(4), self._result(None), self._result(None, markers=())]
+        hits, labelled, mrr = chunk_metrics(scored, top_k=3)
+        self.assertEqual((hits, labelled), (1, 3))          # rank 4 is outside k=3
+        self.assertAlmostEqual(mrr, (1.0 + 0.25 + 0.0) / 3)  # unlabelled row excluded
+
+    @patch("src.retrieve.retrieve")
+    def test_evaluate_question_records_chunk_rank(self, mock_retrieve) -> None:
+        mock_retrieve.return_value = [
+            {"source": "set-up-cursor -- u", "text": "intro"},
+            {"source": "set-up-cursor -- u", "text": "add it to .cursor/mcp.json"},
+        ]
+        item = {"id": "c", "question": "where?", "expected_source": "set-up-cursor",
+                "answer_must_include": ["mcp.json"]}
+        result = evaluate_question(item, top_k=8, run_answer=False, use_pins=False)
+        self.assertEqual(result.chunk_rank, 2)
+        self.assertEqual(result.answer_markers, ["mcp.json"])
+        mock_retrieve.assert_called_once_with("where?", k=8, use_pins=False)

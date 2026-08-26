@@ -7,7 +7,7 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -32,6 +32,12 @@ class QuestionResult:
     answer_hit: bool | None
     answer_preview: str | None
     error: str | None = None
+    # Chunk-level: 1-based rank of the first retrieved chunk that carries one of
+    # the question's answer_must_include facts; None when none did. Reuses the
+    # answer markers as the relevance label, so no new labelling and the label
+    # survives re-chunking -- it names text, not a chunk id.
+    chunk_rank: int | None = None
+    answer_markers: list[str] = field(default_factory=list)
 
 
 def norm_source(value: str) -> str:
@@ -132,11 +138,20 @@ def filter_questions(
     return questions
 
 
+def first_relevant_rank(chunks: list[dict], markers: list[str]) -> int | None:
+    """1-based rank of the first chunk carrying any marker, or None."""
+    for rank, chunk in enumerate(chunks, start=1):
+        if answer_contains_fact(str(chunk.get("text", "")), markers):
+            return rank
+    return None
+
+
 def evaluate_question(
     item: dict,
     *,
     top_k: int,
     run_answer: bool,
+    use_pins: bool = True,
 ) -> QuestionResult:
     from src.answer import is_non_answer
     from src.ask import ask
@@ -146,12 +161,14 @@ def evaluate_question(
     expected = item.get("expected_source")
     expect_refusal = bool(item.get("expect_refusal", False))
 
+    markers = [str(m) for m in (item.get("answer_must_include") or [])]
     try:
-        chunks = retrieve(question, k=top_k)
+        chunks = retrieve(question, k=top_k, use_pins=use_pins)
         retrieved_sources = [str(chunk.get("source", "")) for chunk in chunks]
         retrieval_hit = (
             expected is not None and any_source_matches(str(expected), retrieved_sources)
         )
+        chunk_rank = first_relevant_rank(chunks, markers) if markers else None
 
         citation_hit: bool | None = None
         citations: list[str] = []
@@ -173,7 +190,6 @@ def evaluate_question(
             else:
                 citation_hit = False
 
-            markers = item.get("answer_must_include") or []
             if markers and not expect_refusal:
                 answer_hit = answer_contains_fact(answer_text, markers)
 
@@ -188,6 +204,8 @@ def evaluate_question(
             citations=citations,
             answer_hit=answer_hit,
             answer_preview=answer_preview,
+            chunk_rank=chunk_rank,
+            answer_markers=markers,
         )
     except Exception as exc:  # noqa: BLE001 — eval runner should keep going
         return QuestionResult(
@@ -237,6 +255,41 @@ def random_baseline(scored: list[QuestionResult], top_k: int, trials: int = 200)
     return 100.0 * hits / (trials * len(scored))
 
 
+def random_chunk_baseline(
+    scored: list[QuestionResult], top_k: int, trials: int = 200
+) -> float | None:
+    """Chunk recall@k for a retriever that ignores the question."""
+    try:
+        import random
+        from src.chunker import load_chunks
+    except Exception:
+        return None
+    chunks = load_chunks()
+    labelled = [r for r in scored if r.answer_markers]
+    if not chunks or not labelled:
+        return None
+    rng = random.Random(7)
+    hits = 0
+    for _ in range(trials):
+        for result in labelled:
+            picked = rng.sample(chunks, min(top_k, len(chunks)))
+            if first_relevant_rank(picked, result.answer_markers) is not None:
+                hits += 1
+    return 100.0 * hits / (trials * len(labelled))
+
+
+def chunk_metrics(scored: list[QuestionResult], top_k: int) -> tuple[int, int, float]:
+    """(recall@k hits, labelled count, MRR) over questions that carry markers."""
+    labelled = [r for r in scored if r.answer_markers]
+    hits = sum(1 for r in labelled if r.chunk_rank is not None and r.chunk_rank <= top_k)
+    mrr = (
+        sum(1.0 / r.chunk_rank for r in labelled if r.chunk_rank is not None) / len(labelled)
+        if labelled
+        else 0.0
+    )
+    return hits, len(labelled), mrr
+
+
 def print_report(
     results: list[QuestionResult],
     *,
@@ -244,6 +297,7 @@ def print_report(
     top_k: int,
     max_chars: int,
     model_name: str,
+    use_pins: bool = True,
 ) -> None:
     scored = [r for r in results if r.expected_source is not None]
     refusals = [r for r in results if r.expect_refusal]
@@ -252,7 +306,8 @@ def print_report(
     print("\nEval summary")
     print("=" * 72)
     print(
-        f"Config: MAX_CHARS={max_chars}, top_k={top_k}, model={model_name}",
+        f"Config: MAX_CHARS={max_chars}, top_k={top_k}, model={model_name}, "
+        f"pins={'on' if use_pins else 'off'}",
     )
     baseline = random_baseline(scored, top_k)
     baseline_note = f"   [random baseline {baseline:.1f}%]" if baseline is not None else ""
@@ -260,6 +315,20 @@ def print_report(
         f"Retrieval hit @ top-k: {retrieval_pass}/{len(scored)} "
         f"({_pct(retrieval_pass, len(scored))}%){baseline_note}"
     )
+    # Source-level hit@k saturates on a 17-page corpus. These two see whether the
+    # chunk that carries the fact was retrieved, and how high. Reported, not
+    # gated: there is no agreed floor yet, and the exit code below is unchanged.
+    chunk_hits, labelled, mrr = chunk_metrics(scored, top_k)
+    if labelled:
+        chunk_baseline = random_chunk_baseline(scored, top_k)
+        chunk_note = (
+            f"   [random baseline {chunk_baseline:.1f}%]" if chunk_baseline is not None else ""
+        )
+        print(
+            f"Chunk recall @ top-k: {chunk_hits}/{labelled} "
+            f"({_pct(chunk_hits, labelled)}%){chunk_note}"
+        )
+        print(f"Chunk MRR:             {mrr:.3f}")
 
     if run_answer:
         citation_scored = [r for r in scored if r.citation_hit is not None]
@@ -331,6 +400,7 @@ def write_report(
     top_k: int,
     max_chars: int,
     model_name: str,
+    use_pins: bool = True,
 ) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -342,6 +412,7 @@ def write_report(
             "max_chars": max_chars,
             "top_k": top_k,
             "model_name": model_name,
+            "use_pins": use_pins,
         },
         "results": [asdict(result) for result in results],
     }
@@ -386,7 +457,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run only in-scope retrieval questions (expected_source set)",
     )
+    parser.add_argument(
+        "--no-pins",
+        action="store_true",
+        help=(
+            "Bypass the hand-written pin and query-expansion rules, so the "
+            "report shows what the retriever scores on its own"
+        ),
+    )
     args = parser.parse_args(argv)
+    use_pins = not args.no_pins
 
     if args.only_refusals and not args.full:
         print(
@@ -444,7 +524,9 @@ def main(argv: list[str] | None = None) -> int:
             qid = str(item.get("id", item.get("question", index)))
             print(f"[{index}/{len(questions)}] {qid} ...", flush=True)
         results.append(
-            evaluate_question(item, top_k=args.top_k, run_answer=args.full)
+            evaluate_question(
+                item, top_k=args.top_k, run_answer=args.full, use_pins=use_pins
+            )
         )
         if args.full:
             last = results[-1]
@@ -456,6 +538,7 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         max_chars=MAX_CHARS,
         model_name=MODEL_NAME,
+        use_pins=use_pins,
     )
     report_path = write_report(
         results,
@@ -463,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         max_chars=MAX_CHARS,
         model_name=MODEL_NAME,
+        use_pins=use_pins,
     )
     print(f"Wrote report: {report_path}")
 
