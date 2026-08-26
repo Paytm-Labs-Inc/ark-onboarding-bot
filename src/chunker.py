@@ -9,7 +9,10 @@ from typing import TypedDict
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 
-MAX_CHARS = 2000
+# all-MiniLM-L6-v2 reads 256 tokens, roughly 1000 characters, and silently
+# drops the rest. At 2000 the tail of 45% of chunks never reached the encoder
+# (a third of all corpus tokens). 900 keeps every chunk inside the window.
+MAX_CHARS = 900
 OVERLAP_CHARS = 200
 
 

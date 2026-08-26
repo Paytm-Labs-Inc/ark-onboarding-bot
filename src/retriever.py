@@ -25,7 +25,6 @@ ONBOARDING_STEPS_RE = re.compile(
 )
 
 PINNED_MARKERS = (
-    "## Onboarding path",
     "## Start here",
     "Four steps stand between a new account and a session",
     "correct onboarding order to follow",
@@ -71,7 +70,6 @@ WORKSPACE_PINNED_MARKERS = (
     "**Step 2 - Wire the workspace.**",
     "ark workspace apply",
     "**Workspace** is a full environment",
-    "Workspaces are repos plus tools",
     "Workspace not found.",
     "start my myteam-review flow on the myteam-workspace workspace",
 )
@@ -89,7 +87,6 @@ CURSOR_PINNED_MARKERS = (
     "# Set up Cursor",
     "Add the ark MCP server to Cursor",
     ".cursor/mcp.json",
-    "Cursor Settings - > MCP",
 )
 
 MCP_TOOLS_FAIL_RE = re.compile(
@@ -133,8 +130,6 @@ USAGE_PINNED_MARKERS = (
     "**Step 3 - Register your flow",
     "**Step 2 - Dispatch.**",
     "session_lifecycle(op='start'",
-    "How to use Ark after onboarding",
-    "How to run Ark — discover flows",
 )
 
 
