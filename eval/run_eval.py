@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -45,6 +46,57 @@ def source_matches(expected: str, actual: str) -> bool:
 
 def any_source_matches(expected: str, sources: list[str]) -> bool:
     return any(source_matches(expected, source) for source in sources)
+
+
+def load_dotenv_for_full() -> None:
+    """Load `.env` from the repo cwd so --full sees PI_API_KEY."""
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(".env")
+    except ImportError:
+        pass
+
+
+def full_eval_ready() -> str | None:
+    """Error text if --full cannot call the answer backend; None if ready.
+
+    Default backend is Pi Inference. Cursor is allowed only when ANSWER_BACKEND
+    is set to cursor. Missing keys fail closed locally so a no-key run is
+    obvious instead of dying on the first question.
+    """
+    backend = os.environ.get("ANSWER_BACKEND", "pi").strip().lower() or "pi"
+    if backend == "cursor":
+        if os.environ.get("CURSOR_API_KEY", "").strip():
+            return None
+        return (
+            "CURSOR_API_KEY not set. --full with ANSWER_BACKEND=cursor needs it."
+        )
+    if os.environ.get("PI_API_KEY", "").strip():
+        return None
+    return (
+        "PI_API_KEY not set. --full calls Pi Inference. "
+        "Add PI_API_KEY to .env (or set ANSWER_BACKEND=cursor)."
+    )
+
+
+def detail_status(result: QuestionResult, *, run_answer: bool) -> str:
+    """One-word status for a single gold-set row."""
+    if result.error:
+        return "ERROR"
+    if result.expect_refusal:
+        if not run_answer:
+            return "SKIP"
+        return "PASS" if result.citation_hit else "REFUSAL_MISS"
+    if not result.retrieval_hit:
+        return "MISS"
+    if not run_answer:
+        return "PASS"
+    if result.citation_hit is False:
+        return "CITATION_MISS"
+    if result.answer_hit is False:
+        return "ANSWER_MISS"
+    return "PASS"
 
 
 def answer_contains_fact(answer: str, markers: list[str]) -> bool:
@@ -232,21 +284,31 @@ def print_report(
             f"({_pct(refusal_pass, len(refusals))}%)"
         )
 
+        citation_misses = [
+            r
+            for r in scored
+            if r.citation_hit is False and not r.expect_refusal
+        ]
+        answer_misses = [
+            r for r in scored if r.answer_hit is False and not r.expect_refusal
+        ]
+        if citation_misses:
+            print("\nCitation misses (expected page not in Sources):")
+            for result in citation_misses:
+                cited = ", ".join(norm_source(c) for c in result.citations) or "(none)"
+                print(
+                    f"  - {result.id}: expected {result.expected_source}, "
+                    f"cited {cited}"
+                )
+        if answer_misses:
+            print("\nAnswer misses (fact markers not in the answer):")
+            for result in answer_misses:
+                print(f"  - {result.id}")
+
     print("\nDetails")
     print("-" * 72)
     for result in results:
-        if result.expect_refusal:
-            status = (
-                "PASS"
-                if run_answer and result.citation_hit
-                else "REFUSAL" if run_answer else "SKIP"
-            )
-        elif result.retrieval_hit:
-            status = "PASS"
-        else:
-            status = "MISS"
-        if result.error:
-            status = "ERROR"
+        status = detail_status(result, run_answer=run_answer)
         print(f"[{status}] {result.id}: {result.question}")
         if result.expected_source:
             print(f"  expected: {result.expected_source}")
@@ -307,7 +369,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--full",
         action="store_true",
-        help="Run full ask() including Cursor generation (needs CURSOR_API_KEY)",
+        help="Run full ask() including Pi Inference (needs PI_API_KEY)",
     )
     parser.add_argument(
         "--quiet-retriever",
@@ -334,12 +396,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.full:
-        try:
-            from dotenv import load_dotenv
-
-            load_dotenv()
-        except ImportError:
-            pass
+        load_dotenv_for_full()
+        not_ready = full_eval_ready()
+        if not_ready:
+            print(not_ready, file=sys.stderr)
+            return 2
 
     if args.quiet_retriever:
         import builtins
@@ -364,10 +425,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.full:
+        backend = os.environ.get("ANSWER_BACKEND", "pi").strip().lower() or "pi"
         scope = "refusal" if args.only_refusals else "full"
         print(
             f"Running {scope} eval on {len(questions)} questions "
-            "(each calls Cursor — expect several minutes).",
+            f"(ANSWER_BACKEND={backend}; each call hits the model).",
             flush=True,
         )
     elif args.only_scored:

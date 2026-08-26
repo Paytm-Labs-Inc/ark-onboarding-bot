@@ -32,9 +32,9 @@ that answers Ark onboarding questions grounded in the docs under `data/`. It is 
 
 ### Running things
 - Unit tests (all mocked, no network, no API key): `.venv/bin/python -m unittest discover -s tests`
-- Retrieval-only eval (no API key needed): `.venv/bin/python eval/run_eval.py --quiet-retriever`
-  - Full eval that also calls Cursor: add `--full` (needs `agent` + `CURSOR_API_KEY`).
-- Interactive chat CLI: `.venv/bin/python -m src.ask` (needs `agent` + `CURSOR_API_KEY`).
+- Retrieval-only eval (no API key needed): `.venv/bin/python eval/run_eval.py --quiet-retriever --only-scored`
+- Full eval (Pi Inference: citations + answer facts + refusals): `.venv/bin/python eval/run_eval.py --full --quiet-retriever` (needs `PI_API_KEY`). Citation-only scored set: add `--only-scored`. Without a key the command exits 2 with a one-line message instead of failing on the first question.
+- Interactive chat CLI: `.venv/bin/python -m src.ask` (needs `PI_API_KEY`).
 - There is no configured linter (no ruff/flake8/pyproject config); `python -m py_compile`
   is a quick syntax sanity check.
 
