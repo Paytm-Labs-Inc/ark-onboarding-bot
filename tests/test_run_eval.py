@@ -19,6 +19,7 @@ from eval.run_eval import (
     main,
     print_report,
     roadmap_promise_unbacked,
+    random_baseline,
 )
 
 
@@ -198,6 +199,21 @@ class MultiSourceLabelTests(unittest.TestCase):
         result = evaluate_question(item, top_k=8, run_answer=False)
         self.assertTrue(result.retrieval_hit)
         self.assertEqual(result.expected_source, "getting-started|first-run")
+
+
+class MultiSourceNegativeTests(unittest.TestCase):
+    @patch("src.retrieve.retrieve")
+    def test_no_listed_page_is_a_miss(self, mock_retrieve) -> None:
+        mock_retrieve.return_value = [{"source": "roadmap -- u", "text": "x"}]
+        item = {"id": "q", "question": "q?", "expected_source": ["getting-started", "first-run"]}
+        self.assertFalse(evaluate_question(item, top_k=8, run_answer=False).retrieval_hit)
+
+    def test_random_baseline_reads_joined_labels(self) -> None:
+        r = QuestionResult(id="q", question="q", expected_source="getting-started|first-run",
+                           expect_refusal=False, retrieval_hit=True, retrieved_sources=[],
+                           citation_hit=None, citations=[], answer_hit=None, answer_preview=None)
+        with patch("src.chunker.load_chunks", return_value=[{"source": "first-run -- u", "text": "x"}]):
+            self.assertEqual(random_baseline([r], top_k=1, trials=3), 100.0)
 
 if __name__ == "__main__":
     unittest.main()

@@ -113,8 +113,11 @@
   {
     "id": "compute-disk",
     "question": "how much disk space do I need on compute?",
-    "expected_source": "faq-google-doc",
-    "notes": "FAQ Q10 — 100 GB minimum",
+    "expected_source": [
+      "faq-google-doc",
+      "faq"
+    ],
+    "notes": "FAQ Q10 — 100 GB minimum The FAQ is ingested twice (site scrape and Google Doc); both carry this answer.",
     "answer_must_include": [
       "100 GB"
     ]
@@ -275,7 +278,7 @@
       "getting-started",
       "first-run"
     ],
-    "notes": "Getting started — Compute → Workspace → Flows first-run defines all four nouns in its opening paragraph, so either page answers it.",
+    "notes": "Cross-page synthesis; both pages define compute, workspace and flow (first-run does so in its opening paragraph).",
     "answer_must_include": [
       "workspace",
       "flow"
