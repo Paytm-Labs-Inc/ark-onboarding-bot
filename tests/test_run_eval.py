@@ -12,6 +12,7 @@ from eval.run_eval import (
     chunk_metrics,
     detail_status,
     evaluate_question,
+    expected_sources,
     filter_questions,
     first_relevant_rank,
     full_eval_ready,
@@ -114,9 +115,6 @@ class RunEvalFilterTests(unittest.TestCase):
         self.assertIn("[CITATION_MISS]", output)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class ChunkLevelMetricsTests(unittest.TestCase):
     """Chunk-level rank uses the answer markers as the relevance label."""
@@ -187,3 +185,19 @@ class RoadmapPromiseEvalTests(unittest.TestCase):
         self.assertTrue(roadmap_promise_unbacked(ROADMAP_PHRASE, ["faq -- https://x"]))
         self.assertFalse(roadmap_promise_unbacked(ROADMAP_PHRASE, ["roadmap -- https://x"]))
         self.assertFalse(roadmap_promise_unbacked("Run ark host enroll.", []))
+class MultiSourceLabelTests(unittest.TestCase):
+    def test_expected_sources_accepts_string_or_list(self) -> None:
+        self.assertEqual(expected_sources({"expected_source": "faq"}), ["faq"])
+        self.assertEqual(expected_sources({"expected_source": ["a", "b"]}), ["a", "b"])
+        self.assertEqual(expected_sources({}), [])
+
+    @patch("src.retrieve.retrieve")
+    def test_any_accepted_page_is_a_hit(self, mock_retrieve) -> None:
+        mock_retrieve.return_value = [{"source": "first-run -- u", "text": "x"}]
+        item = {"id": "q", "question": "q?", "expected_source": ["getting-started", "first-run"]}
+        result = evaluate_question(item, top_k=8, run_answer=False)
+        self.assertTrue(result.retrieval_hit)
+        self.assertEqual(result.expected_source, "getting-started|first-run")
+
+if __name__ == "__main__":
+    unittest.main()
