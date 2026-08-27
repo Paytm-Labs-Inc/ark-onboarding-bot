@@ -86,7 +86,8 @@ curl -s -X POST http://127.0.0.1:8765/api/ask \
   an Ark health probe).
 - **`GET /ready`** — readiness. Loads the corpus and runs a sample retrieval;
   returns `200 {"status":"ready","chunks":N}` when the instance can serve, or
-  `503 {"status":"not_ready","reason":...}` otherwise. The first `/ready` call
+  `503 {"status":"not_ready","reason":...}` otherwise — including when the
+  configured answer backend has no credential. The first `/ready` call
   warms the embedding model, so it can take a few seconds; later calls are fast.
 
 ## Updating a deployment

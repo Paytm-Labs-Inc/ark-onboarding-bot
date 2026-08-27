@@ -255,12 +255,15 @@ class BackendCredentialReadinessTests(unittest.TestCase):
         self.assertIn("CURSOR_API_KEY", missing_backend_credential())
         os.environ["CURSOR_API_KEY"] = "crsr_x"
         self.assertIsNone(missing_backend_credential())
+        os.environ["ANSWER_BACKEND"] = "groq"
+        self.assertIn("not a backend", missing_backend_credential())
 
     @patch("src.web.check_retrieval_ready", return_value=(True, {"status": "ready", "chunks": 3}))
     def test_ready_is_503_without_the_credential_and_200_with_it(self, _r) -> None:
         response = self.client.get("/ready")
         self.assertEqual(response.status_code, 503)
-        self.assertIn("PI_API_KEY", response.json()["detail"])
+        self.assertEqual(response.json()["status"], "not_ready")
+        self.assertIn("PI_API_KEY", response.json()["reason"])
         os.environ["PI_API_KEY"] = "pi-x"
         self.assertEqual(self.client.get("/ready").status_code, 200)
 

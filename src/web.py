@@ -16,6 +16,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from src.answer import missing_backend_credential
 from src.auth import (
     COOKIE_NAME,
     PUBLIC_PATHS,
@@ -259,27 +260,6 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-def missing_backend_credential() -> str | None:
-    """Name the credential the configured answer backend needs and does not have.
-
-    The default backend is pi and reads PI_API_KEY per request, so a pod without
-    it passes every probe and answers HTTP 400 to every question. Surface that
-    at startup and on /ready instead of on the first user.
-    """
-    from src.answer import _answer_backend
-
-    if _answer_backend() == "cursor":
-        if os.environ.get("CURSOR_API_KEY", "").strip():
-            return None
-        return "ANSWER_BACKEND=cursor needs CURSOR_API_KEY, which is not set."
-    if os.environ.get("PI_API_KEY", "").strip():
-        return None
-    return (
-        "The answer backend is pi (the default) and PI_API_KEY is not set. "
-        "Set it, or set ANSWER_BACKEND=cursor with CURSOR_API_KEY."
-    )
-
-
 @app.get("/ready", response_model=None)
 def ready() -> dict[str, object] | JSONResponse:
     ok, body = check_retrieval_ready()
@@ -288,7 +268,7 @@ def ready() -> dict[str, object] | JSONResponse:
     missing = missing_backend_credential()
     if missing:
         return JSONResponse(
-            status_code=503, content={**body, "status": "not-ready", "detail": missing}
+            status_code=503, content={**body, "status": "not_ready", "reason": missing}
         )
     return body
 
