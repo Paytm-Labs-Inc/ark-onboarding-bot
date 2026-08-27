@@ -127,19 +127,24 @@ def _log_ask_result(
     channel: str,
     session_id: str | None,
 ) -> None:
-    log_query(
-        question=question,
-        answer=str(result.get("answer", "")),
-        citations=[str(item) for item in result.get("citations", [])],
-        retrieved_sources=[str(item) for item in result.get("retrieved_sources", [])],
-        top_score=result.get("top_score"),
-        chunk_count=int(result.get("chunk_count", 0)),
-        channel=channel,
-        session_id=session_id,
-        stream_mode=result.get("stream_mode"),
-        stream_errors=[str(e) for e in result.get("stream_errors") or []],
-        degraded=result.get("degraded"),
-    )
+    try:
+        log_query(
+            question=question,
+            answer=str(result.get("answer", "")),
+            citations=[str(item) for item in result.get("citations", [])],
+            retrieved_sources=[str(item) for item in result.get("retrieved_sources", [])],
+            top_score=result.get("top_score"),
+            chunk_count=int(result.get("chunk_count", 0)),
+            channel=channel,
+            session_id=session_id,
+            stream_mode=result.get("stream_mode"),
+            stream_errors=[str(e) for e in result.get("stream_errors") or []],
+            degraded=result.get("degraded"),
+        )
+    except OSError as exc:
+        # Observability must never cost the user their answer: a full disk or a
+        # read-only filesystem is a logging problem, not an answering problem.
+        print(f"query log write failed: {exc}")
 
 
 def _cached_retrieve_scored(query: str, *, k: int) -> RetrievalResult:

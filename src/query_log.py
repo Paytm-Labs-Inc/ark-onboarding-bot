@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,10 +72,15 @@ def build_record(
     }
 
 
+_WRITE_LOCK = threading.Lock()
+
+
 def append_query_log(record: dict[str, Any]) -> None:
     """Write one query observability record as a single JSONL line."""
     QUERY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with QUERY_LOG_PATH.open("a", encoding="utf-8") as handle:
+    # Requests are answered on a thread pool; serialize appends so two answers
+    # cannot interleave their bytes into one unparseable line.
+    with _WRITE_LOCK, QUERY_LOG_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 

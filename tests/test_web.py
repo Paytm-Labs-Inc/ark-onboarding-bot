@@ -137,5 +137,15 @@ class WebAppTests(unittest.TestCase):
         self.assertIn('"rating": "up"', lines[0])
 
 
+
+class FeedbackWriteFailureTests(unittest.TestCase):
+    @patch("src.web.append_feedback", side_effect=OSError("disk full"))
+    def test_feedback_reports_503_not_500(self, _a) -> None:
+        response = TestClient(app).post(
+            "/api/feedback",
+            json={"question": "q", "answer": "a", "rating": "up"},
+        )
+        self.assertEqual(response.status_code, 503)
+
 if __name__ == "__main__":
     unittest.main()
