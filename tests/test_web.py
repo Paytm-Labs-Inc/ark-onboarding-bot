@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -146,6 +147,26 @@ class FeedbackWriteFailureTests(unittest.TestCase):
             json={"question": "q", "answer": "a", "rating": "up"},
         )
         self.assertEqual(response.status_code, 503)
+class AskRateLimitTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from src import web as web_module
+        web_module._ask_hits.clear()
+        self.client = TestClient(app)
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "2"})
+    @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
+    def test_third_question_in_a_minute_is_429(self, _ask) -> None:
+        for _ in range(2):
+            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
+        response = self.client.post("/api/ask", json={"question": "q"})
+        self.assertEqual(response.status_code, 429)
+        self.assertIn("per minute", response.json()["detail"])
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "0"})
+    @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
+    def test_zero_disables_the_limit(self, _ask) -> None:
+        for _ in range(5):
+            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
 
 if __name__ == "__main__":
     unittest.main()
