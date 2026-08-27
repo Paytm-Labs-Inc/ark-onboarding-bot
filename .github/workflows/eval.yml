@@ -60,12 +60,12 @@ jobs:
           PI_API_KEY: ${{ secrets.PI_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
-          # This gate asks a real model whether it refuses. There is no way to
-          # check that without one, so with no key configured it skips loudly
-          # rather than failing every push and training us to ignore red.
+          # This gate asks a real model whether it refuses. Publish is gated on
+          # this workflow being green, so a silent skip here is a green light
+          # for an unverified image. Fail closed: the key is a repository secret.
           if [ -z "$PI_API_KEY" ] && [ -z "$CURSOR_API_KEY" ]; then
-            echo "::warning title=Refusal gate skipped::No PI_API_KEY or CURSOR_API_KEY configured. Refusal behaviour is UNVERIFIED on this run. Add PI_API_KEY as a repository secret to turn this gate back on."
-            exit 0
+            echo "::error title=Refusal gate cannot run::No PI_API_KEY or CURSOR_API_KEY configured. Refusal behaviour is UNVERIFIED and publish must not proceed. Add PI_API_KEY as a repository secret."
+            exit 1
           fi
           # Prefer Pi Inference: it is a plain HTTPS call. The Cursor backend needs the
           # `agent` binary on PATH, which no runner has, so it can never work here.
@@ -75,7 +75,7 @@ jobs:
 
   full-eval:
     runs-on: ubuntu-latest
-    # Citations + answer_must_include. Same skip-when-no-key pattern as refusal-eval.
+    # Citations + answer_must_include. Same fail-closed rule as refusal-eval.
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
@@ -100,8 +100,8 @@ jobs:
           PI_API_KEY: ${{ secrets.PI_API_KEY }}
         run: |
           if [ -z "$PI_API_KEY" ]; then
-            echo "::warning title=Full eval skipped::No PI_API_KEY configured. Citation and answer scoring are UNVERIFIED. Add PI_API_KEY as a repository secret to turn this on."
-            exit 0
+            echo "::error title=Full eval cannot run::No PI_API_KEY configured. Citation and answer scoring are UNVERIFIED and publish must not proceed. Add PI_API_KEY as a repository secret."
+            exit 1
           fi
           export ANSWER_BACKEND=pi
           echo "Full eval running on ANSWER_BACKEND=$ANSWER_BACKEND"
