@@ -2,7 +2,7 @@
 #
 # Install on an Ark registered-host:
 #   1. Clone the repo to /opt/ark-onboarding-bot (or edit WorkingDirectory below).
-#   2. Create /opt/ark-onboarding-bot/.env with: CURSOR_API_KEY=crsr_...
+#   2. Create /opt/ark-onboarding-bot/.env with: PI_API_KEY=... and ARK_ACCESS_TOKEN=...
 #   3. sudo cp deploy/ark-onboarding-bot.service /etc/systemd/system/
 #   4. sudo systemctl daemon-reload && sudo systemctl enable --now ark-onboarding-bot
 #   5. Check: systemctl status ark-onboarding-bot ; journalctl -u ark-onboarding-bot -f

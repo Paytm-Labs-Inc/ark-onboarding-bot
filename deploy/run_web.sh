@@ -28,10 +28,10 @@ if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
   "${VENV_DIR}/bin/pip" install -r "${REPO_ROOT}/requirements.txt"
 fi
 
-# The web app reads CURSOR_API_KEY from the environment / .env (via python-dotenv).
-if [[ -z "${CURSOR_API_KEY:-}" && ! -f "${REPO_ROOT}/.env" ]]; then
-  echo "[run_web] WARNING: CURSOR_API_KEY is not set and no .env file found." >&2
-  echo "[run_web] Retrieval will work, but answer generation will return an error." >&2
+# The web app reads PI_API_KEY from the environment / .env (via python-dotenv)
+# and refuses to start without the configured backend's credential.
+if [[ -z "${PI_API_KEY:-}" && ! -f "${REPO_ROOT}/.env" ]]; then
+  echo "[run_web] WARNING: PI_API_KEY is not set and no .env file found; the app will refuse to start." >&2
 fi
 
 echo "[run_web] serving on http://${WEB_HOST}:${WEB_PORT} (internal-only)"
