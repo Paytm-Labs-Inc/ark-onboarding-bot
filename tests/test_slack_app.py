@@ -39,6 +39,40 @@ class SlackHelpersTests(unittest.TestCase):
         self.assertEqual(text, "I don't have that in the onboarding docs")
         self.assertNotIn("*Sources*", text)
 
+    def test_format_response_flags_a_salvaged_answer(self) -> None:
+        text = format_response(
+            {"answer": "Run ark host enroll", "citations": [], "degraded": "salvaged"}
+        )
+        self.assertIn("connection dropped", text)
+        self.assertIn("sources could not be recovered", text)
+
+    def test_format_response_salvaged_with_citations_omits_source_wording(self) -> None:
+        text = format_response(
+            {
+                "answer": "Run ark host enroll",
+                "citations": ["getting-started — https://x"],
+                "degraded": "salvaged",
+            }
+        )
+        self.assertIn("connection dropped", text)
+        self.assertNotIn("sources could not be recovered", text)
+
+    def test_format_response_does_not_flag_a_clean_answer(self) -> None:
+        text = format_response({"answer": "Run ark host enroll", "citations": []})
+        self.assertNotIn("connection dropped", text)
+
+    def test_format_response_does_not_flag_a_plain_fallback(self) -> None:
+        # blocking-chunked still produced a complete answer -- saying so is noise.
+        text = format_response(
+            {
+                "answer": "Run ark host enroll",
+                "citations": [],
+                "stream_mode": "blocking-chunked",
+                "stream_errors": ["pi-stream: boom"],
+            }
+        )
+        self.assertNotIn("connection dropped", text)
+
     def test_format_response_empty_answer_falls_back_to_hint(self) -> None:
         self.assertEqual(format_response({"answer": "", "citations": []}), PROMPT_HINT)
 

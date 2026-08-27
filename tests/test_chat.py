@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from src.chat import ChatSession, ask_in_session
+from src.chat import ChatSession, ask_in_session, ask_in_session_stream
 
 
 class ChatSessionTests(unittest.TestCase):
@@ -37,6 +37,37 @@ class ChatSessionTests(unittest.TestCase):
         for index in range(6):
             session.add_turn(f"q{index}", f"a{index}", [], [])
         self.assertEqual(len(session.turns), 4)
+
+
+class DegradedPassthroughTests(unittest.TestCase):
+    """The web done event is rebuilt field by field, so degraded must be carried.
+
+    Bugbot caught this on #37: the browser reads payload.degraded, but
+    ask_in_session_stream dropped it, leaving the web half of the feature dead
+    while Slack (which consumes ask_stream directly) worked.
+    """
+
+    def _events(self, done_extra: dict):
+        def fake_stream(question, **kwargs):
+            yield {"type": "delta", "text": "Run ark host enroll."}
+            yield {
+                "type": "done",
+                "answer": "Run ark host enroll.",
+                "citations": [],
+                "retrieved_sources": ["getting-started"],
+                **done_extra,
+            }
+
+        with patch("src.chat.ask_stream", side_effect=fake_stream):
+            return list(ask_in_session_stream(None, "how do I enroll?"))
+
+    def test_degraded_reaches_the_browser(self) -> None:
+        done = self._events({"degraded": "salvaged"})[-1]
+        self.assertEqual(done["degraded"], "salvaged")
+
+    def test_clean_answer_has_no_degraded_key(self) -> None:
+        done = self._events({})[-1]
+        self.assertNotIn("degraded", done)
 
 
 if __name__ == "__main__":

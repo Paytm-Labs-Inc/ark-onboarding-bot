@@ -136,6 +136,9 @@ def _log_ask_result(
         chunk_count=int(result.get("chunk_count", 0)),
         channel=channel,
         session_id=session_id,
+        stream_mode=result.get("stream_mode"),
+        stream_errors=[str(e) for e in result.get("stream_errors") or []],
+        degraded=result.get("degraded"),
     )
 
 
@@ -226,6 +229,7 @@ def ask_stream(
             "retrieved_sources": [],
             "top_score": None,
             "chunk_count": 0,
+            "stream_mode": "none",
         }
         return
 
@@ -244,6 +248,7 @@ def ask_stream(
             "type": "done",
             "answer": REFUSAL_PHRASE,
             "citations": [],
+            "stream_mode": "none",
             **meta,
         }
         if log:

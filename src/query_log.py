@@ -42,6 +42,9 @@ def build_record(
     chunk_count: int,
     channel: str,
     session_id: str | None = None,
+    stream_mode: str | None = None,
+    stream_errors: list[str] | None = None,
+    degraded: str | None = None,
 ) -> dict[str, Any]:
     refused = is_refused(answer)
     low_confidence = is_low_confidence(
@@ -60,6 +63,11 @@ def build_record(
         "retrieved_sources": retrieved_sources,
         "channel": channel,
         "session_id": session_id,
+        # How the answer was produced, so a degraded answer is countable rather
+        # than merely visible to whoever happened to be watching.
+        "stream_mode": stream_mode,
+        "stream_errors": stream_errors or [],
+        "degraded": degraded,
     }
 
 

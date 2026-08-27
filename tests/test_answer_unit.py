@@ -622,6 +622,7 @@ class PiStreamFallbackGuardTests(unittest.TestCase):
         self.assertEqual(deltas.count("Run ark host enroll"), 1)
         self.assertEqual(len(dones), 1)
         self.assertEqual(dones[0]["stream_mode"], "pi-stream")
+        self.assertEqual(dones[0]["degraded"], "salvaged")
         self.assertEqual(
             dones[0]["answer"], "Run ark host enroll. Then dispatch a session."
         )
@@ -644,6 +645,7 @@ class PiStreamFallbackGuardTests(unittest.TestCase):
         self.assertEqual(events[-1]["answer"], "Fallback answer.")
         self.assertEqual(events[-1]["stream_mode"], "blocking-chunked")
         self.assertTrue(events[-1]["stream_errors"])
+        self.assertNotIn("degraded", events[-1])
         mock_generate.assert_called_once()
 
 
@@ -674,6 +676,7 @@ class PiStreamFallbackGuardTests(unittest.TestCase):
         self.assertNotIn("Fallback answer.", deltas)
         self.assertEqual(len(dones), 1)
         self.assertEqual(dones[0]["stream_mode"], "pi-stream")
+        self.assertEqual(dones[0]["degraded"], "salvaged")
         self.assertEqual(
             dones[0]["answer"], "Run ark host enroll. Then dispatch a session."
         )
@@ -695,7 +698,28 @@ class PiStreamFallbackGuardTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "done")
         self.assertEqual(events[-1]["answer"], "Fallback answer.")
         self.assertEqual(events[-1]["stream_mode"], "blocking-chunked")
+        self.assertNotIn("degraded", events[-1])
         mock_generate.assert_called_once()
+
+    @patch("src.answer._generate_answer")
+    @patch("src.answer._stream_pi_inference")
+    def test_clean_stream_is_not_marked_degraded(
+        self, mock_stream: MagicMock, mock_generate: MagicMock
+    ) -> None:
+        payload = (
+            '{"answer": "Run ark host enroll.", "chunks_used": [1]}'
+        )
+
+        def fake_stream(_prompt: str):
+            yield payload
+            return payload
+
+        mock_stream.side_effect = fake_stream
+        events = list(stream_answer("how do I enroll?", self.CHUNKS))
+        done = events[-1]
+        self.assertEqual(done["stream_mode"], "pi-stream")
+        self.assertNotIn("degraded", done)
+        mock_generate.assert_not_called()
 
 
 class CursorCliStreamTests(unittest.TestCase):

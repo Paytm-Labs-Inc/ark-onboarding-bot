@@ -786,15 +786,20 @@ def _emit_streamed_raw(
 
     if not raw.strip():
         raise RuntimeError("Model stream returned an empty response")
+    degraded: dict[str, str] = {}
     try:
         result = _parse_and_finalize(raw, chunks)
     except ValueError:
         if not emitted:
             raise
+        # The user has already seen text, so finish with what arrived instead of
+        # replaying. Say so in the payload: a salvaged answer can be cut short
+        # and can lose its citations, and nothing else in the event reveals that.
         result = _finalize_parsed(
             {"answer": _answer_text_from_partial_json(raw)}, chunks
         )
-    yield {"type": "done", **result, "stream_mode": stream_mode}
+        degraded = {"degraded": "salvaged"}
+    yield {"type": "done", **result, **degraded, "stream_mode": stream_mode}
 
 
 
