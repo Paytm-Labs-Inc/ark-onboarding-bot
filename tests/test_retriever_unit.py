@@ -186,9 +186,6 @@ class RetrieverTests(unittest.TestCase):
 
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class PinnedMarkersMatchCorpusTests(unittest.TestCase):
     """Every pinned marker must match at least one chunk of the real corpus.
@@ -211,3 +208,6 @@ class PinnedMarkersMatchCorpusTests(unittest.TestCase):
                 if not any(marker in chunk["text"] for chunk in chunks):
                     dead.append(f"{name}: {marker!r}")
         self.assertEqual(dead, [], "pinned markers that match no chunk")
+
+if __name__ == "__main__":
+    unittest.main()
