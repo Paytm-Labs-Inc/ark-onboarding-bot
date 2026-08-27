@@ -206,5 +206,13 @@ class HandoffLineTests(unittest.TestCase):
     def test_grounded_answer_has_no_handoff_line(self) -> None:
         self.assertNotIn("#foundry-users", format_response({"answer": "Run ark host enroll", "citations": []}))
 
+
+class HandoffOnSalvagedDeclineTests(unittest.TestCase):
+    def test_a_decline_that_was_cut_short_still_carries_the_handoff(self) -> None:
+        from src.answer import REFUSAL_PHRASE
+        text = format_response({"answer": REFUSAL_PHRASE, "citations": [], "degraded": "salvaged"})
+        self.assertIn("connection dropped", text)
+        self.assertIn("#foundry-users", text)
+
 if __name__ == "__main__":
     unittest.main()

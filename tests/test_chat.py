@@ -85,5 +85,14 @@ class HandoffFlagTests(unittest.TestCase):
     def test_grounded_answer_does_not(self) -> None:
         self.assertFalse(self._done("Run ark host enroll.")["handoff"])
 
+
+class NonStreamHandoffTests(unittest.TestCase):
+    def test_ask_in_session_carries_handoff(self) -> None:
+        from src.answer import REFUSAL_PHRASE
+        with patch("src.chat.ask", return_value={"answer": REFUSAL_PHRASE, "citations": []}):
+            self.assertTrue(ask_in_session(None, "q?")["handoff"])
+        with patch("src.chat.ask", return_value={"answer": "Run ark host enroll.", "citations": []}):
+            self.assertFalse(ask_in_session(None, "q?")["handoff"])
+
 if __name__ == "__main__":
     unittest.main()

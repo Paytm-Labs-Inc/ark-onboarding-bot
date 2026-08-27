@@ -23,8 +23,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from src.ask import ask, ask_stream
 from src.answer import HANDOFF_LINE, is_non_answer
+from src.ask import ask, ask_stream
 
 _MENTION_RE = re.compile(r"^\s*<@[^>]+>\s*")
 
@@ -37,6 +37,9 @@ def format_response(result: dict) -> str:
     citations = [str(c) for c in result.get("citations", []) if c]
     if not answer:
         return PROMPT_HINT
+    # Decide on the undecorated text: is_non_answer is an exact match, and the
+    # salvage note below would otherwise hide a decline from it.
+    decline = is_non_answer(answer)
     # Only a salvaged answer is flagged. A blocking-chunked fallback still
     # produced a complete answer, so saying so would be noise to the reader.
     if result.get("degraded") == "salvaged":
@@ -49,7 +52,7 @@ def format_response(result: dict) -> str:
             f"{answer}\n\n_The connection dropped while this answer was being "
             f"written — {detail}._"
         )
-    if is_non_answer(answer):
+    if decline:
         answer = f"{answer}\n\n_{HANDOFF_LINE}_"
     if citations:
         cites = "\n".join(f"• {c}" for c in citations)

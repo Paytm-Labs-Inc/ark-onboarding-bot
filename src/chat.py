@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 from collections.abc import Iterator
 from typing import Any
 
-from src.ask import ask, ask_stream
 from src.answer import is_non_answer
+from src.ask import ask, ask_stream
 from src.citations import parse_citation
 
 MAX_HISTORY_TURNS = 4
@@ -87,6 +87,7 @@ def ask_in_session(session_id: str | None, question: str) -> dict[str, Any]:
         "citations": citations,
         "retrieved_sources": retrieved_sources,
         "sources": enrich_citations(citations),
+        "handoff": is_non_answer(answer_text),
     }
 
 
