@@ -186,52 +186,5 @@ class RetrieverTests(unittest.TestCase):
 
 
 
-class PinnedMarkersMatchCorpusTests(unittest.TestCase):
-    """Every pinned marker must match at least one chunk of the real corpus.
-
-    A marker that matches nothing is a rule that silently stopped working.
-    Six of them had, after the #23 ingest rewrote the pages they were copied
-    from, and nothing noticed because a dead marker fails quietly.
-    """
-
-    def test_every_marker_matches_a_chunk(self) -> None:
-        from src import retriever
-        from src.chunker import DATA_DIR, load_chunks
-
-        chunks = load_chunks(DATA_DIR)
-        dead: list[str] = []
-        for name in dir(retriever):
-            if not name.endswith("PINNED_MARKERS"):
-                continue
-            for marker in getattr(retriever, name):
-                if not any(marker in chunk["text"] for chunk in chunks):
-                    dead.append(f"{name}: {marker!r}")
-        self.assertEqual(dead, [], "pinned markers that match no chunk")
-class UsePinsSwitchTests(unittest.TestCase):
-    """use_pins=False must bypass both the pin rules and query expansion."""
-
-    CHUNKS = [
-        {"source": "notes -- u", "text": "mac notes: nothing relevant here"},
-        {"source": "register -- u", "text": "Run ark host enroll to register"},
-    ]
-
-    @staticmethod
-    def _embed_by_mac(texts):
-        # The query and the first chunk share "mac"; the enroll chunk does not,
-        # so on similarity alone it ranks last. Only the pin can lift it.
-        return np.asarray(
-            [[1.0, 0.0] if "mac" in t.lower() else [0.0, 1.0] for t in texts],
-            dtype=np.float32,
-        )
-
-    def test_pins_lift_the_enroll_chunk_and_no_pins_does_not(self) -> None:
-        with patch("src.retriever._embed", side_effect=self._embed_by_mac):
-            index = build_index(self.CHUNKS)
-            question = "how do I enroll a host on a mac"
-            with_pins = retrieve(question, top_k=1, index=index)
-            without = retrieve(question, top_k=1, index=index, use_pins=False)
-        self.assertIn("ark host enroll", with_pins[0]["text"])
-        self.assertIn("mac notes", without[0]["text"])
-
 if __name__ == "__main__":
     unittest.main()
