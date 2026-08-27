@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -127,6 +127,11 @@ app.add_middleware(PrefixStripMiddleware)
 # the gateway's concurrency for everyone. In-process on purpose: it protects
 # one pod, which is the deployment shape for the beta.
 _ASK_WINDOW_SECONDS = 60.0
+# Keys are client addresses. With a wildcard trusted-proxy list any caller
+# could mint a fresh key per request via X-Forwarded-For, so main() no longer
+# trusts every peer (see FORWARDED_ALLOW_IPS) -- and the table is bounded
+# regardless, so a flood of keys cannot become a memory-growth vector.
+_ASK_MAX_TRACKED_CLIENTS = 5000
 _ask_hits: dict[str, deque[float]] = defaultdict(deque)
 _ask_hits_lock = threading.Lock()
 
@@ -140,13 +145,21 @@ def _client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _now() -> float:
+    # Indirection so tests can drive the limiter's clock without patching the
+    # time module the ASGI test client itself depends on.
+    return time.monotonic()
+
+
 def enforce_ask_rate_limit(request: Request) -> None:
     limit = ask_rate_limit_per_minute()
     if limit <= 0:
         return
-    now = time.monotonic()
+    now = _now()
     key = _client_key(request)
     with _ask_hits_lock:
+        if len(_ask_hits) >= _ASK_MAX_TRACKED_CLIENTS:
+            _evict_idle_clients(now)
         hits = _ask_hits[key]
         while hits and now - hits[0] > _ASK_WINDOW_SECONDS:
             hits.popleft()
@@ -156,6 +169,17 @@ def enforce_ask_rate_limit(request: Request) -> None:
                 detail=f"Too many questions; limit is {limit} per minute. Try again shortly.",
             )
         hits.append(now)
+
+
+def _evict_idle_clients(now: float) -> None:
+    """Drop clients with no hit inside the window; called under the lock."""
+    idle = [k for k, hits in _ask_hits.items() if not hits or now - hits[-1] > _ASK_WINDOW_SECONDS]
+    for k in idle:
+        del _ask_hits[k]
+    if len(_ask_hits) >= _ASK_MAX_TRACKED_CLIENTS:
+        # Still full of active clients: shed the oldest half rather than grow.
+        for k in sorted(_ask_hits, key=lambda k: _ask_hits[k][-1])[: len(_ask_hits) // 2]:
+            del _ask_hits[k]
 
 
 class AskRequest(BaseModel):
@@ -233,8 +257,7 @@ def ready() -> dict[str, object] | JSONResponse:
 
 
 @app.post("/api/ask")
-def api_ask(body: AskRequest, request: Request) -> dict:
-    enforce_ask_rate_limit(request)
+def api_ask(body: AskRequest, _limit: None = Depends(enforce_ask_rate_limit)) -> dict:
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
@@ -266,8 +289,9 @@ def _ask_stream_events(session_id: str | None, question: str) -> Iterator[str]:
 
 
 @app.post("/api/ask/stream")
-def api_ask_stream(body: AskRequest, request: Request) -> StreamingResponse:
-    enforce_ask_rate_limit(request)
+def api_ask_stream(
+    body: AskRequest, _limit: None = Depends(enforce_ask_rate_limit)
+) -> StreamingResponse:
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
@@ -420,7 +444,11 @@ def main() -> None:
         host=host,
         port=port,
         proxy_headers=True,
-        forwarded_allow_ips="*",
+        # Which peers may set X-Forwarded-For / -Proto. "*" trusted every
+        # caller, which let any client pick its own rate-limit key and its own
+        # cookie Secure flag. Default is uvicorn's own (loopback); behind the
+        # ingress set it to the ingress CIDR.
+        forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1"),
     )
 
 

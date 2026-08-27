@@ -168,5 +168,45 @@ class AskRateLimitTests(unittest.TestCase):
         for _ in range(5):
             self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
 
+
+class AskRateLimitEdgeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from src import web as web_module
+        web_module._ask_hits.clear()
+        self.client = TestClient(app)
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "1"})
+    @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
+    def test_the_window_slides(self, _ask) -> None:
+        with patch("src.web._now", side_effect=[0.0, 1.0, 61.5]):
+            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
+            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 429)
+            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "1"})
+    def test_the_stream_endpoint_is_limited_too(self) -> None:
+        def fake_stream(session_id, question):
+            yield {"type": "done", "answer": "ok", "citations": [], "session_id": "s"}
+        with patch("src.web.ask_in_session_stream", side_effect=fake_stream):
+            self.assertEqual(self.client.post("/api/ask/stream", json={"question": "q"}).status_code, 200)
+            self.assertEqual(self.client.post("/api/ask/stream", json={"question": "q"}).status_code, 429)
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "1"})
+    @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
+    def test_distinct_clients_get_distinct_buckets(self, _ask) -> None:
+        with patch("src.web._client_key", side_effect=["10.0.0.1", "10.0.0.2"]):
+            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
+            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
+
+    def test_idle_clients_are_evicted_when_the_table_is_full(self) -> None:
+        from src import web as web_module
+        with patch.object(web_module, "_ASK_MAX_TRACKED_CLIENTS", 3):
+            for i, t in enumerate((0.0, 0.0, 0.0)):
+                web_module._ask_hits[f"c{i}"].append(t)
+            with web_module._ask_hits_lock:
+                web_module._evict_idle_clients(now=100.0)
+            self.assertEqual(len(web_module._ask_hits), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

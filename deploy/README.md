@@ -133,6 +133,12 @@ docker run \
   ark-onboarding-bot:<tag> python -m src.slack_app
 ```
 
+### Behind a reverse proxy or ingress
+
+Set `FORWARDED_ALLOW_IPS` to the proxy's address or CIDR so `X-Forwarded-For`
+and `X-Forwarded-Proto` are honoured only from it. The default is loopback;
+`*` must not be used — it lets any caller choose its own rate-limit key.
+
 ### On k8s
 
 Two Deployments from the **same image**: the web Deployment (default command)
