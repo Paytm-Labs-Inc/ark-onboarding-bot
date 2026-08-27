@@ -231,8 +231,14 @@ def retrieve_scored(
     top_k: int = DEFAULT_TOP_K,
     index: Index | None = None,
     data_dir: Path = DATA_DIR,
+    use_pins: bool = True,
 ) -> ScoredRetrieval:
-    """Return top_k chunks plus the best similarity score for observability."""
+    """Return top_k chunks plus the best similarity score for observability.
+
+    use_pins=False bypasses the hand-written layer -- both the query-expansion
+    regexes and the pinned-marker rules -- so the eval can report what the
+    retriever scores on its own. Production always runs with it on.
+    """
     global _default_index
     if not question or not question.strip():
         return ScoredRetrieval(chunks=[], top_score=None)
@@ -244,33 +250,35 @@ def retrieve_scored(
         return ScoredRetrieval(chunks=[], top_score=None)
 
     start = time.perf_counter()
-    search_query = _expand_query(question.strip())
+    search_query = _expand_query(question.strip()) if use_pins else question.strip()
     query = _embed([search_query])[0]
     sims = index.embeddings @ query
     k = min(top_k, len(index.chunks))
     order = np.argsort(-sims, kind="stable")[:k]
     results = [index.chunks[int(i)] for i in order]
-    if ONBOARDING_STEPS_RE.search(question):
+    if not use_pins:
+        pass
+    elif ONBOARDING_STEPS_RE.search(question):
         results = _pin_markers(
             results, index, ONBOARDING_PINNED_MARKERS, top_k=top_k
         )
-    if USAGE_RE.search(question):
+    if use_pins and USAGE_RE.search(question):
         results = _pin_markers(results, index, USAGE_PINNED_MARKERS, top_k=top_k)
-    if ENROLL_HOST_RE.search(question):
+    if use_pins and ENROLL_HOST_RE.search(question):
         results = _pin_markers(results, index, ENROLL_PINNED_MARKERS, top_k=top_k)
-    if WORKSPACE_RE.search(question):
+    if use_pins and WORKSPACE_RE.search(question):
         results = _pin_markers(results, index, WORKSPACE_PINNED_MARKERS, top_k=top_k)
-    if CURSOR_RE.search(question):
+    if use_pins and CURSOR_RE.search(question):
         results = _pin_markers(results, index, CURSOR_PINNED_MARKERS, top_k=top_k)
-    if MCP_TOOLS_FAIL_RE.search(question):
+    if use_pins and MCP_TOOLS_FAIL_RE.search(question):
         results = _pin_markers(
             results, index, MCP_TOOLS_FAIL_PINNED_MARKERS, top_k=top_k
         )
-    if WRONG_TENANT_RE.search(question):
+    if use_pins and WRONG_TENANT_RE.search(question):
         results = _pin_markers(
             results, index, WRONG_TENANT_PINNED_MARKERS, top_k=top_k
         )
-    if JIRA_MCP_VPN_RE.search(question):
+    if use_pins and JIRA_MCP_VPN_RE.search(question):
         results = _pin_markers(
             results, index, JIRA_MCP_VPN_PINNED_MARKERS, top_k=top_k
         )
@@ -286,8 +294,9 @@ def retrieve(
     top_k: int = DEFAULT_TOP_K,
     index: Index | None = None,
     data_dir: Path = DATA_DIR,
+    use_pins: bool = True,
 ) -> list[Chunk]:
     """Return the top_k corpus chunks most relevant to question."""
     return retrieve_scored(
-        question, top_k=top_k, index=index, data_dir=data_dir
+        question, top_k=top_k, index=index, data_dir=data_dir, use_pins=use_pins
     ).chunks
