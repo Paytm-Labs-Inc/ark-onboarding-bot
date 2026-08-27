@@ -22,8 +22,14 @@ name: Publish image
 # (main-arm64 and the trigger's sha) and a deploy could pull the wrong code
 # under a trusted tag. Dispatching from a branch in the UI already sets
 # github.ref, so the build and the tags can never disagree.
+# Publish only after the eval workflow has passed on the same commit. A red
+# main used to ship an image anyway (raised on #30). workflow_run fires after
+# eval completes; the head_sha guard skips a stale run when main has already
+# moved on, since the newer commit's own eval run will publish it.
 on:
-  push:
+  workflow_run:
+    workflows: [eval]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -34,6 +40,10 @@ concurrency:
 jobs:
   publish:
     name: publish
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_sha == github.sha)
     # ubuntu-latest is an amd64 runner, so the arm64 build goes through QEMU.
     # Measured locally on the same Dockerfile with no cache: 128s native arm64
     # vs 386s emulated, a 3x penalty. Runner cores are slower than a laptop's,
