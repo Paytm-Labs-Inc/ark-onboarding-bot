@@ -78,5 +78,22 @@ class ChunkerTests(unittest.TestCase):
         self.assertTrue(any(piece.startswith(joined) for piece in pieces[1:]))
 
 
+
+class SplitSectionKeepsHeadingTests(unittest.TestCase):
+    def test_every_piece_of_a_split_section_starts_with_its_heading(self) -> None:
+        from src import chunker
+        with tempfile.TemporaryDirectory() as tmp:
+            body = "## Start here\n\n" + ("step text " * 400)  # well over MAX_CHARS
+            Path(tmp, "page.md").write_text("Source: https://x/page\n" + body, encoding="utf-8")
+            chunks = chunker.load_chunks(Path(tmp))
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertTrue(chunk["text"].startswith("## Start here"), chunk["text"][:40])
+
+    def test_the_real_start_here_section_is_pinned_on_every_piece(self) -> None:
+        from src.chunker import DATA_DIR, load_chunks
+        pieces = [c for c in load_chunks(DATA_DIR) if c["text"].startswith("## Start here")]
+        self.assertGreater(len(pieces), 1, "section no longer splits; test needs updating")
+
 if __name__ == "__main__":
     unittest.main()

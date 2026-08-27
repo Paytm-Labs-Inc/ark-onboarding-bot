@@ -196,7 +196,6 @@ class PinnedMarkersMatchCorpusTests(unittest.TestCase):
     """
 
     def test_every_marker_matches_a_chunk(self) -> None:
-        from src import retriever
         from src.chunker import DATA_DIR, load_chunks
 
         chunks = load_chunks(DATA_DIR)

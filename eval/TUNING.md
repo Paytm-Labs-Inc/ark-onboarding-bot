@@ -2,7 +2,9 @@
 
 Grid search on the gold set (`eval/questions.json`), Aug 2026. **44 questions** total: **32 scored** (retrieval hit-rate) + **12 refusal** (out-of-scope prompts for answer eval).
 
-**Winner (shipped):** `MAX_CHARS=2000`, `top_k=8`, `all-MiniLM-L6-v2` → **32/32 (100%)** retrieval hit on the scored set.
+**Winner (this grid, 2026-08-20):** `MAX_CHARS=2000`, `top_k=8`, `all-MiniLM-L6-v2` → **32/32 (100%)** retrieval hit on the scored set.
+
+> **Superseded 2026-08-27:** shipped `MAX_CHARS=900`. The grid never measured encoder truncation: at 2000, 44.6% of chunks exceeded the model's 256-token window. Hit@8 is the same at 900 once labels name every page that answers a question (#46); chunk-level MRR (#40) is the metric to tune against from here.
 
 **CI gate:** `.github/workflows/eval.yml` runs `python eval/run_eval.py --quiet-retriever --only-scored` on every PR; exit non-zero if hit-rate drops below 100% on scored questions. Refusal cases run on `main` with `--full --only-refusals` when `CURSOR_API_KEY` is configured.
 
