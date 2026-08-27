@@ -151,3 +151,21 @@ class ChunkLevelMetricsTests(unittest.TestCase):
         self.assertEqual(result.chunk_rank, 2)
         self.assertEqual(result.answer_markers, ["mcp.json"])
         mock_retrieve.assert_called_once_with("where?", k=8, use_pins=False)
+
+
+class NoPinsGuardTests(unittest.TestCase):
+    def test_no_pins_refuses_full(self) -> None:
+        err = io.StringIO()
+        with patch("sys.stderr", err):
+            code = main(["--full", "--no-pins", "--only-scored"])
+        self.assertEqual(code, 2)
+        self.assertIn("retrieval-only", err.getvalue())
+
+    @patch("src.retrieve.retrieve", side_effect=RuntimeError("index down"))
+    def test_error_path_keeps_markers_so_it_counts_as_a_miss(self, _r) -> None:
+        item = {"id": "q", "question": "q?", "expected_source": "x", "answer_must_include": ["m"]}
+        result = evaluate_question(item, top_k=8, run_answer=False)
+        self.assertEqual(result.answer_markers, ["m"])
+        self.assertIsNone(result.chunk_rank)
+        hits, labelled, _ = chunk_metrics([result], top_k=8)
+        self.assertEqual((hits, labelled), (0, 1))

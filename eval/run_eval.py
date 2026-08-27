@@ -220,6 +220,9 @@ def evaluate_question(
             answer_hit=None if not run_answer else False,
             answer_preview=None,
             error=str(exc),
+            # Keep the label so a failed question counts as a chunk miss rather
+            # than silently dropping out of recall and MRR.
+            answer_markers=markers,
         )
 
 
@@ -467,6 +470,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     use_pins = not args.no_pins
+
+    if args.no_pins and args.full:
+        # ask() retrieves with the production rules on; a --full report under
+        # --no-pins would mix two retrievals under one config line.
+        print("--no-pins is a retrieval-only switch; drop --full.", file=sys.stderr)
+        return 2
 
     if args.only_refusals and not args.full:
         print(
