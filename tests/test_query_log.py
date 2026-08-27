@@ -107,5 +107,36 @@ class DegradedFieldTests(unittest.TestCase):
         self.assertEqual(record["stream_errors"], [])
 
 
+
+class ConcurrentAppendTests(unittest.TestCase):
+    """The lock's one promise: every line stays valid JSON under concurrent writers."""
+
+    def test_concurrent_writers_never_interleave_a_line(self) -> None:
+        import json, tempfile, threading
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "q.jsonl"
+            with patch.object(query_log_module, "QUERY_LOG_PATH", path):
+                big = "x" * 8000
+                def worker(i):
+                    for j in range(20):
+                        query_log_module.append_query_log({"w": i, "j": j, "pad": big})
+                threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
+                for t in threads: t.start()
+                for t in threads: t.join()
+                lines = path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 200)
+        for line in lines:
+            json.loads(line)
+
+    def test_a_held_lock_times_out_as_an_oserror_instead_of_hanging(self) -> None:
+        with patch.object(query_log_module, "_WRITE_LOCK_TIMEOUT_SECONDS", 0.05):
+            query_log_module._WRITE_LOCK.acquire()
+            try:
+                with self.assertRaises(OSError):
+                    query_log_module.append_query_log({"x": 1})
+            finally:
+                query_log_module._WRITE_LOCK.release()
+
 if __name__ == "__main__":
     unittest.main()

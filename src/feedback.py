@@ -12,6 +12,7 @@ FEEDBACK_PATH = Path(__file__).resolve().parent.parent / "eval" / "feedback.json
 
 
 _WRITE_LOCK = threading.Lock()
+_WRITE_LOCK_TIMEOUT_SECONDS = 2.0
 
 
 def append_feedback(record: dict[str, Any]) -> None:
@@ -19,8 +20,13 @@ def append_feedback(record: dict[str, Any]) -> None:
     payload = dict(record)
     payload.setdefault("ts", datetime.now(timezone.utc).isoformat())
     FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with _WRITE_LOCK, FEEDBACK_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    if not _WRITE_LOCK.acquire(timeout=_WRITE_LOCK_TIMEOUT_SECONDS):
+        raise OSError("feedback log is busy")
+    try:
+        with FEEDBACK_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    finally:
+        _WRITE_LOCK.release()
 
 
 def read_feedback(path: Path | None = None) -> list[dict[str, Any]]:

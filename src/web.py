@@ -261,7 +261,9 @@ def api_feedback(body: FeedbackRequest) -> dict[str, bool]:
             }
         )
     except OSError as exc:
-        # Here the write is the request, so say so honestly rather than 500.
+        # Here the write is the request, so say so honestly rather than 500 --
+        # and say it in the log too, or availability improves while visibility drops.
+        print(f"feedback write failed: {exc}", flush=True)
         raise HTTPException(status_code=503, detail="Feedback could not be saved right now.") from exc
     return {"ok": True}
 

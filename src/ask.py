@@ -144,7 +144,7 @@ def _log_ask_result(
     except OSError as exc:
         # Observability must never cost the user their answer: a full disk or a
         # read-only filesystem is a logging problem, not an answering problem.
-        print(f"query log write failed: {exc}")
+        print(f"query log write failed: {exc}", flush=True)
 
 
 def _cached_retrieve_scored(query: str, *, k: int) -> RetrievalResult:
