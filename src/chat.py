@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from src.ask import ask, ask_stream
+from src.answer import is_non_answer
 from src.citations import parse_citation
 
 MAX_HISTORY_TURNS = 4
@@ -122,6 +123,9 @@ def ask_in_session_stream(
             # sees it. Kept absent when clean, matching the stream contract.
             if event.get("degraded"):
                 final["degraded"] = event["degraded"]
+            # Same predicate Slack uses, decided at the consumer boundary so the
+            # answer text stays exact for is_non_answer and the eval.
+            final["handoff"] = is_non_answer(answer_text)
             yield final
         else:
             yield event

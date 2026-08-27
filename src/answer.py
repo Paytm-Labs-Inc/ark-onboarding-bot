@@ -20,6 +20,12 @@ import httpx
 # feature reads as "not yet" rather than "no".
 REFUSAL_PHRASE = "I don't have an answer for that yet."
 ROADMAP_PHRASE = "We have this on our roadmap and are working towards it."
+# Shown under every decline, in both consumers. A decline with no next step is
+# the worst outcome for someone stuck on a live problem.
+HANDOFF_LINE = (
+    "If this is a live issue, post in #foundry-users with your session id, "
+    "the exact command and its output."
+)
 
 
 def is_non_answer(text: str) -> bool:
@@ -620,8 +626,17 @@ def _finalize_parsed(
 ) -> dict[str, Any]:
     answer_text = str(parsed.get("answer", "")).strip()
     citations = _resolve_citations(parsed, chunks)
+    if answer_text == ROADMAP_PHRASE and not any(_is_roadmap_source(c) for c in citations):
+        # Rule 4(b) has the model promise a roadmap whenever the chunks are
+        # silent, which turns every gap in the docs into a commitment. Keep the
+        # promise only when the roadmap page itself backed it.
+        answer_text = REFUSAL_PHRASE
 
     return {"answer": answer_text or REFUSAL_PHRASE, "citations": citations}
+
+
+def _is_roadmap_source(label: str) -> bool:
+    return label.split(" -- ", 1)[0].strip().lower() == "roadmap"
 
 
 def _answer_text_from_partial_json(raw: str) -> str:

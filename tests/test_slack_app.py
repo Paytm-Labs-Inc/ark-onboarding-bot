@@ -196,5 +196,15 @@ class SlackHelpersTests(unittest.TestCase):
         client.chat_update.assert_not_called()
 
 
+
+class HandoffLineTests(unittest.TestCase):
+    def test_decline_carries_the_handoff_line(self) -> None:
+        from src.answer import REFUSAL_PHRASE, ROADMAP_PHRASE
+        for phrase in (REFUSAL_PHRASE, ROADMAP_PHRASE):
+            self.assertIn("#foundry-users", format_response({"answer": phrase, "citations": []}))
+
+    def test_grounded_answer_has_no_handoff_line(self) -> None:
+        self.assertNotIn("#foundry-users", format_response({"answer": "Run ark host enroll", "citations": []}))
+
 if __name__ == "__main__":
     unittest.main()

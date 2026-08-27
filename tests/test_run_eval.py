@@ -17,6 +17,7 @@ from eval.run_eval import (
     full_eval_ready,
     main,
     print_report,
+    roadmap_promise_unbacked,
 )
 
 
@@ -169,3 +170,11 @@ class NoPinsGuardTests(unittest.TestCase):
         self.assertIsNone(result.chunk_rank)
         hits, labelled, _ = chunk_metrics([result], top_k=8)
         self.assertEqual((hits, labelled), (0, 1))
+
+
+class RoadmapPromiseEvalTests(unittest.TestCase):
+    def test_promise_without_roadmap_citation_is_unbacked(self) -> None:
+        from src.answer import ROADMAP_PHRASE
+        self.assertTrue(roadmap_promise_unbacked(ROADMAP_PHRASE, ["faq -- https://x"]))
+        self.assertFalse(roadmap_promise_unbacked(ROADMAP_PHRASE, ["roadmap -- https://x"]))
+        self.assertFalse(roadmap_promise_unbacked("Run ark host enroll.", []))

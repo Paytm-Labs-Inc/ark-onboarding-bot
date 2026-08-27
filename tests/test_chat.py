@@ -70,5 +70,20 @@ class DegradedPassthroughTests(unittest.TestCase):
         self.assertNotIn("degraded", done)
 
 
+
+class HandoffFlagTests(unittest.TestCase):
+    def _done(self, answer):
+        def fake_stream(question, **kwargs):
+            yield {"type": "done", "answer": answer, "citations": [], "retrieved_sources": []}
+        with patch("src.chat.ask_stream", side_effect=fake_stream):
+            return list(ask_in_session_stream(None, "q?"))[-1]
+
+    def test_decline_sets_handoff(self) -> None:
+        from src.answer import REFUSAL_PHRASE
+        self.assertTrue(self._done(REFUSAL_PHRASE)["handoff"])
+
+    def test_grounded_answer_does_not(self) -> None:
+        self.assertFalse(self._done("Run ark host enroll.")["handoff"])
+
 if __name__ == "__main__":
     unittest.main()

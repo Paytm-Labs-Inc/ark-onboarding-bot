@@ -442,6 +442,11 @@
 
     function finishStreamingTurn(turn, answerEl, sources, meta) {
       const answerBlock = turn.querySelector(".answer");
+      if (meta && meta.handoff) {
+        answerBlock.insertAdjacentHTML("beforeend",
+          '<p class="degraded-note">If this is a live issue, post in <strong>#foundry-users</strong> '
+          + "with your session id, the exact command and its output.</p>");
+      }
       const degradedHtml = renderDegradedNote(meta && meta.degraded, sources);
       if (degradedHtml) {
         answerBlock.insertAdjacentHTML("beforeend", degradedHtml);
@@ -535,6 +540,7 @@
           retrieved_sources: payload.retrieved_sources || [],
           session_id: payload.session_id,
           degraded: payload.degraded || null,
+          handoff: Boolean(payload.handoff),
         };
         if (payload.answer && answerEl.textContent !== payload.answer) {
           answerEl.textContent = payload.answer;

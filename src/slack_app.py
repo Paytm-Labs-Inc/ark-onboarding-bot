@@ -24,6 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from src.ask import ask, ask_stream
+from src.answer import HANDOFF_LINE, is_non_answer
 
 _MENTION_RE = re.compile(r"^\s*<@[^>]+>\s*")
 
@@ -48,6 +49,8 @@ def format_response(result: dict) -> str:
             f"{answer}\n\n_The connection dropped while this answer was being "
             f"written — {detail}._"
         )
+    if is_non_answer(answer):
+        answer = f"{answer}\n\n_{HANDOFF_LINE}_"
     if citations:
         cites = "\n".join(f"• {c}" for c in citations)
         return f"{answer}\n\n*Sources*\n{cites}"

@@ -138,6 +138,14 @@ def filter_questions(
     return questions
 
 
+def roadmap_promise_unbacked(answer: str, citations: list[str]) -> bool:
+    from src.answer import ROADMAP_PHRASE
+
+    if ROADMAP_PHRASE not in answer:
+        return False
+    return not any(norm_source(c) == "roadmap" for c in citations)
+
+
 def first_relevant_rank(chunks: list[dict], markers: list[str]) -> int | None:
     """1-based rank of the first chunk carrying any marker, or None."""
     for rank, chunk in enumerate(chunks, start=1):
@@ -192,6 +200,10 @@ def evaluate_question(
 
             if markers and not expect_refusal:
                 answer_hit = answer_contains_fact(answer_text, markers)
+            if roadmap_promise_unbacked(answer_text, citations):
+                # A roadmap commitment the roadmap page did not back is a wrong
+                # answer whatever else it contains.
+                answer_hit = False
 
         return QuestionResult(
             id=str(item.get("id", question)),
