@@ -286,10 +286,25 @@ class ErrorTextAndHeadersTests(unittest.TestCase):
         self.assertNotIn("inference.paytm.com", response.text)
 
     def test_security_headers_on_every_response(self) -> None:
-        headers = self.client.get("/health").headers
-        self.assertEqual(headers["X-Frame-Options"], "DENY")
-        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
-        self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+        with patch("src.web.ask_in_session", side_effect=RuntimeError("x")):
+            responses = [
+                self.client.get("/health"),
+                self.client.post("/api/ask", json={"question": "q"}),  # 502
+                self.client.get("/reviews", follow_redirects=False),  # 303 to login when a token is set, else 200
+            ]
+        for response in responses:
+            headers = response.headers
+            self.assertEqual(headers["X-Frame-Options"], "DENY", response.url)
+            self.assertEqual(headers["X-Content-Type-Options"], "nosniff", response.url)
+            self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"], response.url)
+
+    @patch("src.web._log_upstream_failure")
+    @patch("src.web.ask_in_session", side_effect=ValueError("PI_API_KEY not set. Set it, or set ANSWER_BACKEND=cursor."))
+    def test_config_valueerror_is_logged_and_not_echoed(self, _ask, log) -> None:
+        response = self.client.post("/api/ask", json={"question": "q"})
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("PI_API_KEY", response.text)
+        log.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()

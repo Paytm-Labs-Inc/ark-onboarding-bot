@@ -220,7 +220,6 @@ class HandoffOnSalvagedDeclineTests(unittest.TestCase):
 class SlackErrorTextTests(unittest.TestCase):
     @patch("src.slack_app.ask", side_effect=RuntimeError("api.inference.paytm.com HTTP 503"))
     def test_gateway_error_text_is_not_posted_to_the_channel(self, _ask) -> None:
-        from src.slack_app import safe_answer
         text = safe_answer("how do I enroll?")
         self.assertNotIn("inference.paytm.com", text)
         self.assertIn("try again", text.lower())

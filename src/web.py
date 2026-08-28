@@ -118,8 +118,10 @@ async def enforce_auth(request: Request, call_next):
     return RedirectResponse(url=f"{base_path()}/login", status_code=303)
 
 
-# Added after enforce_auth so it wraps outermost: normalize the path (strip the
-# prefix if the ingress passed it through) before auth and routing see it.
+# Middleware added later wraps what came before. security_headers (below) is
+# added after enforce_auth, so it stamps every response including the 401 and
+# the login redirect; PrefixStrip is added last and is outermost, so the path
+# is normalised before anything else sees it.
 app.add_middleware(PrefixStripMiddleware)
 
 
@@ -258,6 +260,7 @@ def reviews_page() -> str:
 # Upstream failures name hostnames, model ids and gateway messages. Those go
 # to the log; the user gets a sentence they can act on.
 TIMEOUT_MESSAGE = "The answer service took too long. Please try again."
+BAD_REQUEST_MESSAGE = "That question could not be processed. Please rephrase and try again."
 UNAVAILABLE_MESSAGE = "The answer service is unavailable right now. Please try again shortly."
 
 
@@ -309,7 +312,11 @@ def api_ask(body: AskRequest, _limit: None = Depends(enforce_ask_rate_limit)) ->
     try:
         return ask_in_session(body.session_id, question)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Config errors surface as ValueError too (a missing key, bad
+        # PI_EXTRA_PARAMS) and their text names the config; log it, say
+        # something the user can act on.
+        _log_upstream_failure(exc)
+        raise HTTPException(status_code=400, detail=BAD_REQUEST_MESSAGE) from exc
     except TimeoutError as exc:
         _log_upstream_failure(exc)
         raise HTTPException(status_code=504, detail=TIMEOUT_MESSAGE) from exc
@@ -327,7 +334,8 @@ def _ask_stream_events(session_id: str | None, question: str) -> Iterator[str]:
         for event in ask_in_session_stream(session_id, question):
             yield _sse_event(event)
     except ValueError as exc:
-        yield _sse_event({"type": "error", "detail": str(exc)})
+        _log_upstream_failure(exc)
+        yield _sse_event({"type": "error", "detail": BAD_REQUEST_MESSAGE})
     except TimeoutError as exc:
         _log_upstream_failure(exc)
         yield _sse_event({"type": "error", "detail": TIMEOUT_MESSAGE})
