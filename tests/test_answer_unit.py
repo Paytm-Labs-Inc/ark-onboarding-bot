@@ -805,5 +805,32 @@ class RoadmapPromiseTests(unittest.TestCase):
         self.assertEqual(result["answer"], ROADMAP_PHRASE)
         self.assertEqual(result["citations"], ["roadmap -- https://x/roadmap"])
 
+
+class NonAnswerMatchingTests(unittest.TestCase):
+    def test_exact_phrases_still_match(self) -> None:
+        self.assertTrue(is_non_answer(REFUSAL_PHRASE))
+        self.assertTrue(is_non_answer(ROADMAP_PHRASE))
+
+    def test_paraphrased_and_decorated_declines_match(self) -> None:
+        for text in (
+            "I don't have an answer for that yet",          # no full stop
+            "I don’t have an answer for that yet.",         # curly apostrophe
+            "  i don't have an answer for that yet.  ",     # case, whitespace
+            "I don't have an answer for that yet. Try #foundry-users.",  # trailing sentence
+            "We have this on our roadmap and are working towards it!",
+            "Sorry, I don't have an answer for that yet.",           # leading decoration
+            "Unfortunately, we have this on our roadmap and are working towards it.",
+        ):
+            self.assertTrue(is_non_answer(text), text)
+
+    def test_grounded_answers_do_not_match(self) -> None:
+        for text in (
+            "Run ark host enroll.",
+            "I don't have the exact number, but run ark workspace doctor.",  # not the phrase
+            "Run ark host enroll. " * 8 + "I don't have an answer for that yet.",  # phrase far down a real answer
+            "",
+        ):
+            self.assertFalse(is_non_answer(text), text)
+
 if __name__ == "__main__":
     unittest.main()

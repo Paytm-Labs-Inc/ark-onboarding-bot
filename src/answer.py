@@ -29,8 +29,25 @@ HANDOFF_LINE = (
 
 
 def is_non_answer(text: str) -> bool:
-    """True when the answer is a decline rather than a grounded answer."""
-    return text.strip() in (REFUSAL_PHRASE, ROADMAP_PHRASE)
+    """True when the answer is a decline rather than a grounded answer.
+
+    The prompt asks for the exact phrase, but models paraphrase, re-punctuate
+    and add a trailing sentence. An exact match counted those as grounded
+    answers -- which hid refusals from the query log, the hand-off line and
+    the eval. Match on the normalised opening instead.
+    """
+    head = _normalise_decline(text)[:_DECLINE_WINDOW]
+    return any(_normalise_decline(p) in head for p in (REFUSAL_PHRASE, ROADMAP_PHRASE))
+
+
+# A decline is recognised when the phrase sits within the first stretch of the
+# answer: tolerates "Sorry, ..." before it and a hand-off after it, without
+# turning a long grounded answer that merely quotes the phrase into a refusal.
+_DECLINE_WINDOW = 120
+
+
+def _normalise_decline(text: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9 ]+", " ", text.lower()).split())
 
 # Which provider generates the answer. `pi` posts to the Pi Inference gateway,
 # an OpenAI-compatible completions endpoint. `cursor` drives the Cursor agent,
@@ -672,7 +689,7 @@ def roadmap_promise_unbacked(answer: str, citations: list[str]) -> bool:
     phrase counts wherever it appears in the answer, not only when it is the
     whole answer.
     """
-    if ROADMAP_PHRASE not in answer:
+    if _normalise_decline(ROADMAP_PHRASE) not in _normalise_decline(answer):
         return False
     return not any(_is_roadmap_source(c) for c in citations)
 

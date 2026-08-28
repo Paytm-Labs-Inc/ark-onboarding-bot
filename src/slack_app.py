@@ -37,8 +37,8 @@ def format_response(result: dict) -> str:
     citations = [str(c) for c in result.get("citations", []) if c]
     if not answer:
         return PROMPT_HINT
-    # Decide on the undecorated text: is_non_answer is an exact match, and the
-    # salvage note below would otherwise hide a decline from it.
+    # Decide on the undecorated text, before the salvage note below is
+    # appended to it.
     decline = is_non_answer(answer)
     # Only a salvaged answer is flagged. A blocking-chunked fallback still
     # produced a complete answer, so saying so would be noise to the reader.
