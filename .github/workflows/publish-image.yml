@@ -15,6 +15,11 @@ name: Publish image
 #   AWS_ECR_REGION          e.g. ap-south-1
 #   AWS_ECR_ACCOUNT_ID      registry account id
 #   AWS_ECR_REPO_PREFIX     namespace within the registry (pai-mlops-platform)
+# Optional:
+#   AWS_ECR_IMAGE_NAME      repository name under the prefix. Defaults to
+#                           ark-chatbot, which is what the platform created
+#                           (arn:...:repository/pai-mlops-platform/ark-chatbot).
+#                           The GHCR image keeps the repo's own name.
 #
 # Platform-side preconditions, in pi-risk-mlops (same as foundry-platform's
 # publish job documents them):
@@ -149,7 +154,7 @@ jobs:
             echo "::error::AWS_ECR_REPO_PREFIX repo variable is unset -- cannot verify the ECR repo"
             exit 1
           fi
-          name="${prefix}/ark-onboarding-bot"
+          name="${prefix}/${{ vars.AWS_ECR_IMAGE_NAME || 'ark-chatbot' }}"
           if ! err=$(aws ecr describe-repositories --repository-names "$name" --region "$region" --registry-id "${{ vars.AWS_ECR_ACCOUNT_ID }}" 2>&1 >/dev/null); then
             echo "::error::ECR repo $name not reachable, publish would fail on push (repo missing, or this role lacks ecr:DescribeRepositories on it): ${err##*$'\n'}"
             echo "Provision it in pi-risk-mlops (terraform/environments/platform/03-irsa/ark.tf" \
@@ -170,7 +175,7 @@ jobs:
             latest=false
           images: |
             ghcr.io/${{ github.repository_owner }}/ark-onboarding-bot
-            ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' && format('{0}.dkr.ecr.{1}.amazonaws.com/{2}/{3}', vars.AWS_ECR_ACCOUNT_ID, vars.AWS_ECR_REGION, vars.AWS_ECR_REPO_PREFIX, 'ark-onboarding-bot') || '' }}
+            ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' && format('{0}.dkr.ecr.{1}.amazonaws.com/{2}/{3}', vars.AWS_ECR_ACCOUNT_ID, vars.AWS_ECR_REGION, vars.AWS_ECR_REPO_PREFIX, vars.AWS_ECR_IMAGE_NAME || 'ark-chatbot') || '' }}
           tags: |
             type=ref,event=branch,suffix=-arm64
             type=ref,event=tag,suffix=-arm64
