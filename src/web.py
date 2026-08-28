@@ -276,6 +276,7 @@ def reviews_page() -> str:
 TIMEOUT_MESSAGE = "The answer service took too long. Please try again."
 BAD_REQUEST_MESSAGE = "That question could not be processed. Please rephrase and try again."
 UNAVAILABLE_MESSAGE = "The answer service is unavailable right now. Please try again shortly."
+BUSY_MESSAGE = "The answer service is busy. Please try again in a few seconds."
 
 
 def _log_upstream_failure(exc: BaseException) -> None:
@@ -334,6 +335,9 @@ def api_ask(body: AskRequest, _limit: None = Depends(enforce_ask_rate_limit)) ->
     except TimeoutError as exc:
         _log_upstream_failure(exc)
         raise HTTPException(status_code=504, detail=TIMEOUT_MESSAGE) from exc
+    except PiAtCapacity as exc:
+        # Distinct from other RuntimeErrors: this one is temporary by definition.
+        raise HTTPException(status_code=503, detail=BUSY_MESSAGE, headers={"Retry-After": "10"}) from exc
     except RuntimeError as exc:
         _log_upstream_failure(exc)
         raise HTTPException(status_code=502, detail=UNAVAILABLE_MESSAGE) from exc
@@ -353,6 +357,8 @@ def _ask_stream_events(session_id: str | None, question: str) -> Iterator[str]:
     except TimeoutError as exc:
         _log_upstream_failure(exc)
         yield _sse_event({"type": "error", "detail": TIMEOUT_MESSAGE})
+    except PiAtCapacity:
+        yield _sse_event({"type": "error", "detail": BUSY_MESSAGE})
     except RuntimeError as exc:
         _log_upstream_failure(exc)
         yield _sse_event({"type": "error", "detail": UNAVAILABLE_MESSAGE})
