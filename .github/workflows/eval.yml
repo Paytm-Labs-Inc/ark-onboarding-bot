@@ -6,6 +6,19 @@ on:
     branches: [main]
 
 jobs:
+  workflow-lint:
+    # publish-image.yml only ever runs on main, so a broken expression in it
+    # would surface after merge, at the moment an image is wanted. Lint every
+    # workflow file on the PR instead.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
+
   retrieval-eval:
     runs-on: ubuntu-latest
     steps:
