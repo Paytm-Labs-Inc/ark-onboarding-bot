@@ -29,8 +29,19 @@ HANDOFF_LINE = (
 
 
 def is_non_answer(text: str) -> bool:
-    """True when the answer is a decline rather than a grounded answer."""
-    return text.strip() in (REFUSAL_PHRASE, ROADMAP_PHRASE)
+    """True when the answer is a decline rather than a grounded answer.
+
+    The prompt asks for the exact phrase, but models paraphrase, re-punctuate
+    and add a trailing sentence. An exact match counted those as grounded
+    answers -- which hid refusals from the query log, the hand-off line and
+    the eval. Match on the normalised opening instead.
+    """
+    opening = _normalise_decline(text)
+    return any(opening.startswith(_normalise_decline(p)) for p in (REFUSAL_PHRASE, ROADMAP_PHRASE))
+
+
+def _normalise_decline(text: str) -> str:
+    return re.sub(r"[^a-z0-9 ]+", "", " ".join(text.lower().split()))
 
 # Which provider generates the answer. `pi` posts to the Pi Inference gateway,
 # an OpenAI-compatible completions endpoint. `cursor` drives the Cursor agent,
