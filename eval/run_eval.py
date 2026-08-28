@@ -32,6 +32,9 @@ class QuestionResult:
     answer_hit: bool | None
     answer_preview: str | None
     error: str | None = None
+    # Full answer text, kept in the JSON report so a gate failure can be read
+    # without re-running the model (the log only shows the 240-char preview).
+    answer: str | None = None
     # Chunk-level: 1-based rank of the first retrieved chunk that carries one of
     # the question's answer_must_include facts; None when none did. Reuses the
     # answer markers as the relevance label, so no new labelling and the label
@@ -230,6 +233,7 @@ def evaluate_question(
             citations=citations,
             answer_hit=answer_hit,
             answer_preview=answer_preview,
+            answer=answer_text if run_answer else None,
             chunk_rank=chunk_rank,
             answer_markers=markers,
         )

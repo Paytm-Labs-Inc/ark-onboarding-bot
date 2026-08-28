@@ -111,3 +111,11 @@ jobs:
           export ANSWER_BACKEND=pi
           echo "Full eval running on ANSWER_BACKEND=$ANSWER_BACKEND"
           python eval/run_eval.py --full --only-scored --quiet-retriever
+      - name: Upload eval report
+        # Always, so a red gate leaves the full answers and citations behind.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-eval-report
+          path: eval/results/eval-*.json
+          if-no-files-found: ignore
