@@ -32,6 +32,12 @@ class QuestionResult:
     answer_hit: bool | None
     answer_preview: str | None
     error: str | None = None
+    # Full answer text, kept in the JSON report so a gate failure can be read
+    # without re-running the model (the log only shows the 240-char preview).
+    answer: str | None = None
+    # True when the citation missed on the first ask and the question was asked
+    # a second time (see evaluate_question). The final fields hold the second ask.
+    retried: bool = False
     # Chunk-level: 1-based rank of the first retrieved chunk that carries one of
     # the question's answer_must_include facts; None when none did. Reuses the
     # answer markers as the relevance label, so no new labelling and the label
@@ -197,20 +203,32 @@ def evaluate_question(
         answer_hit: bool | None = None
         answer_preview: str | None = None
 
+        retried = False
         if run_answer:
-            result = ask(question, k=top_k, log=False, channel="eval")
-            answer_text = str(result.get("answer", ""))
-            answer_preview = answer_text[:240]
-            raw_citations = result.get("citations", [])
-            citations = [str(item) for item in raw_citations] if isinstance(raw_citations, list) else []
+            # The model picks which of several correct pages to cite, and that
+            # choice varies run to run; three real runs each missed a different
+            # single question. A scored (non-refusal) miss is asked once more,
+            # and passing on the second ask counts -- but is recorded, so
+            # flakiness is visible in the log and the report, never hidden.
+            for attempt in (1, 2):
+                result = ask(question, k=top_k, log=False, channel="eval")
+                answer_text = str(result.get("answer", ""))
+                answer_preview = answer_text[:240]
+                raw_citations = result.get("citations", [])
+                citations = [str(item) for item in raw_citations] if isinstance(raw_citations, list) else []
 
-            if expect_refusal:
-                citation_hit = is_non_answer(answer_text) and not citations
-                answer_hit = citation_hit
-            elif accepted:
-                citation_hit = any(any_source_matches(e, citations) for e in accepted)
-            else:
-                citation_hit = False
+                if expect_refusal:
+                    citation_hit = is_non_answer(answer_text) and not citations
+                    answer_hit = citation_hit
+                elif accepted:
+                    citation_hit = any(any_source_matches(e, citations) for e in accepted)
+                else:
+                    citation_hit = False
+
+                if citation_hit or expect_refusal or not accepted or attempt == 2:
+                    break
+                retried = True
+                print(f"[RETRY] {item.get('id', question)}: cited {citations} on the first ask; asking once more")
 
             if markers and not expect_refusal:
                 answer_hit = answer_contains_fact(answer_text, markers)
@@ -230,6 +248,8 @@ def evaluate_question(
             citations=citations,
             answer_hit=answer_hit,
             answer_preview=answer_preview,
+            answer=answer_text if run_answer else None,
+            retried=retried,
             chunk_rank=chunk_rank,
             answer_markers=markers,
         )
@@ -369,6 +389,13 @@ def print_report(
             f"Citation hit:          {citation_pass}/{len(citation_scored)} "
             f"({_pct(citation_pass, len(citation_scored))}%)"
         )
+        retried = [r for r in citation_scored if r.retried]
+        if retried:
+            print(
+                f"Citation retries:      {len(retried)} asked twice "
+                f"({sum(1 for r in retried if r.citation_hit)} passed on the second ask): "
+                + ", ".join(r.id for r in retried)
+            )
 
         answer_scored = [r for r in scored if r.answer_hit is not None]
         if answer_scored:

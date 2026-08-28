@@ -6,6 +6,19 @@ on:
     branches: [main]
 
 jobs:
+  workflow-lint:
+    # publish-image.yml only ever runs on main, so a broken expression in it
+    # would surface after merge, at the moment an image is wanted. Lint every
+    # workflow file on the PR instead.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
+
   retrieval-eval:
     runs-on: ubuntu-latest
     steps:
@@ -34,6 +47,8 @@ jobs:
 
   refusal-eval:
     runs-on: ubuntu-latest
+    # 11 real model calls, each bounded by PI_TIMEOUT_SECONDS x attempts.
+    timeout-minutes: 30
     # Runs on PRs too. Gating only on push-to-main meant a backend change could
     # pass review and break main on merge, which is exactly what happened in #25.
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
@@ -60,22 +75,25 @@ jobs:
           PI_API_KEY: ${{ secrets.PI_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
-          # This gate asks a real model whether it refuses. There is no way to
-          # check that without one, so with no key configured it skips loudly
-          # rather than failing every push and training us to ignore red.
+          # This gate asks a real model whether it refuses. Publish is gated on
+          # this workflow being green, so a silent skip here is a green light
+          # for an unverified image. Fail closed: the key is a repository secret.
           if [ -z "$PI_API_KEY" ] && [ -z "$CURSOR_API_KEY" ]; then
-            echo "::warning title=Refusal gate skipped::No PI_API_KEY or CURSOR_API_KEY configured. Refusal behaviour is UNVERIFIED on this run. Add PI_API_KEY as a repository secret to turn this gate back on."
-            exit 0
+            echo "::error title=Refusal gate cannot run::No PI_API_KEY or CURSOR_API_KEY configured. Refusal behaviour is UNVERIFIED and publish must not proceed. Add PI_API_KEY as a repository secret. (Fork PRs never receive secrets; open the PR from a branch in this repo.)"
+            exit 1
           fi
-          # Prefer Pi Inference: it is a plain HTTPS call. The Cursor backend needs the
-          # `agent` binary on PATH, which no runner has, so it can never work here.
+          # Prefer Pi Inference: it is a plain HTTPS call. The Cursor backend tries
+          # the SDK first (cursor-sdk is in requirements.txt) and only then the
+          # `agent` CLI, so a CURSOR_API_KEY-only runner can take the SDK path.
           if [ -n "$PI_API_KEY" ]; then export ANSWER_BACKEND=pi; else export ANSWER_BACKEND=cursor; fi
           echo "Refusal gate running on ANSWER_BACKEND=$ANSWER_BACKEND"
           python eval/run_eval.py --full --only-refusals --quiet-retriever
 
   full-eval:
     runs-on: ubuntu-latest
-    # Citations + answer_must_include. Same skip-when-no-key pattern as refusal-eval.
+    # 34 real model calls; ~35 min worst case on the pi path.
+    timeout-minutes: 60
+    # Citations + answer_must_include. Same fail-closed rule as refusal-eval.
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
@@ -100,9 +118,17 @@ jobs:
           PI_API_KEY: ${{ secrets.PI_API_KEY }}
         run: |
           if [ -z "$PI_API_KEY" ]; then
-            echo "::warning title=Full eval skipped::No PI_API_KEY configured. Citation and answer scoring are UNVERIFIED. Add PI_API_KEY as a repository secret to turn this on."
-            exit 0
+            echo "::error title=Full eval cannot run::No PI_API_KEY configured. Citation and answer scoring are UNVERIFIED and publish must not proceed. Add PI_API_KEY as a repository secret. (Fork PRs never receive secrets; open the PR from a branch in this repo.)"
+            exit 1
           fi
           export ANSWER_BACKEND=pi
           echo "Full eval running on ANSWER_BACKEND=$ANSWER_BACKEND"
           python eval/run_eval.py --full --only-scored --quiet-retriever
+      - name: Upload eval report
+        # Always, so a red gate leaves the full answers and citations behind.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-eval-report
+          path: eval/results/eval-*.json
+          if-no-files-found: ignore
