@@ -232,6 +232,7 @@ class HybridRetrievalTests(unittest.TestCase):
         from src.retriever import _tokens
         toks = _tokens("Edit .cursor/mcp.json then run ark host enroll")
         self.assertIn("cursor/mcp.json", toks)
+        self.assertIn("mcp.json", toks)  # last path segment, whole
         self.assertIn("json", toks)
         self.assertIn("enroll", toks)
 

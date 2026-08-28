@@ -150,6 +150,10 @@ def _tokens(text: str) -> list[str]:
     out: list[str] = []
     for tok in _TOKEN_RE.findall(text.lower()):
         out.append(tok)
+        # A path-prefixed identifier is also reachable as its last segment,
+        # so `.cursor/mcp.json` in a page matches `mcp.json` in a question.
+        if "/" in tok:
+            out.append(tok.rsplit("/", 1)[-1])
         parts = [p for p in _SUBTOKEN_RE.split(tok) if p and p != tok]
         out.extend(parts)
     return out
@@ -193,7 +197,7 @@ class _BM25:
 
 def _rrf(*rankings: np.ndarray, k: int = 60) -> np.ndarray:
     """Reciprocal-rank fusion: each list votes 1/(k+rank) for every document."""
-    fused = np.zeros(len(rankings[0]), dtype=np.float32)
+    fused = np.zeros(max(len(r) for r in rankings), dtype=np.float32)
     for order in rankings:
         for rank, doc in enumerate(order):
             fused[int(doc)] += 1.0 / (k + rank + 1)
@@ -201,6 +205,7 @@ def _rrf(*rankings: np.ndarray, k: int = 60) -> np.ndarray:
 
 
 _DENSE_VOTES = 2
+_LEXICAL_VOTERS = 100
 
 
 def hybrid_enabled() -> bool:
@@ -332,7 +337,11 @@ def retrieve_scored(
         # and error strings support questions are made of. Fuse by rank so
         # neither score scale dominates.
         lexical = index.bm25.scores(_tokens(question))
-        lexical_order = np.argsort(-lexical, kind="stable")
+        # Only the strongest lexical matches vote; on the gold questions
+        # 339-429 of 437 chunks score non-zero from stopwords alone, and a rank
+        # among those is noise. Measured: 50 voters lost one prose question's
+        # page (34->33), 100 keeps every page at the same MRR.
+        lexical_order = np.argsort(-lexical, kind="stable")[: _LEXICAL_VOTERS]
         # Dense votes twice. Measured on the gold set: equal weight pulled one
         # prose question's page out of the top 8 (BM25 rewarding "CI",
         # "pipeline", "team"); 2:1 keeps every page and lifts chunk MRR
@@ -369,7 +378,7 @@ def retrieve_scored(
             results, index, JIRA_MCP_VPN_PINNED_MARKERS, top_k=top_k
         )
     elapsed_ms = (time.perf_counter() - start) * 1000
-    top_score = float(sims[int(order[0])])
+    top_score = float(sims.max())  # best cosine regardless of how the fusion ordered things
     print(f"retrieved {len(results)} chunks in {elapsed_ms:.0f}ms, top_score={top_score:.3f}")
     return ScoredRetrieval(chunks=results, top_score=top_score)
 
