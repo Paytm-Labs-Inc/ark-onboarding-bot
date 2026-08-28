@@ -50,6 +50,22 @@ def source_matches(expected: str, actual: str) -> bool:
     return norm_source(actual) == expected.strip().lower()
 
 
+def expected_sources(item: dict) -> list[str]:
+    """The pages that legitimately answer a question, as a list.
+
+    Some facts live on more than one page (first-run and getting-started both
+    define compute, workspace and flow), and a page-level label that names
+    only one of them fails the retriever for finding the other. Accept a
+    string or a list in questions.json.
+    """
+    expected = item.get("expected_source")
+    if expected is None:
+        return []
+    if isinstance(expected, list):
+        return [str(e) for e in expected]
+    return [str(expected)]
+
+
 def any_source_matches(expected: str, sources: list[str]) -> bool:
     return any(source_matches(expected, source) for source in sources)
 
@@ -165,16 +181,15 @@ def evaluate_question(
     from src.retrieve import retrieve
 
     question = str(item["question"])
-    expected = item.get("expected_source")
+    accepted = expected_sources(item)
+    expected = "|".join(accepted) if accepted else None
     expect_refusal = bool(item.get("expect_refusal", False))
 
     markers = [str(m) for m in (item.get("answer_must_include") or [])]
     try:
         chunks = retrieve(question, k=top_k, use_pins=use_pins)
         retrieved_sources = [str(chunk.get("source", "")) for chunk in chunks]
-        retrieval_hit = (
-            expected is not None and any_source_matches(str(expected), retrieved_sources)
-        )
+        retrieval_hit = any(any_source_matches(e, retrieved_sources) for e in accepted)
         chunk_rank = first_relevant_rank(chunks, markers) if markers else None
 
         citation_hit: bool | None = None
@@ -192,8 +207,8 @@ def evaluate_question(
             if expect_refusal:
                 citation_hit = is_non_answer(answer_text) and not citations
                 answer_hit = citation_hit
-            elif expected is not None:
-                citation_hit = any_source_matches(str(expected), citations)
+            elif accepted:
+                citation_hit = any(any_source_matches(e, citations) for e in accepted)
             else:
                 citation_hit = False
 
@@ -207,7 +222,7 @@ def evaluate_question(
         return QuestionResult(
             id=str(item.get("id", question)),
             question=question,
-            expected_source=str(expected) if expected is not None else None,
+            expected_source=expected,
             expect_refusal=expect_refusal,
             retrieval_hit=retrieval_hit,
             retrieved_sources=retrieved_sources,
@@ -222,7 +237,7 @@ def evaluate_question(
         return QuestionResult(
             id=str(item.get("id", question)),
             question=question,
-            expected_source=str(expected) if expected is not None else None,
+            expected_source=expected,
             expect_refusal=expect_refusal,
             retrieval_hit=False,
             retrieved_sources=[],
@@ -264,7 +279,8 @@ def random_baseline(scored: list[QuestionResult], top_k: int, trials: int = 200)
         for result in scored:
             picked = rng.sample(chunks, min(top_k, len(chunks)))
             sources = {norm_source(str(c.get("source", ""))) for c in picked}
-            if str(result.expected_source).strip().lower() in sources:
+            accepted = {e.strip().lower() for e in str(result.expected_source).split("|")}
+            if accepted & sources:
                 hits += 1
     return 100.0 * hits / (trials * len(scored))
 
@@ -319,9 +335,11 @@ def print_report(
     retrieval_pass = sum(1 for r in scored if r.retrieval_hit)
     print("\nEval summary")
     print("=" * 72)
+    accepted_labels = sum(len(str(r.expected_source).split("|")) for r in scored)
     print(
         f"Config: MAX_CHARS={max_chars}, top_k={top_k}, model={model_name}, "
-        f"pins={'on' if use_pins else 'off'}",
+        f"pins={'on' if use_pins else 'off'}, "
+        f"accepted_labels={accepted_labels} over {len(scored)} questions",
     )
     baseline = random_baseline(scored, top_k)
     baseline_note = f"   [random baseline {baseline:.1f}%]" if baseline is not None else ""

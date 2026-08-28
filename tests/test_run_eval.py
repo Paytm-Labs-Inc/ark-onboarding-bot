@@ -12,12 +12,14 @@ from eval.run_eval import (
     chunk_metrics,
     detail_status,
     evaluate_question,
+    expected_sources,
     filter_questions,
     first_relevant_rank,
     full_eval_ready,
     main,
     print_report,
     roadmap_promise_unbacked,
+    random_baseline,
 )
 
 
@@ -114,9 +116,6 @@ class RunEvalFilterTests(unittest.TestCase):
         self.assertIn("[CITATION_MISS]", output)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class ChunkLevelMetricsTests(unittest.TestCase):
     """Chunk-level rank uses the answer markers as the relevance label."""
@@ -187,3 +186,46 @@ class RoadmapPromiseEvalTests(unittest.TestCase):
         self.assertTrue(roadmap_promise_unbacked(ROADMAP_PHRASE, ["faq -- https://x"]))
         self.assertFalse(roadmap_promise_unbacked(ROADMAP_PHRASE, ["roadmap -- https://x"]))
         self.assertFalse(roadmap_promise_unbacked("Run ark host enroll.", []))
+class MultiSourceLabelTests(unittest.TestCase):
+    def test_expected_sources_accepts_string_or_list(self) -> None:
+        self.assertEqual(expected_sources({"expected_source": "faq"}), ["faq"])
+        self.assertEqual(expected_sources({"expected_source": ["a", "b"]}), ["a", "b"])
+        self.assertEqual(expected_sources({}), [])
+
+    @patch("src.retrieve.retrieve")
+    def test_any_accepted_page_is_a_hit(self, mock_retrieve) -> None:
+        mock_retrieve.return_value = [{"source": "first-run -- u", "text": "x"}]
+        item = {"id": "q", "question": "q?", "expected_source": ["getting-started", "first-run"]}
+        result = evaluate_question(item, top_k=8, run_answer=False)
+        self.assertTrue(result.retrieval_hit)
+        self.assertEqual(result.expected_source, "getting-started|first-run")
+
+
+class MultiSourceCitationTests(unittest.TestCase):
+    @patch("src.retrieve.retrieve", return_value=[{"source": "first-run -- u", "text": "x"}])
+    @patch("src.ask.ask")
+    def test_citation_of_any_listed_page_is_a_hit(self, mock_ask, _r) -> None:
+        item = {"id": "q", "question": "q?", "expected_source": ["getting-started", "first-run"],
+                "answer_must_include": ["nouns"]}
+        mock_ask.return_value = {"answer": "Four nouns.", "citations": ["first-run -- u"]}
+        self.assertTrue(evaluate_question(item, top_k=8, run_answer=True).citation_hit)
+        mock_ask.return_value = {"answer": "Four nouns.", "citations": ["roadmap -- u"]}
+        self.assertFalse(evaluate_question(item, top_k=8, run_answer=True).citation_hit)
+
+
+class MultiSourceNegativeTests(unittest.TestCase):
+    @patch("src.retrieve.retrieve")
+    def test_no_listed_page_is_a_miss(self, mock_retrieve) -> None:
+        mock_retrieve.return_value = [{"source": "roadmap -- u", "text": "x"}]
+        item = {"id": "q", "question": "q?", "expected_source": ["getting-started", "first-run"]}
+        self.assertFalse(evaluate_question(item, top_k=8, run_answer=False).retrieval_hit)
+
+    def test_random_baseline_reads_joined_labels(self) -> None:
+        r = QuestionResult(id="q", question="q", expected_source="getting-started|first-run",
+                           expect_refusal=False, retrieval_hit=True, retrieved_sources=[],
+                           citation_hit=None, citations=[], answer_hit=None, answer_preview=None)
+        with patch("src.chunker.load_chunks", return_value=[{"source": "first-run -- u", "text": "x"}]):
+            self.assertEqual(random_baseline([r], top_k=1, trials=3), 100.0)
+
+if __name__ == "__main__":
+    unittest.main()

@@ -113,11 +113,18 @@
   {
     "id": "compute-disk",
     "question": "how much disk space do I need on compute?",
-    "expected_source": "faq-google-doc",
-    "notes": "FAQ Q10 — 100 GB minimum",
+    "expected_source": [
+      "faq-google-doc",
+      "faq"
+    ],
+    "notes": "100 GB minimum. The FAQ is ingested twice (site scrape and Google Doc); both carry this answer.",
     "answer_must_include": [
       "100 GB"
-    ]
+    ],
+    "page_evidence": {
+      "faq-google-doc": "100 GB",
+      "faq": "100 GB"
+    }
   },
   {
     "id": "onboarding-order",
@@ -271,12 +278,19 @@
   {
     "id": "tricky-compute-workspace-flow",
     "question": "what is the difference between compute workspace and flow in ark",
-    "expected_source": "getting-started",
-    "notes": "Getting started — Compute → Workspace → Flows",
+    "expected_source": [
+      "getting-started",
+      "first-run"
+    ],
+    "notes": "Cross-page synthesis; both pages define compute, workspace and flow (first-run does so in its opening paragraph).",
     "answer_must_include": [
       "workspace",
       "flow"
-    ]
+    ],
+    "page_evidence": {
+      "getting-started": "the shape of it",
+      "first-run": "four nouns"
+    }
   },
   {
     "id": "cursor-access",
