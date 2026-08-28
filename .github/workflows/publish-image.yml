@@ -14,7 +14,34 @@ name: Publish image
 #   AWS_ECR_PUSH_ROLE_ARN   OIDC role the workflow assumes to push
 #   AWS_ECR_REGION          e.g. ap-south-1
 #   AWS_ECR_ACCOUNT_ID      registry account id
-#   AWS_ECR_REPO_PREFIX     namespace within the registry
+#   AWS_ECR_REPO_PREFIX     namespace within the registry (pai-mlops-platform)
+#
+# Platform-side preconditions, in pi-risk-mlops (same as foundry-platform's
+# publish job documents them):
+#   - the ECR repository <prefix>/ark-onboarding-bot with a lifecycle policy
+#     (terraform/environments/platform/03-irsa/ark.tf)
+#   - the GitHub OIDC role's trust policy extended to
+#     repo:Paytm-Labs-Inc/ark-onboarding-bot:ref:refs/heads/main
+#     (13-github-oidc/github-oidc.tf) -- the foundry-platform role trusts
+#     only its own repo, so without this every push is AccessDenied
+#   - platform-argocd-image-updater granted pull on the new repository
+#     (03-irsa/argocd-image-updater.tf)
+# The "Verify ECR repository exists" step below turns a missing repo into a
+# clear error before the build instead of an IAM denial minutes after it.
+#
+# Runner: foundry-platform builds natively on the self-hosted arm64 runner
+# `ark-ghci-runner`; this repo cannot confirm it has access to that runner
+# group, so the runner is a repo variable. Set PUBLISH_RUNNER=ark-ghci-runner
+# once access is granted and the QEMU emulation step skips itself; unset, it
+# builds on ubuntu-latest under emulation (~3x slower, measured). The variable
+# MUST name an arm64 runner: the build is linux/arm64 and skips emulation when
+# the variable is set, so an amd64 self-hosted runner fails in buildx.
+#
+# `latest` is published for humans only. It is safe for the deploy because the
+# argocd-image-updater entry MUST carry
+#   allow-tags: regexp:^[0-9]{14}-[a-f0-9]{7,40}-arm64$
+# (the chart README's app-of-apps snippet includes it); without that filter
+# `latest` sorts above every ordinal tag and the app pins to a mutable tag.
 
 # workflow_dispatch deliberately takes no ref input. checkout would honour one,
 # but docker/metadata-action derives its tags from the workflow context, so a
@@ -40,24 +67,24 @@ concurrency:
 jobs:
   publish:
     name: publish
+    # A dispatch may only publish main: a feature-branch dispatch would push an
+    # image of unmerged, un-evaluated code (foundry-platform hit exactly this on
+    # 2026-08-25). workflow_run is main-only by its trigger.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_sha == github.sha)
-    # ubuntu-latest is an amd64 runner, so the arm64 build goes through QEMU.
-    # Measured locally on the same Dockerfile with no cache: 128s native arm64
-    # vs 386s emulated, a 3x penalty. Runner cores are slower than a laptop's,
-    # so budget 15-35 min and keep the timeout well clear of that. If this repo
-    # turns out to have access to the self-hosted arm64 runner that
-    # foundry-platform uses, switching to it removes the emulation entirely.
-    runs-on: ubuntu-latest
+    # ubuntu-latest is amd64, so the arm64 build goes through QEMU (128s native
+    # vs 386s emulated, measured on this Dockerfile). Set the PUBLISH_RUNNER repo
+    # variable to ark-ghci-runner to build natively, as foundry-platform does.
+    runs-on: ${{ vars.PUBLISH_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 60
     permissions:
       contents: read
       packages: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # No explicit ref: the default is the commit that triggered the run,
           # which is what metadata-action tags against. See the note on the
@@ -76,10 +103,12 @@ jobs:
           printf 'tag=9%013d\n' "$n" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
+        # Only needed when emulating; a native arm64 runner has no use for it.
+        if: ${{ vars.PUBLISH_RUNNER == '' }}
         with:
           platforms: arm64
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - uses: docker/login-action@v3
         with:
@@ -98,18 +127,60 @@ jobs:
         if: ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' }}
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Install AWS CLI
+        # ubuntu-latest ships it; the ark-ghci-runner image does not.
+        if: ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' }}
+        run: |
+          set -eo pipefail
+          if command -v aws >/dev/null 2>&1; then aws --version; exit 0; fi
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
+          aws --version
+
+      # Catches a missing repo here instead of a confusing IAM-denied error from buildx minutes later.
+      - name: Verify ECR repository exists
+        if: ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' }}
+        run: |
+          set -euo pipefail
+          region="${{ vars.AWS_ECR_REGION || 'ap-south-1' }}"
+          prefix="${{ vars.AWS_ECR_REPO_PREFIX }}"
+          if [ -z "$prefix" ]; then
+            echo "::error::AWS_ECR_REPO_PREFIX repo variable is unset -- cannot verify the ECR repo"
+            exit 1
+          fi
+          name="${prefix}/ark-onboarding-bot"
+          if ! err=$(aws ecr describe-repositories --repository-names "$name" --region "$region" --registry-id "${{ vars.AWS_ECR_ACCOUNT_ID }}" 2>&1 >/dev/null); then
+            echo "::error::ECR repo $name not reachable, publish would fail on push (repo missing, or this role lacks ecr:DescribeRepositories on it): ${err##*$'\n'}"
+            echo "Provision it in pi-risk-mlops (terraform/environments/platform/03-irsa/ark.tf" \
+                 "-- aws_ecr_repository + aws_ecr_lifecycle_policy for ark-onboarding-bot; extend the" \
+                 "GitHub OIDC role trust to this repo in 13-github-oidc/github-oidc.tf; grant" \
+                 "platform-argocd-image-updater pull in 03-irsa/argocd-image-updater.tf)."
+            exit 1
+          fi
+          echo "ECR repo $name is reachable."
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
+          # latest is emitted only by the explicit raw rule below (main only);
+          # without this, metadata-action's flavor.latest=auto also emits it on
+          # tag refs, so a tag dispatch could overwrite latest with non-main code.
+          flavor: |
+            latest=false
           images: |
             ghcr.io/${{ github.repository_owner }}/ark-onboarding-bot
             ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' && format('{0}.dkr.ecr.{1}.amazonaws.com/{2}/{3}', vars.AWS_ECR_ACCOUNT_ID, vars.AWS_ECR_REGION, vars.AWS_ECR_REPO_PREFIX, 'ark-onboarding-bot') || '' }}
           tags: |
             type=ref,event=branch,suffix=-arm64
+            type=ref,event=tag,suffix=-arm64
             type=sha,prefix=,suffix=-arm64,format=short
+            # The tag argocd-image-updater selects (alphabetical on the ordinal).
             type=raw,value=${{ steps.deploy-order.outputs.tag }}-{{sha}}-arm64,enable={{is_default_branch}}
+            # Convenience for humans; the chart refuses to deploy it (image.tag is required).
+            type=raw,value=latest,enable={{is_default_branch}}
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -117,7 +188,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=ark-onboarding-bot
-          cache-to: type=gha,mode=min,scope=ark-onboarding-bot
+          cache-to: type=gha,mode=max,scope=ark-onboarding-bot
           # arm64 only, matching every other image the platform publishes.
           platforms: linux/arm64
 
@@ -131,3 +202,19 @@ jobs:
             echo "Set AWS_ECR_PUSH_ROLE_ARN / AWS_ECR_REGION / AWS_ECR_ACCOUNT_ID /"
             echo "AWS_ECR_REPO_PREFIX as repo variables and re-run to publish there."
           fi
+
+  # A red eval on main means the job above is skipped and the cluster keeps the
+  # previous image -- silently. Make that state visible where people look: this
+  # job fails the publish workflow on the commit with the reason in its name.
+  main-eval-red:
+    name: "main eval red -- image NOT published, fleet stays on the previous tag"
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion != 'success' &&
+      github.event.workflow_run.head_sha == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          echo "::error title=Image not published::eval concluded '${{ github.event.workflow_run.conclusion }}' on ${{ github.sha }}. The deployed image did not move. Fix main (or the missing PI_API_KEY secret) and the next green eval publishes."
+          exit 1
