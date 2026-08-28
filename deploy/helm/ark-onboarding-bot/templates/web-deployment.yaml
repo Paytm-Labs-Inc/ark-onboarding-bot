@@ -27,6 +27,8 @@ spec:
       {{- end }}
       securityContext:
         runAsNonRoot: true
+        runAsUser: {{ .Values.web.securityContext.runAsUser }}
+        fsGroup: {{ .Values.web.securityContext.fsGroup }}
         seccompProfile:
           type: RuntimeDefault
       containers:

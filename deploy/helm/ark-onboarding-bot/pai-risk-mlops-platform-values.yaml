@@ -18,10 +18,11 @@ image:
   tag: "90000000000052-7fd1a50-arm64"   # first published image; image-updater overwrites on each main publish
 
 web:
-  # nginx-ingress controller pods' CIDR on this cluster. REQUIRED: without it the
-  # app treats the ingress as the client, the rate limit becomes per-ingress and
-  # the login cookie loses Secure behind the ALB. Fill from the cluster (see README).
-  forwardedAllowIps: ""
+  # Interim per platform (Bhurva, 2026-08-28): the Service is ClusterIP-only, so
+  # only nginx-ingress can reach the pod and set X-Forwarded-*. Replace with the
+  # ingress-controller pod CIDR when the EKS/VPC value arrives -- in this file,
+  # never with kubectl (selfHeal reverts it).
+  forwardedAllowIps: "*"
 
 externalSecret:
   awsSecretPath: pai-risk-mlops/platform/ark-onboarding-bot

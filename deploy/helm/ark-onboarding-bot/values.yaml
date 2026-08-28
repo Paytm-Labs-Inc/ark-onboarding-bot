@@ -26,8 +26,10 @@ stateful:
 
 # Recreate, not RollingUpdate: with one replica a rolling update briefly runs
 # two pods against the same in-process state, which is the multi-replica
-# problem for the length of a deploy. A few seconds of 503 on roll is the
-# honest trade until the state moves out of the pod.
+# problem for the length of a deploy. Budget 1-4 minutes of 503 per roll (30 s
+# grace on the old pod, then the encoder warms cold under the startupProbe's
+# 5 s x 36 budget) and schedule rollouts accordingly, until the state moves
+# out of the pod.
 strategy: Recreate
 
 web:
@@ -45,7 +47,9 @@ web:
     ASK_HYBRID: "1"
   # REQUIRED when ingress.enabled: the ingress controller's address or CIDR. It is
   # what makes the rate limit per-user (not per-ingress) and marks the login
-  # cookie Secure behind TLS termination. "*" is refused by the app at startup.
+  # cookie Secure behind TLS termination. Use the ingress CIDR when known; "*" is
+  # the platform's interim behind a ClusterIP-only Service. Empty is refused so
+  # a forgotten overlay still fails closed.
   forwardedAllowIps: ""
   resources:
     # all-MiniLM-L6-v2 + torch resident: ~700 MB warm. Requests sized to schedule
@@ -66,6 +70,11 @@ web:
   # true once the go-live smoke passes against it -- untested hardening is a
   # launch-day surprise, not hardening.
   securityContext:
+    # uid/gid of the image's `app` user (Dockerfile). fsGroup makes a mounted
+    # RWO volume writable by it; without it an EBS-backed logs PVC mounts
+    # root-owned and the pod comes up healthy while every log write fails.
+    runAsUser: 10001
+    fsGroup: 10001
     readOnlyRootFilesystem: false
 
 # Query + feedback logs. The container filesystem is ephemeral: an emptyDir keeps

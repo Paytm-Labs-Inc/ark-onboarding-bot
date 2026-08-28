@@ -14,9 +14,6 @@ so the wrong config cannot ship green. Returns nothing on success.
 {{- if and .Values.ingress.enabled (not .Values.web.forwardedAllowIps) -}}
 {{- fail "web.forwardedAllowIps is required when ingress.enabled: set it to the nginx-ingress controller CIDR. Without it the rate limit is per-ingress and the login cookie loses Secure behind TLS termination." -}}
 {{- end -}}
-{{- if eq .Values.web.forwardedAllowIps "*" -}}
-{{- fail "web.forwardedAllowIps='*' trusts every peer's X-Forwarded-* headers (any client can mint its own rate-limit key); the app refuses it at startup, so refuse it here." -}}
-{{- end -}}
 {{- if and (gt (int .Values.replicas) 1) (not .Values.stateful.multiReplicaAcknowledged) -}}
 {{- fail "replicas > 1 needs sticky sessions and a durable query-log sink first (launch review, blocker 5): chat sessions and the answer cache are in-process. Set stateful.multiReplicaAcknowledged=true only once that is done." -}}
 {{- end -}}

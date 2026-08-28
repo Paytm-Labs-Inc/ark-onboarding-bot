@@ -7,7 +7,7 @@
 # Secrets Manager only, SSE-safe ingress, auth gate fails closed.
 #
 # Run locally: deploy/helm/ark-onboarding-bot/test-render.sh
-# CI: the helm-render job in .github/workflows/eval.yml
+# CI: the helm-render job in .github/workflows/helm.yml
 set -uo pipefail
 CHART="$(cd "$(dirname "$0")" && pwd)"
 FAILED=0
@@ -29,16 +29,21 @@ grep -q 'key: "pai-risk-mlops/platform/ark-onboarding-bot"' <<<"$OUT" && pass "S
 grep -q 'proxy-buffering: "off"' <<<"$OUT" && pass "SSE-safe: proxy buffering off" || fail "proxy buffering not off -- streaming would arrive all at once"
 grep -q 'FORWARDED_ALLOW_IPS: "10.42.0.0/16"' <<<"$OUT" && pass "proxy CIDR reaches the pod env" || fail "FORWARDED_ALLOW_IPS not in env"
 grep -q 'readOnlyRootFilesystem' <<<"$OUT" && grep -q 'drop: \["ALL"\]' <<<"$OUT" && grep -q 'runAsNonRoot: true' <<<"$OUT" && pass "hardened securityContext" || fail "securityContext incomplete"
-grep -q 'startupProbe' <<<"$OUT" && grep -q 'path: /ready' <<<"$OUT" && grep -q 'path: /health' <<<"$OUT" && pass "startup+readiness on /ready, liveness on /health" || fail "probes drift"
+grep -A3 'startupProbe:' <<<"$OUT" | grep -q 'path: /ready' && grep -A3 'readinessProbe:' <<<"$OUT" | grep -q 'path: /ready' && grep -A3 'livenessProbe:' <<<"$OUT" | grep -q 'path: /health' && pass "startup+readiness on /ready, liveness on /health" || fail "probes drift"
+grep -q 'runAsUser: 10001' <<<"$OUT" && grep -q 'fsGroup: 10001' <<<"$OUT" && pass "pod runs as the image uid with fsGroup (mounted volumes writable)" || fail "runAsUser/fsGroup missing"
 grep -q 'name: ark-onboarding-bot-slack' <<<"$OUT" && fail "slack deployment rendered while slack.enabled=false" || pass "no slack deployment by default"
 grep -q 'auth-url' <<<"$OUT" && fail "auth annotations present while authGate off" || pass "no auth gate by default"
 grep -q 'automountServiceAccountToken: false' <<<"$OUT" && pass "no SA token mounted" || fail "SA token mounted"
 
-echo "== C: forwardedAllowIps='*' -- must FAIL =="
-render "${BASE[@]}" --set 'web.forwardedAllowIps=*'; { [ "$RC" -ne 0 ] && grep -q "trusts every peer" <<<"$OUT"; } && pass "wildcard proxy trust rejected" || fail "'*' rendered"
+echo "== C: forwardedAllowIps='*' (platform interim) -- must RENDER =="
+render "${BASE[@]}" --set 'web.forwardedAllowIps=*'; { [ "$RC" -eq 0 ] && grep -q 'FORWARDED_ALLOW_IPS: "\*"' <<<"$OUT"; } && pass "wildcard interim renders into the pod env" || fail "'*' did not render (rc=$RC)"
 
-echo "== C2: ingress on, CIDR missing -- must FAIL =="
-render -f "$CHART/pai-risk-mlops-platform-values.yaml" --set image.tag=90000000000001-abcdef0-arm64; { [ "$RC" -ne 0 ] && grep -q 'forwardedAllowIps is required' <<<"$OUT"; } && pass "missing CIDR rejected" || fail "rendered without the proxy CIDR"
+echo "== C2: ingress on, value forced empty -- must FAIL =="
+render -f "$CHART/pai-risk-mlops-platform-values.yaml" --set image.tag=90000000000001-abcdef0-arm64 --set 'web.forwardedAllowIps='; { [ "$RC" -ne 0 ] && grep -q 'forwardedAllowIps is required' <<<"$OUT"; } && pass "empty value rejected" || fail "rendered with an empty proxy value"
+
+echo "== C3: the guards no other case reaches -- must FAIL =="
+render "${BASE[@]}" --set ingress.authGate.enabled=true --set ingress.authGate.authUrl=http://oauth2-proxy.foundry-site.svc.cluster.local/oauth2/auth; { [ "$RC" -ne 0 ] && grep -q 'signinUrl is required' <<<"$OUT"; } && pass "auth gate without signinUrl rejected" || fail "auth gate rendered without a signin URL"
+render "${BASE[@]}" --set 'externalSecret.awsSecretPath='; { [ "$RC" -ne 0 ] && grep -q 'awsSecretPath is required' <<<"$OUT"; } && pass "missing awsSecretPath rejected" || fail "rendered without a secret path"
 
 echo "== D: replicas=2 without acknowledgement -- must FAIL; with it -- renders =="
 render "${BASE[@]}" --set replicas=2; { [ "$RC" -ne 0 ] && grep -q 'blocker 5' <<<"$OUT"; } && pass "multi-replica rejected until state is out of the pod" || fail "replicas=2 rendered silently"
@@ -52,7 +57,7 @@ render "${BASE[@]}" --set ingress.authGate.enabled=true --set ingress.authGate.a
 echo "== F: slack.enabled -- worker + its secret keys =="
 render "${BASE[@]}" --set slack.enabled=true
 [ "$RC" -eq 0 ] && grep -q 'name: ark-onboarding-bot-slack' <<<"$OUT" && grep -q 'secretKey: SLACK_APP_TOKEN' <<<"$OUT" && grep -q 'src.slack_app' <<<"$OUT" && pass "slack worker + tokens render" || fail "slack render wrong"
-grep -A3 'name: ark-onboarding-bot-slack' <<<"$OUT" | grep -q 'kind: Service' && fail "slack has a Service" || pass "slack worker has no Service (outbound only)"
+[ "$(grep -c '^kind: Service$' <<<"$OUT")" -eq 1 ] && pass "slack worker has no Service (outbound only)" || fail "Service count with slack on: $(grep -c '^kind: Service$' <<<"$OUT")"
 
 echo "== G: no ingress -- CIDR not required =="
 render -f "$CHART/pai-risk-mlops-platform-values.yaml" --set image.tag=90000000000001-abcdef0-arm64 --set ingress.enabled=false; [ "$RC" -eq 0 ] && ! grep -q 'kind: Ingress' <<<"$OUT" && pass "renders without ingress" || fail "no-ingress case failed"

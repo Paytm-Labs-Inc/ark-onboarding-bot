@@ -15,7 +15,7 @@ overlay for the cluster, secrets from AWS Secrets Manager through the cluster's
 | Decision | Where | Why |
 |---|---|---|
 | `image.tag` is required, no default | `_helpers.tpl` guard | argocd-image-updater writes the tag; nothing should ever deploy `:latest`. |
-| `web.forwardedAllowIps` required behind the ingress; `*` refused | guard | Per-user rate limiting and the `Secure` login cookie both depend on trusting only the ingress controller's `X-Forwarded-*`. |
+| `web.forwardedAllowIps` required behind the ingress; empty refused | guard | Per-user rate limiting and the `Secure` login cookie both depend on trusting only the ingress controller's `X-Forwarded-*`. `*` is the platform's interim behind the ClusterIP-only Service (only nginx can reach the pod); the overlay swaps it for the ingress-pod CIDR when the EKS/VPC value arrives. |
 | `replicas: 1`, `strategy: Recreate` | `values.yaml`, guard | Sessions and the answer cache are in-process; logs are files. More than one pod needs sticky sessions and a durable log first (`stateful.multiReplicaAcknowledged`). |
 | Secrets only via `ExternalSecret` | `external-secret.yaml` | Nothing secret in git. One SM entry, JSON properties named in values. |
 | `proxy-buffering: off` on the Ingress | `values.yaml` | The bot streams answers over SSE; buffered, they arrive all at once. |
@@ -69,11 +69,16 @@ Each step unblocks the next. Steps 1-4 are platform-side.
    This repository is public, so ArgoCD reads it with no repo-creds entry. If the
    platform prefers charts co-located in foundry-platform, the same directory moves
    there unchanged (it was written in that chart's shape).
-5. **Fill the overlay**: `web.forwardedAllowIps` = the nginx-ingress controller
-   pods' CIDR on the cluster (`kubectl -n <ingress-ns> get pods -o wide`). The
-   render refuses to proceed without it. `image.tag` fills itself on the first
-   image-updater write-back; until then the Application shows a render error,
-   which is the correct state for "no image has been published yet".
+5. **The overlay ships `web.forwardedAllowIps: "*"`**, the platform's interim
+   behind the ClusterIP-only Service. When the nginx-ingress pod CIDR arrives
+   (`kubectl -n <ingress-ns> get pods -o wide`), change it in the overlay file --
+   never `kubectl edit`; `selfHeal` reverts that. The render refuses an empty
+   value. `image.tag` already carries the first published image; image-updater
+   moves it forward from there.
+   **Secret rotation**: the pod reads the Secret at start (`envFrom`) and
+   `checksum/env` covers only the ConfigMap, so a rotated `PI_API_KEY` needs
+   `kubectl -n ark-onboarding-bot rollout restart deploy/ark-onboarding-bot-web`
+   after the ExternalSecret refresh (there is no Reloader in the platform charts).
 6. **Smoke**: from the bot repo, `ARK_ACCESS_TOKEN=... ./deploy/smoke.sh
    https://foundry.mypaytm.com/onboarding-bot` -- seven checks including
    TTFT p50/p95. Post the output.
@@ -91,8 +96,7 @@ ArgoCD rolls it within minutes. Do not `kubectl set image`: `selfHeal` reverts i
 ## Verify locally
 
 ```bash
-helm lint deploy/helm/ark-onboarding-bot -f deploy/helm/ark-onboarding-bot/pai-risk-mlops-platform-values.yaml \
-  --set image.tag=90000000000001-abcdef0-arm64 --set web.forwardedAllowIps=10.42.0.0/16
+helm lint deploy/helm/ark-onboarding-bot -f deploy/helm/ark-onboarding-bot/pai-risk-mlops-platform-values.yaml
 bash deploy/helm/ark-onboarding-bot/test-render.sh
 ```
 
@@ -102,3 +106,6 @@ bash deploy/helm/ark-onboarding-bot/test-render.sh
 - **No NetworkPolicy**: the cluster's egress posture was not visible from the
   repo; step 3 above is where that lives.
 - **No HPA**: scaling is a stateful decision here (see the replicas guard), not a CPU one.
+- **No probes on the Slack worker**: it exposes no HTTP endpoint, so a wedged
+  Socket Mode connection looks like a quiet channel. Add a heartbeat-file probe
+  when `slack.enabled` is flipped on, not before.
