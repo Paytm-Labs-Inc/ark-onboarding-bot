@@ -267,5 +267,29 @@ class BackendCredentialReadinessTests(unittest.TestCase):
         os.environ["PI_API_KEY"] = "pi-x"
         self.assertEqual(self.client.get("/ready").status_code, 200)
 
+
+class ErrorTextAndHeadersTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = TestClient(app)
+
+    @patch("src.web.ask_in_session", side_effect=RuntimeError("api.inference.paytm.com HTTP 503 for model qwen/qwen3-32b"))
+    def test_upstream_error_text_never_reaches_the_user(self, _ask) -> None:
+        response = self.client.post("/api/ask", json={"question": "q"})
+        self.assertEqual(response.status_code, 502)
+        self.assertNotIn("inference.paytm.com", response.text)
+        self.assertNotIn("qwen", response.text)
+
+    @patch("src.web.ask_in_session", side_effect=TimeoutError("read timed out after 20s at api.inference.paytm.com"))
+    def test_timeout_text_is_generic(self, _ask) -> None:
+        response = self.client.post("/api/ask", json={"question": "q"})
+        self.assertEqual(response.status_code, 504)
+        self.assertNotIn("inference.paytm.com", response.text)
+
+    def test_security_headers_on_every_response(self) -> None:
+        headers = self.client.get("/health").headers
+        self.assertEqual(headers["X-Frame-Options"], "DENY")
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+        self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+
 if __name__ == "__main__":
     unittest.main()

@@ -91,8 +91,10 @@ class SlackHelpersTests(unittest.TestCase):
     @patch("src.slack_app.ask", side_effect=ValueError("CURSOR_API_KEY not set"))
     def test_safe_answer_returns_message_instead_of_raising(self, _mock_ask) -> None:
         result = safe_answer("how do I enroll a host?")
-        self.assertIn("hit an error", result)
-        self.assertIn("CURSOR_API_KEY not set", result)
+        # The message is generic on purpose: the exception text names config
+        # and hosts, which belong in the log, not the channel.
+        self.assertIn("try again", result.lower())
+        self.assertNotIn("CURSOR_API_KEY", result)
 
     def test_run_in_background_executes_target(self) -> None:
         done = threading.Event()
@@ -213,6 +215,15 @@ class HandoffOnSalvagedDeclineTests(unittest.TestCase):
         text = format_response({"answer": REFUSAL_PHRASE, "citations": [], "degraded": "salvaged"})
         self.assertIn("connection dropped", text)
         self.assertIn("#foundry-users", text)
+
+
+class SlackErrorTextTests(unittest.TestCase):
+    @patch("src.slack_app.ask", side_effect=RuntimeError("api.inference.paytm.com HTTP 503"))
+    def test_gateway_error_text_is_not_posted_to_the_channel(self, _ask) -> None:
+        from src.slack_app import safe_answer
+        text = safe_answer("how do I enroll?")
+        self.assertNotIn("inference.paytm.com", text)
+        self.assertIn("try again", text.lower())
 
 if __name__ == "__main__":
     unittest.main()

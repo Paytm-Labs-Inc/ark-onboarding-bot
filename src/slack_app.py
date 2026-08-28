@@ -29,6 +29,8 @@ from src.ask import ask, ask_stream
 _MENTION_RE = re.compile(r"^\s*<@[^>]+>\s*")
 
 PROMPT_HINT = "Ask an onboarding question, e.g. `how do I enroll a host?`"
+# The exception text names hostnames and gateway messages; it goes to the log.
+ANSWER_FAILED_MESSAGE = "Sorry — I couldn't answer that right now. Please try again shortly."
 
 
 def format_response(result: dict) -> str:
@@ -99,7 +101,8 @@ def safe_answer(raw_question: str) -> str:
     try:
         return answer_text(raw_question)
     except (ValueError, RuntimeError, TimeoutError) as exc:
-        return f"Sorry — I hit an error answering that: {exc}"
+        print(f"answer failed: {type(exc).__name__}: {exc}", flush=True)
+        return ANSWER_FAILED_MESSAGE
 
 
 def _format_stream_preview(answer_text: str) -> str:
@@ -142,7 +145,8 @@ def stream_answer_to_slack(
             elif event.get("type") == "done":
                 final = event
     except (ValueError, RuntimeError, TimeoutError) as exc:
-        update_message(f"Sorry — I hit an error answering that: {exc}")
+        print(f"answer failed: {type(exc).__name__}: {exc}", flush=True)
+        update_message(ANSWER_FAILED_MESSAGE)
         return
 
     if final is None:
@@ -299,6 +303,11 @@ def _maybe_relax_ssl_for_corp_proxy() -> None:
     raw = os.environ.get("SLACK_SSL_RELAX", "").strip().lower()
     if raw not in ("1", "true", "yes"):
         return
+    print(
+        "WARNING: SLACK_SSL_RELAX is set -- TLS verification for Slack is relaxed. "
+        "Only for a corporate proxy; never in production.",
+        flush=True,
+    )
 
     import ssl
 

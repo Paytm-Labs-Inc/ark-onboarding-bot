@@ -255,6 +255,33 @@ def reviews_page() -> str:
     return render_reviews(read_feedback())
 
 
+# Upstream failures name hostnames, model ids and gateway messages. Those go
+# to the log; the user gets a sentence they can act on.
+TIMEOUT_MESSAGE = "The answer service took too long. Please try again."
+UNAVAILABLE_MESSAGE = "The answer service is unavailable right now. Please try again shortly."
+
+
+def _log_upstream_failure(exc: BaseException) -> None:
+    print(f"answer failed: {type(exc).__name__}: {exc}", flush=True)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    # The templates are fully inline (no external scripts, styles or fonts),
+    # so the policy can be strict about origins while allowing inline code.
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'",
+    )
+    return response
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -284,9 +311,11 @@ def api_ask(body: AskRequest, _limit: None = Depends(enforce_ask_rate_limit)) ->
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail=str(exc)) from exc
+        _log_upstream_failure(exc)
+        raise HTTPException(status_code=504, detail=TIMEOUT_MESSAGE) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _log_upstream_failure(exc)
+        raise HTTPException(status_code=502, detail=UNAVAILABLE_MESSAGE) from exc
 
 
 def _sse_event(payload: dict[str, object]) -> str:
@@ -300,9 +329,11 @@ def _ask_stream_events(session_id: str | None, question: str) -> Iterator[str]:
     except ValueError as exc:
         yield _sse_event({"type": "error", "detail": str(exc)})
     except TimeoutError as exc:
-        yield _sse_event({"type": "error", "detail": str(exc)})
+        _log_upstream_failure(exc)
+        yield _sse_event({"type": "error", "detail": TIMEOUT_MESSAGE})
     except RuntimeError as exc:
-        yield _sse_event({"type": "error", "detail": str(exc)})
+        _log_upstream_failure(exc)
+        yield _sse_event({"type": "error", "detail": UNAVAILABLE_MESSAGE})
 
 
 @app.post("/api/ask/stream")
