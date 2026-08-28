@@ -23,3 +23,26 @@ Re-run the grid with `python eval/tune_retrieval.py`. Raw numbers in `eval/tunin
 | **2000** | **8** | **100%** ← this grid's winner (superseded, see note above) |
 
 Smaller chunks with low top-k missed occasionally on this grid, which never measured encoder truncation. Shipped since 2026-08-27: `900` / `top_k=8`, with every piece of a split section carrying its heading. Judge encoder changes on chunk-level MRR (#40), not this table.
+
+## Do the pin rules still earn their place? Measured 2026-08-28
+
+The plan after the BM25 + dense hybrid (#52) was to delete the hand-written pin and
+query-expansion rules in `src/retriever.py` once the retriever could stand on its own,
+with the bar set at **+0.12 chunk MRR**. Measured on the 35-row scored set at `main`
+(`2cbc26a`), `MAX_CHARS=900`, `top_k=8`:
+
+| | retrieval hit@8 | chunk recall@8 | chunk MRR |
+|---|---|---|---|
+| with pins (shipped) | 35/35 | 35/35 | **0.890** |
+| `--no-pins` | 34/35 | 34/35 | 0.796 |
+
+**Verdict: keep the pins.** They are worth **+0.094 MRR** and one whole question
+(`post-onboarding-usage`, "how to use ark once onboarding is done", which without them
+retrieves `getting-access` / `updating-cli-plugin` / `roadmap` instead of
+`authoring-your-own`). The hybrid did lift the unpinned baseline — 0.771 before #52,
+0.796 after — but +0.025 is a fifth of what deleting the rules would cost, so the
++0.12 bar is nowhere near met.
+
+Re-run with `python eval/run_eval.py --only-scored --quiet-retriever` and again with
+`--no-pins`. Worth repeating after the FAQ corpus dedupe and after any encoder change
+(Tier 2: BGE-M3 + a cross-encoder reranker), since either could close the gap.
