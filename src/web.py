@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import anyio
 import os
 from collections import defaultdict, deque
 import time
@@ -16,7 +17,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.answer import missing_backend_credential
+from src.answer import PiAtCapacity, missing_backend_credential
 from src.auth import (
     COOKIE_NAME,
     PUBLIC_PATHS,
@@ -91,8 +92,21 @@ class PrefixStripMiddleware:
         await self.app(scope, receive, send)
 
 
+def threadpool_size() -> int:
+    """Worker threads for sync routes; the answer path holds one per question."""
+    raw = os.environ.get("WEB_THREADPOOL_SIZE", "64").strip()
+    try:
+        return max(8, int(raw)) if raw else 64
+    except ValueError:
+        return 64
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Every sync route shares anyio's default thread pool (40 tokens out of the
+    # box). A Pi stall pins a thread for up to ~60 s, so forty slow answers
+    # used to queue the probes behind them and k8s restarted a busy pod.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = threadpool_size()
     warm_services()
     yield
 
@@ -262,6 +276,7 @@ def reviews_page() -> str:
 TIMEOUT_MESSAGE = "The answer service took too long. Please try again."
 BAD_REQUEST_MESSAGE = "That question could not be processed. Please rephrase and try again."
 UNAVAILABLE_MESSAGE = "The answer service is unavailable right now. Please try again shortly."
+BUSY_MESSAGE = "The answer service is busy. Please try again in a few seconds."
 
 
 def _log_upstream_failure(exc: BaseException) -> None:
@@ -286,13 +301,13 @@ async def security_headers(request: Request, call_next):
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.get("/ready", response_model=None)
-def ready() -> dict[str, object] | JSONResponse:
-    ok, body = check_retrieval_ready()
+async def ready() -> dict[str, object] | JSONResponse:
+    ok, body = await anyio.to_thread.run_sync(check_retrieval_ready, limiter=_PROBE_LIMITER)
     if not ok:
         return JSONResponse(status_code=503, content=body)
     missing = missing_backend_credential()
@@ -320,6 +335,9 @@ def api_ask(body: AskRequest, _limit: None = Depends(enforce_ask_rate_limit)) ->
     except TimeoutError as exc:
         _log_upstream_failure(exc)
         raise HTTPException(status_code=504, detail=TIMEOUT_MESSAGE) from exc
+    except PiAtCapacity as exc:
+        # Distinct from other RuntimeErrors: this one is temporary by definition.
+        raise HTTPException(status_code=503, detail=BUSY_MESSAGE, headers={"Retry-After": "10"}) from exc
     except RuntimeError as exc:
         _log_upstream_failure(exc)
         raise HTTPException(status_code=502, detail=UNAVAILABLE_MESSAGE) from exc
@@ -339,6 +357,8 @@ def _ask_stream_events(session_id: str | None, question: str) -> Iterator[str]:
     except TimeoutError as exc:
         _log_upstream_failure(exc)
         yield _sse_event({"type": "error", "detail": TIMEOUT_MESSAGE})
+    except PiAtCapacity:
+        yield _sse_event({"type": "error", "detail": BUSY_MESSAGE})
     except RuntimeError as exc:
         _log_upstream_failure(exc)
         yield _sse_event({"type": "error", "detail": UNAVAILABLE_MESSAGE})

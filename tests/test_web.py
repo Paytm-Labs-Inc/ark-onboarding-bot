@@ -305,6 +305,47 @@ class ErrorTextAndHeadersTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertNotIn("PI_API_KEY", response.text)
         log.assert_called_once()
+class ProbesOffTheAnswerPoolTests(unittest.TestCase):
+    def test_probes_are_async_so_they_never_wait_on_a_worker_thread(self) -> None:
+        import inspect
+        from src.web import health, ready
+        self.assertTrue(inspect.iscoroutinefunction(health))
+        self.assertTrue(inspect.iscoroutinefunction(ready))
+
+    def test_threadpool_size_parses_leniently(self) -> None:
+        from src.web import threadpool_size
+        with patch.dict(os.environ, {"WEB_THREADPOOL_SIZE": ""}):
+            self.assertEqual(threadpool_size(), 64)
+        with patch.dict(os.environ, {"WEB_THREADPOOL_SIZE": "128"}):
+            self.assertEqual(threadpool_size(), 128)
+        with patch.dict(os.environ, {"WEB_THREADPOOL_SIZE": "2"}):
+            self.assertEqual(threadpool_size(), 8)  # floor
+
+
+class ProbeAndSlotWiringTests(unittest.TestCase):
+    """The two lines that do the work must fail the suite if removed."""
+
+    def test_ready_runs_its_check_on_the_probe_limiter_not_the_answer_pool(self) -> None:
+        from src import web as web_module
+        seen = {}
+
+        async def fake_run_sync(fn, *args, limiter=None, **kwargs):
+            seen["limiter"] = limiter
+            return fn(*args)
+
+        with patch("src.web.anyio.to_thread.run_sync", side_effect=fake_run_sync), \
+             patch("src.web.check_retrieval_ready", return_value=(True, {"status": "ready", "chunks": 1})), \
+             patch.dict(os.environ, {"PI_API_KEY": "pi-x", "ANSWER_BACKEND": "pi"}):
+            self.assertEqual(TestClient(app).get("/ready").status_code, 200)
+        self.assertIs(seen["limiter"], web_module._PROBE_LIMITER)
+
+    @patch("src.web.ask_in_session")
+    def test_at_capacity_is_503_with_retry_after(self, mock_ask) -> None:
+        from src.answer import PiAtCapacity
+        mock_ask.side_effect = PiAtCapacity("busy")
+        response = TestClient(app).post("/api/ask", json={"question": "q"})
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers["Retry-After"], "10")
 
 if __name__ == "__main__":
     unittest.main()
