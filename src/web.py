@@ -137,8 +137,17 @@ _ask_hits_lock = threading.Lock()
 
 
 def ask_rate_limit_per_minute() -> int:
-    """Answers allowed per client per minute; 0 disables the limit."""
-    return int(os.environ.get("ASK_RATE_LIMIT_PER_MINUTE", "30"))
+    """Answers allowed per client per minute; 0 disables the limit.
+
+    A set-but-empty variable (the .env.example house style) must not turn
+    into a 500 on every question, so parse leniently and say what happened.
+    """
+    raw = os.environ.get("ASK_RATE_LIMIT_PER_MINUTE", "30").strip()
+    try:
+        return int(raw) if raw else 30
+    except ValueError:
+        print(f"ASK_RATE_LIMIT_PER_MINUTE={raw!r} is not a number; using 30", flush=True)
+        return 30
 
 
 def _client_key(request: Request) -> str:
@@ -177,7 +186,9 @@ def _evict_idle_clients(now: float) -> None:
     for k in idle:
         del _ask_hits[k]
     if len(_ask_hits) >= _ASK_MAX_TRACKED_CLIENTS:
-        # Still full of active clients: shed the oldest half rather than grow.
+        # Still full of active clients: shed the least-recently-seen half
+        # rather than grow. Those clients get a fresh window -- a deliberate
+        # loosening under pressure, chosen over unbounded memory on one pod.
         for k in sorted(_ask_hits, key=lambda k: _ask_hits[k][-1])[: len(_ask_hits) // 2]:
             del _ask_hits[k]
 
@@ -439,17 +450,28 @@ def main() -> None:
     if prefix:
         print(f"Serving under subpath prefix {prefix!r} (expects a reverse proxy to strip it).")
     print(f"Ark onboarding bot web UI → http://{host}:{port}{prefix}/")
-    uvicorn.run(
-        app,
-        host=host,
-        port=port,
-        proxy_headers=True,
-        # Which peers may set X-Forwarded-For / -Proto. "*" trusted every
-        # caller, which let any client pick its own rate-limit key and its own
-        # cookie Secure flag. Default is uvicorn's own (loopback); behind the
-        # ingress set it to the ingress CIDR.
-        forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1"),
-    )
+    uvicorn.run(app, host=host, port=port, **proxy_settings())
+
+
+def proxy_settings() -> dict[str, object]:
+    """How uvicorn treats X-Forwarded-For / -Proto, from FORWARDED_ALLOW_IPS.
+
+    Unset: no proxy headers are honoured at all, so the rate-limit key is the
+    real peer and a client cannot mint keys with a header (review measured
+    that trusting loopback still let SSH-tunnel users do exactly that).
+    Set to the ingress CIDR: headers from the ingress are honoured, which is
+    what gives per-user keys and a Secure login cookie behind TLS termination.
+    "*" is refused: it trusts every caller.
+    """
+    trusted = os.environ.get("FORWARDED_ALLOW_IPS", "").strip()
+    if trusted == "*":
+        raise SystemExit(
+            "FORWARDED_ALLOW_IPS='*' trusts every peer's X-Forwarded-* headers; "
+            "set it to the ingress address or CIDR, or leave it unset."
+        )
+    if not trusted:
+        return {"proxy_headers": False}
+    return {"proxy_headers": True, "forwarded_allow_ips": trusted}
 
 
 if __name__ == "__main__":

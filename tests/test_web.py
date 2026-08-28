@@ -194,9 +194,37 @@ class AskRateLimitEdgeTests(unittest.TestCase):
     @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "1"})
     @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
     def test_distinct_clients_get_distinct_buckets(self, _ask) -> None:
-        with patch("src.web._client_key", side_effect=["10.0.0.1", "10.0.0.2"]):
-            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
-            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
+        # Real key derivation: two clients with different peer addresses.
+        a = TestClient(app, client=("10.0.0.1", 1234))
+        b = TestClient(app, client=("10.0.0.2", 1234))
+        self.assertEqual(a.post("/api/ask", json={"question": "q"}).status_code, 200)
+        self.assertEqual(b.post("/api/ask", json={"question": "q"}).status_code, 200)
+        self.assertEqual(a.post("/api/ask", json={"question": "q"}).status_code, 429)
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "5"})
+    @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
+    def test_a_full_table_sheds_the_least_recent_client(self, _ask) -> None:
+        from src import web as web_module
+        with patch.object(web_module, "_ASK_MAX_TRACKED_CLIENTS", 2):
+            for host in ("10.0.0.1", "10.0.0.2", "10.0.0.3"):
+                TestClient(app, client=(host, 1)).post("/api/ask", json={"question": "q"})
+        self.assertNotIn("10.0.0.1", web_module._ask_hits)
+        self.assertIn("10.0.0.3", web_module._ask_hits)
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": ""})
+    @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
+    def test_an_empty_limit_variable_does_not_500(self, _ask) -> None:
+        self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
+
+    def test_proxy_settings(self) -> None:
+        from src.web import proxy_settings
+        with patch.dict(os.environ, {"FORWARDED_ALLOW_IPS": ""}):
+            self.assertEqual(proxy_settings(), {"proxy_headers": False})
+        with patch.dict(os.environ, {"FORWARDED_ALLOW_IPS": "10.42.0.0/16"}):
+            self.assertEqual(proxy_settings(), {"proxy_headers": True, "forwarded_allow_ips": "10.42.0.0/16"})
+        with patch.dict(os.environ, {"FORWARDED_ALLOW_IPS": "*"}):
+            with self.assertRaises(SystemExit):
+                proxy_settings()
 
     def test_idle_clients_are_evicted_when_the_table_is_full(self) -> None:
         from src import web as web_module

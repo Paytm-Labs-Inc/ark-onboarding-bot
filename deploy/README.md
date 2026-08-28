@@ -122,6 +122,7 @@ docker build -t ark-onboarding-bot:<tag> .   # tag by git SHA, not :latest
 ```bash
 docker run -p 8765:8765 \
   -e CURSOR_API_KEY=... -e ARK_ACCESS_TOKEN=... -e BASE_PATH=/onboarding-bot \
+  -e FORWARDED_ALLOW_IPS=<ingress address or CIDR> \
   ark-onboarding-bot:<tag>
 ```
 
@@ -136,13 +137,17 @@ docker run \
 ### Behind a reverse proxy or ingress
 
 Set `FORWARDED_ALLOW_IPS` to the proxy's address or CIDR so `X-Forwarded-For`
-and `X-Forwarded-Proto` are honoured only from it. The default is loopback;
-`*` must not be used — it lets any caller choose its own rate-limit key.
+and `X-Forwarded-Proto` are honoured only from it. Unset, no forwarded headers
+are honoured at all (correct for the SSH-tunnel path). Behind the ingress it
+**must** be set: it is what makes the rate limit per-user instead of
+per-ingress and what marks the login cookie `Secure` behind TLS termination.
+`*` is refused at startup.
 
 ### On k8s
 
 Two Deployments from the **same image**: the web Deployment (default command)
-gets a Service + the `/onboarding-bot` ingress route; the Slack Deployment
+gets a Service + the `/onboarding-bot` ingress route (set `FORWARDED_ALLOW_IPS`
+to the ingress controller's CIDR in its env); the Slack Deployment
 overrides the command to `python -m src.slack_app` and needs no Service/ingress.
 Provide the secrets above via a k8s Secret. Health probes for the web service:
 `/health` (liveness) and `/ready` (readiness).
