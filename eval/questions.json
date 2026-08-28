@@ -157,10 +157,11 @@
     "id": "onboarding-steps",
     "question": "what are the steps to onboard ark",
     "expected_source": "getting-started",
-    "notes": "Onboarding path numbered list (steps 1-7) on getting started page",
+    "notes": "Onboarding path numbered table on getting-started. Any-of markers: the getting-started table names step 2 'Set your personal credentials', while a FAQ-shaped answer says 'secrets'/'compute'. Accept either vocabulary.",
     "answer_must_include": [
       "secrets",
-      "compute"
+      "compute",
+      "credentials"
     ]
   },
   {
@@ -383,10 +384,11 @@
       "faq-google-doc",
       "faq"
     ],
-    "notes": "Typo of onboarding-steps. getting-started has the numbered path; both FAQ ingestions carry Q13 (join team → secrets → compute → doctor). Full-eval cited the FAQ pair (33/34) because retrieval ranks Q13 first.",
+    "notes": "Typo of onboarding-steps. getting-started has the numbered path; both FAQ ingestions carry Q13 (join team → secrets → compute → doctor). Full-eval cited the FAQ pair (33/34) because retrieval ranks Q13 first. Any-of markers accept both the getting-started table wording ('credentials') and the FAQ wording ('secrets'/'compute').",
     "answer_must_include": [
       "secrets",
-      "compute"
+      "compute",
+      "credentials"
     ],
     "page_evidence": {
       "getting-started": "Set your personal credentials",
