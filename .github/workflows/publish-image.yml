@@ -33,7 +33,15 @@ name: Publish image
 # `ark-ghci-runner`; this repo cannot confirm it has access to that runner
 # group, so the runner is a repo variable. Set PUBLISH_RUNNER=ark-ghci-runner
 # once access is granted and the QEMU emulation step skips itself; unset, it
-# builds on ubuntu-latest under emulation (~3x slower, measured).
+# builds on ubuntu-latest under emulation (~3x slower, measured). The variable
+# MUST name an arm64 runner: the build is linux/arm64 and skips emulation when
+# the variable is set, so an amd64 self-hosted runner fails in buildx.
+#
+# `latest` is published for humans only. It is safe for the deploy because the
+# argocd-image-updater entry MUST carry
+#   allow-tags: regexp:^[0-9]{14}-[a-f0-9]{7,40}-arm64$
+# (the chart README's app-of-apps snippet includes it); without that filter
+# `latest` sorts above every ordinal tag and the app pins to a mutable tag.
 
 # workflow_dispatch deliberately takes no ref input. checkout would honour one,
 # but docker/metadata-action derives its tags from the workflow context, so a
@@ -59,8 +67,11 @@ concurrency:
 jobs:
   publish:
     name: publish
+    # A dispatch may only publish main: a feature-branch dispatch would push an
+    # image of unmerged, un-evaluated code (foundry-platform hit exactly this on
+    # 2026-08-25). workflow_run is main-only by its trigger.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_sha == github.sha)
     # ubuntu-latest is amd64, so the arm64 build goes through QEMU (128s native
@@ -139,7 +150,7 @@ jobs:
             exit 1
           fi
           name="${prefix}/ark-onboarding-bot"
-          if ! err=$(aws ecr describe-repositories --repository-names "$name" --region "$region" 2>&1 >/dev/null); then
+          if ! err=$(aws ecr describe-repositories --repository-names "$name" --region "$region" --registry-id "${{ vars.AWS_ECR_ACCOUNT_ID }}" 2>&1 >/dev/null); then
             echo "::error::ECR repo $name not reachable, publish would fail on push (repo missing, or this role lacks ecr:DescribeRepositories on it): ${err##*$'\n'}"
             echo "Provision it in pi-risk-mlops (terraform/environments/platform/03-irsa/ark.tf" \
                  "-- aws_ecr_repository + aws_ecr_lifecycle_policy for ark-onboarding-bot; extend the" \
@@ -152,6 +163,11 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
+          # latest is emitted only by the explicit raw rule below (main only);
+          # without this, metadata-action's flavor.latest=auto also emits it on
+          # tag refs, so a tag dispatch could overwrite latest with non-main code.
+          flavor: |
+            latest=false
           images: |
             ghcr.io/${{ github.repository_owner }}/ark-onboarding-bot
             ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' && format('{0}.dkr.ecr.{1}.amazonaws.com/{2}/{3}', vars.AWS_ECR_ACCOUNT_ID, vars.AWS_ECR_REGION, vars.AWS_ECR_REPO_PREFIX, 'ark-onboarding-bot') || '' }}
@@ -186,3 +202,19 @@ jobs:
             echo "Set AWS_ECR_PUSH_ROLE_ARN / AWS_ECR_REGION / AWS_ECR_ACCOUNT_ID /"
             echo "AWS_ECR_REPO_PREFIX as repo variables and re-run to publish there."
           fi
+
+  # A red eval on main means the job above is skipped and the cluster keeps the
+  # previous image -- silently. Make that state visible where people look: this
+  # job fails the publish workflow on the commit with the reason in its name.
+  main-eval-red:
+    name: "main eval red -- image NOT published, fleet stays on the previous tag"
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion != 'success' &&
+      github.event.workflow_run.head_sha == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          echo "::error title=Image not published::eval concluded '${{ github.event.workflow_run.conclusion }}' on ${{ github.sha }}. The deployed image did not move. Fix main (or the missing PI_API_KEY secret) and the next green eval publishes."
+          exit 1
