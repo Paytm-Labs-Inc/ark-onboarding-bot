@@ -109,13 +109,34 @@ class DegradedFieldTests(unittest.TestCase):
 
 
 class ConcurrentAppendTests(unittest.TestCase):
-    """The lock's one promise: every line stays valid JSON under concurrent writers."""
+    """The lock's one promise: every line stays valid JSON under concurrent writers.
+
+    A single write() on an O_APPEND handle is atomic on Linux, so a plain
+    harness passes with the lock removed (review measured it). Force each
+    record through two syscalls with a yield between them, which is the shape
+    the lock actually guards against: 122 of 200 lines corrupt without it.
+    """
 
     def test_concurrent_writers_never_interleave_a_line(self) -> None:
-        import json, tempfile, threading
+        import json, tempfile, threading, time
         from pathlib import Path
+
+        class SplitWritePath(type(Path())):
+            def open(self, *args, **kwargs):  # type: ignore[override]
+                handle = super().open(*args, **kwargs)
+                real_write = handle.write
+
+                def split_write(text):
+                    half = len(text) // 2
+                    real_write(text[:half])
+                    time.sleep(0)  # yield so another writer can interleave
+                    return real_write(text[half:])
+
+                handle.write = split_write
+                return handle
+
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "q.jsonl"
+            path = SplitWritePath(tmp) / "q.jsonl"
             with patch.object(query_log_module, "QUERY_LOG_PATH", path):
                 big = "x" * 8000
                 def worker(i):
