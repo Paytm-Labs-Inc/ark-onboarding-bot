@@ -523,6 +523,16 @@
     ]
   },
   {
+    "id": "roadmap-repo-onboarding",
+    "question": "what is planned for ark repo onboarding",
+    "expected_source": "roadmap",
+    "notes": "Roadmap bet 1, easy repo onboarding. The only gold row whose answer is a forward-looking promise, so it is what exercises the #42 gate: a roadmap promise that does not cite the roadmap is scored wrong.",
+    "answer_must_include": [
+      "Onboard Repo",
+      "workspace YAML"
+    ]
+  },
+  {
     "id": "out-of-scope-weather",
     "question": "what is the weather today?",
     "expected_source": null,
