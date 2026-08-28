@@ -109,7 +109,8 @@ services**:
 - **Slack app** — `python -m src.slack_app` (override the command), uses **Socket
   Mode**, so it needs **no ingress** (only outbound WebSocket to Slack).
 
-The image bakes in Python deps and the embedding model. Secrets/config are
+The image bakes in Python deps, the embedding model, and the Cursor agent CLI
+(only used with `ANSWER_BACKEND=cursor`). Secrets/config are
 injected at runtime (never baked into the image): **`PI_API_KEY`** (required —
 the default backend), `ARK_ACCESS_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`,
 and `BASE_PATH=/onboarding-bot`. `CURSOR_API_KEY` only matters with

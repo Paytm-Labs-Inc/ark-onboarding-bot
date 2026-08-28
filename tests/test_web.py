@@ -39,7 +39,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
 
-    @patch.dict(os.environ, {"PI_API_KEY": "pi-test"})
+    @patch.dict(os.environ, {"PI_API_KEY": "pi-test", "ANSWER_BACKEND": "pi"})
     @patch("src.warmup.retrieve", return_value=[{"source": "x", "text": "y"}])
     @patch("src.warmup.load_chunks", return_value=[{"source": "x", "text": "y"}])
     def test_ready_returns_ok_when_corpus_loaded(
