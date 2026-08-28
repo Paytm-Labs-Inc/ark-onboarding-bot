@@ -181,6 +181,34 @@ class RoadmapPromiseEvalTests(unittest.TestCase):
         result = evaluate_question(item, top_k=8, run_answer=True)
         self.assertFalse(result.answer_hit)  # marker present, promise unbacked -> wrong
 
+    @patch("src.retrieve.retrieve", return_value=[{"source": "faq -- u", "text": "x"}])
+    @patch("src.ask.ask")
+    def test_citation_miss_is_asked_once_more_and_recorded(self, mock_ask, _r) -> None:
+        mock_ask.side_effect = [
+            {"answer": "a", "citations": ["admin -- u"]},   # wrong page first
+            {"answer": "a", "citations": ["faq -- u"]},     # accepted page second
+        ]
+        item = {"id": "q", "question": "q?", "expected_source": "faq"}
+        result = evaluate_question(item, top_k=8, run_answer=True)
+        self.assertTrue(result.citation_hit)
+        self.assertTrue(result.retried)
+        self.assertEqual(mock_ask.call_count, 2)
+
+    @patch("src.retrieve.retrieve", return_value=[{"source": "faq -- u", "text": "x"}])
+    @patch("src.ask.ask")
+    def test_second_miss_stays_a_miss_and_refusals_are_never_retried(self, mock_ask, _r) -> None:
+        mock_ask.return_value = {"answer": "a", "citations": ["admin -- u"]}
+        result = evaluate_question({"id": "q", "question": "q?", "expected_source": "faq"}, top_k=8, run_answer=True)
+        self.assertFalse(result.citation_hit)
+        self.assertTrue(result.retried)
+        self.assertEqual(mock_ask.call_count, 2)
+        mock_ask.reset_mock()
+        mock_ask.return_value = {"answer": "I can't help with that.", "citations": ["faq -- u"]}
+        result = evaluate_question({"id": "r", "question": "r?", "expect_refusal": True}, top_k=8, run_answer=True)
+        self.assertFalse(result.citation_hit)
+        self.assertFalse(result.retried)
+        self.assertEqual(mock_ask.call_count, 1)
+
     def test_promise_without_roadmap_citation_is_unbacked(self) -> None:
         from src.answer import ROADMAP_PHRASE
         self.assertTrue(roadmap_promise_unbacked(ROADMAP_PHRASE, ["faq -- https://x"]))
