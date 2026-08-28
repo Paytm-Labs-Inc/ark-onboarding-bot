@@ -776,10 +776,28 @@ class RoadmapPromiseTests(unittest.TestCase):
         {"source": "roadmap -- https://x/roadmap", "text": "Windows support is planned."},
     ]
 
-    def test_unbacked_roadmap_promise_becomes_a_refusal(self) -> None:
+    def test_unbacked_roadmap_promise_becomes_a_refusal_with_no_citations(self) -> None:
         from src.answer import _finalize_parsed
         result = _finalize_parsed({"answer": ROADMAP_PHRASE, "chunks_used": [1]}, self.CHUNKS)
         self.assertEqual(result["answer"], REFUSAL_PHRASE)
+        self.assertEqual(result["citations"], [])  # a refusal must not print Sources
+
+    def test_unbacked_promise_appended_to_a_real_answer_is_stripped_not_refused(self) -> None:
+        from src.answer import _finalize_parsed
+        text = "Ark does not support Windows today. " + ROADMAP_PHRASE
+        result = _finalize_parsed({"answer": text, "chunks_used": [1]}, self.CHUNKS)
+        self.assertEqual(result["answer"], "Ark does not support Windows today.")
+        self.assertEqual(result["citations"], ["faq -- https://x/faq"])
+
+    def test_the_template_carries_the_same_handoff_text_as_the_answer_layer(self) -> None:
+        from pathlib import Path
+        from src.answer import HANDOFF_LINE
+        html = Path("src/templates/chat.html").read_text(encoding="utf-8")
+        # The template hardcodes its copy; pin it to the constant so a channel
+        # rename cannot leave the web pointing at a dead channel.
+        for fragment in ("#foundry-users", "session id", "the exact command and its output"):
+            self.assertIn(fragment, HANDOFF_LINE)
+            self.assertIn(fragment, html)
 
     def test_roadmap_promise_survives_with_a_roadmap_citation(self) -> None:
         from src.answer import _finalize_parsed

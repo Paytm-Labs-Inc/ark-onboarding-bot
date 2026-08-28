@@ -139,11 +139,10 @@ def filter_questions(
 
 
 def roadmap_promise_unbacked(answer: str, citations: list[str]) -> bool:
-    from src.answer import ROADMAP_PHRASE
+    """One predicate for the eval and the runtime gate, so they cannot disagree."""
+    from src.answer import roadmap_promise_unbacked as shared
 
-    if ROADMAP_PHRASE not in answer:
-        return False
-    return not any(norm_source(c) == "roadmap" for c in citations)
+    return shared(answer, citations)
 
 
 def first_relevant_rank(chunks: list[dict], markers: list[str]) -> int | None:

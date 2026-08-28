@@ -72,7 +72,8 @@ Rules:
        Answer exactly: "{REFUSAL_PHRASE}"
    (b) The question IS about Ark — a capability, integration, platform behaviour or
        supported tool — but the chunks contain nothing on it.
-       Answer exactly: "{ROADMAP_PHRASE}"
+       Answer exactly: "{ROADMAP_PHRASE}" — and if a roadmap chunk backs it, list that
+       chunk's number in chunks_used so the promise carries its source.
    Deciding between them: if the question asks what Ark can do, supports, or integrates
    with, it is (b) even when the chunks say nothing. Only use (a) when the subject is not
    Ark, or when answering would undermine it. Never promise a roadmap for (a).
@@ -626,13 +627,30 @@ def _finalize_parsed(
 ) -> dict[str, Any]:
     answer_text = str(parsed.get("answer", "")).strip()
     citations = _resolve_citations(parsed, chunks)
-    if answer_text == ROADMAP_PHRASE and not any(_is_roadmap_source(c) for c in citations):
+    if roadmap_promise_unbacked(answer_text, citations):
         # Rule 4(b) has the model promise a roadmap whenever the chunks are
         # silent, which turns every gap in the docs into a commitment. Keep the
-        # promise only when the roadmap page itself backed it.
-        answer_text = REFUSAL_PHRASE
+        # promise only when the roadmap page itself backed it. A bare promise
+        # becomes the plain refusal and drops the citations it did not use; a
+        # promise tacked onto a real answer is stripped and the answer kept.
+        if answer_text == ROADMAP_PHRASE:
+            answer_text, citations = REFUSAL_PHRASE, []
+        else:
+            answer_text = answer_text.replace(ROADMAP_PHRASE, "").strip()
 
     return {"answer": answer_text or REFUSAL_PHRASE, "citations": citations}
+
+
+def roadmap_promise_unbacked(answer: str, citations: list[str]) -> bool:
+    """True when the answer promises a roadmap no cited roadmap chunk backs.
+
+    Shared with the eval so the runtime gate and the detector agree: the
+    phrase counts wherever it appears in the answer, not only when it is the
+    whole answer.
+    """
+    if ROADMAP_PHRASE not in answer:
+        return False
+    return not any(_is_roadmap_source(c) for c in citations)
 
 
 def _is_roadmap_source(label: str) -> bool:
