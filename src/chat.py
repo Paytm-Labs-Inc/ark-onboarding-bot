@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from collections.abc import Iterator
 from typing import Any
 
+from src.answer import is_non_answer
 from src.ask import ask, ask_stream
 from src.citations import parse_citation
 
@@ -86,6 +87,7 @@ def ask_in_session(session_id: str | None, question: str) -> dict[str, Any]:
         "citations": citations,
         "retrieved_sources": retrieved_sources,
         "sources": enrich_citations(citations),
+        "handoff": is_non_answer(answer_text),
     }
 
 
@@ -122,6 +124,9 @@ def ask_in_session_stream(
             # sees it. Kept absent when clean, matching the stream contract.
             if event.get("degraded"):
                 final["degraded"] = event["degraded"]
+            # Same predicate Slack uses, decided at the consumer boundary so the
+            # answer text stays exact for is_non_answer and the eval.
+            final["handoff"] = is_non_answer(answer_text)
             yield final
         else:
             yield event

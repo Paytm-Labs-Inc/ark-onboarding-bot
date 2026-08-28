@@ -17,6 +17,7 @@ from eval.run_eval import (
     full_eval_ready,
     main,
     print_report,
+    roadmap_promise_unbacked,
 )
 
 
@@ -169,3 +170,20 @@ class NoPinsGuardTests(unittest.TestCase):
         self.assertIsNone(result.chunk_rank)
         hits, labelled, _ = chunk_metrics([result], top_k=8)
         self.assertEqual((hits, labelled), (0, 1))
+
+
+class RoadmapPromiseEvalTests(unittest.TestCase):
+    @patch("src.retrieve.retrieve", return_value=[{"source": "faq -- u", "text": "x"}])
+    @patch("src.ask.ask")
+    def test_full_eval_marks_an_embedded_unbacked_promise_wrong(self, mock_ask, _r) -> None:
+        from src.answer import ROADMAP_PHRASE
+        mock_ask.return_value = {"answer": "Use the CLI. " + ROADMAP_PHRASE, "citations": ["faq -- u"]}
+        item = {"id": "q", "question": "q?", "expected_source": "faq", "answer_must_include": ["CLI"]}
+        result = evaluate_question(item, top_k=8, run_answer=True)
+        self.assertFalse(result.answer_hit)  # marker present, promise unbacked -> wrong
+
+    def test_promise_without_roadmap_citation_is_unbacked(self) -> None:
+        from src.answer import ROADMAP_PHRASE
+        self.assertTrue(roadmap_promise_unbacked(ROADMAP_PHRASE, ["faq -- https://x"]))
+        self.assertFalse(roadmap_promise_unbacked(ROADMAP_PHRASE, ["roadmap -- https://x"]))
+        self.assertFalse(roadmap_promise_unbacked("Run ark host enroll.", []))
