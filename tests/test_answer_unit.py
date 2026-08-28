@@ -818,6 +818,8 @@ class NonAnswerMatchingTests(unittest.TestCase):
             "  i don't have an answer for that yet.  ",     # case, whitespace
             "I don't have an answer for that yet. Try #foundry-users.",  # trailing sentence
             "We have this on our roadmap and are working towards it!",
+            "Sorry, I don't have an answer for that yet.",           # leading decoration
+            "Unfortunately, we have this on our roadmap and are working towards it.",
         ):
             self.assertTrue(is_non_answer(text), text)
 
@@ -825,6 +827,7 @@ class NonAnswerMatchingTests(unittest.TestCase):
         for text in (
             "Run ark host enroll.",
             "I don't have the exact number, but run ark workspace doctor.",  # not the phrase
+            "Run ark host enroll. " * 8 + "I don't have an answer for that yet.",  # phrase far down a real answer
             "",
         ):
             self.assertFalse(is_non_answer(text), text)
