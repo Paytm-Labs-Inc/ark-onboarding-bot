@@ -378,12 +378,21 @@
   {
     "id": "adversarial-onboarding-typo",
     "question": "what are the onbording steps for ark",
-    "expected_source": "getting-started",
-    "notes": "Typo — should still retrieve onboarding path",
+    "expected_source": [
+      "getting-started",
+      "faq-google-doc",
+      "faq"
+    ],
+    "notes": "Typo of onboarding-steps. getting-started has the numbered path; both FAQ ingestions carry Q13 (join team → secrets → compute → doctor). Full-eval cited the FAQ pair (33/34) because retrieval ranks Q13 first.",
     "answer_must_include": [
       "secrets",
       "compute"
-    ]
+    ],
+    "page_evidence": {
+      "getting-started": "Set your personal credentials",
+      "faq-google-doc": "Don't skip doctor",
+      "faq": "Don't skip doctor"
+    }
   },
   {
     "id": "tricky-k8s-compute-pool",
