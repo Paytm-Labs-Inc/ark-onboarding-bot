@@ -300,6 +300,10 @@ async def security_headers(request: Request, call_next):
     return response
 
 
+# Probes run on their own two-thread limiter, never behind an answer.
+_PROBE_LIMITER = anyio.CapacityLimiter(2)
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
