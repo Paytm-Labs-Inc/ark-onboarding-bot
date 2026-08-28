@@ -1,0 +1,15 @@
+# Non-secret runtime config. Hashed into the pod template (see deployments) so
+# an edit here rolls the pods instead of being applied silently to nothing.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ark-onboarding-bot-env
+  namespace: {{ .Values.namespace }}
+data:
+  WEB_HOST: "0.0.0.0"
+  WEB_PORT: {{ .Values.web.port | quote }}
+  BASE_PATH: {{ .Values.web.basePath | quote }}
+  FORWARDED_ALLOW_IPS: {{ .Values.web.forwardedAllowIps | quote }}
+  {{- range $k, $v := .Values.web.env }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

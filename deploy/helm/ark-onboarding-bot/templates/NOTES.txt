@@ -1,0 +1,9 @@
+ark-onboarding-bot {{ .Chart.Version }} rendered for namespace {{ .Values.namespace }}.
+
+  image     {{ .Values.image.repository }}:{{ .Values.image.tag }}
+  replicas  {{ .Values.replicas }} ({{ .Values.strategy }})
+  web       {{ if .Values.ingress.enabled }}{{ range .Values.ingress.hosts }}http://{{ . }}{{ $.Values.ingress.path }}  {{ end }}{{ else }}no ingress{{ end }}
+  slack     {{ if .Values.slack.enabled }}enabled{{ else }}disabled{{ end }}
+  auth gate {{ if .Values.ingress.authGate.enabled }}ON ({{ .Values.ingress.authGate.authUrl }}){{ else }}off -- ARK_ACCESS_TOKEN gates the UI{{ end }}
+
+Smoke: deploy/smoke.sh in the bot repo against the URL above (7 checks incl. TTFT p50/p95).

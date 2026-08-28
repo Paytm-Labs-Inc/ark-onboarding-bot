@@ -1,0 +1,146 @@
+# ark-onboarding-bot -- chart defaults.
+#
+# Every knob here encodes a launch decision with the reason beside it, so the
+# next person changes the value on purpose rather than by archaeology. The
+# cluster overlay (pai-risk-mlops-platform-values.yaml) sets what is specific to
+# the pai-risk-mlops platform; nothing secret lives in either file.
+
+namespace: ark-onboarding-bot
+
+image:
+  # Set in the cluster overlay. `tag` is REQUIRED (no default): argocd-image-updater
+  # writes the current timestamped tag back into the overlay, and a chart that
+  # silently defaulted to :latest would deploy something nobody chose.
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# ONE replica, on purpose. Chat sessions and the answer cache are in-process and
+# the query/feedback logs are files, so two pods would split conversations and
+# fragment the log (launch review, blocker 5). Going above one needs sticky
+# sessions plus a durable log sink first; the guard below refuses replicas > 1
+# unless that work is acknowledged as done.
+replicas: 1
+stateful:
+  multiReplicaAcknowledged: false
+
+# Recreate, not RollingUpdate: with one replica a rolling update briefly runs
+# two pods against the same in-process state, which is the multi-replica
+# problem for the length of a deploy. A few seconds of 503 on roll is the
+# honest trade until the state moves out of the pod.
+strategy: Recreate
+
+web:
+  port: 8765
+  # The app serves under this prefix (it strips it itself), matching ingress.path.
+  basePath: /onboarding-bot
+  env:
+    ANSWER_BACKEND: pi
+    PI_STREAM: "1"
+    # Answers per client per minute, and gateway concurrency (measured flat at 16).
+    ASK_RATE_LIMIT_PER_MINUTE: "30"
+    PI_MAX_CONCURRENCY: "16"
+    PI_QUEUE_TIMEOUT_SECONDS: "30"
+    WEB_THREADPOOL_SIZE: "64"
+    ASK_HYBRID: "1"
+  # REQUIRED when ingress.enabled: the ingress controller's address or CIDR. It is
+  # what makes the rate limit per-user (not per-ingress) and marks the login
+  # cookie Secure behind TLS termination. "*" is refused by the app at startup.
+  forwardedAllowIps: ""
+  resources:
+    # all-MiniLM-L6-v2 + torch resident: ~700 MB warm. Requests sized to schedule
+    # honestly; limits leave headroom for the embedding warmup spike.
+    requests: { memory: "1Gi", cpu: "500m" }
+    limits: { memory: "2Gi", cpu: "2" }
+  probes:
+    # /ready loads the corpus and warms the encoder once; on arm64 that is tens
+    # of seconds cold. startupProbe covers it so liveness never kills a pod
+    # that is still warming, and readiness stays honest afterwards (it also
+    # fails when the backend credential is missing -- see the app's /ready).
+    startup:   { path: /ready,  periodSeconds: 5,  failureThreshold: 36 }   # up to 3 min
+    readiness: { path: /ready,  periodSeconds: 10, failureThreshold: 3 }
+    liveness:  { path: /health, periodSeconds: 30, failureThreshold: 3 }
+  # The image runs as a non-root user with the app tree read-only in practice;
+  # the only writes are the JSONL logs under eval/ and /tmp, both mounted below.
+  # readOnlyRootFilesystem is OFF for the first deploy and should be flipped to
+  # true once the go-live smoke passes against it -- untested hardening is a
+  # launch-day surprise, not hardening.
+  securityContext:
+    readOnlyRootFilesystem: false
+
+# Query + feedback logs. The container filesystem is ephemeral: an emptyDir keeps
+# the pod's own logs coherent for its lifetime and no longer. Set
+# persistence.enabled to keep them across restarts (one PVC; single replica).
+# Either way this is the "observability -> gold set" loop from the launch review
+# (blocker 5) -- choose deliberately.
+logs:
+  mountPath: /home/app/app/eval
+  persistence:
+    enabled: false
+    size: 1Gi
+    storageClassName: ""
+
+slack:
+  # The Slack worker is the same image with the command overridden. Socket Mode
+  # means outbound only: no Service, no Ingress. Needs SLACK_BOT_TOKEN and
+  # SLACK_APP_TOKEN in the secret bag; the app refuses to start without the
+  # backend credential too.
+  enabled: false
+  resources:
+    requests: { memory: "1Gi", cpu: "250m" }
+    limits: { memory: "2Gi", cpu: "1" }
+
+serviceAccount:
+  create: true
+  # IRSA role, if the pod ever needs AWS (it does not today). Left empty on purpose.
+  roleArn: ""
+
+# All secret material comes from ONE AWS Secrets Manager entry via the cluster's
+# external-secrets ClusterSecretStore, the same way the control plane and the
+# doc site do it. Nothing secret is in git: only the path and property names.
+#   PI_API_KEY        (required)  the production Pi Inference service key
+#   ARK_ACCESS_TOKEN  (required)  the team token gating the web UI
+#   SLACK_BOT_TOKEN, SLACK_APP_TOKEN  only read when slack.enabled
+externalSecret:
+  enabled: true
+  storeName: aws-secretstore
+  storeKind: ClusterSecretStore
+  refreshInterval: 1h
+  awsSecretPath: ""       # REQUIRED in the overlay, e.g. pai-risk-mlops/platform/ark-onboarding-bot
+  secretName: ark-onboarding-bot-secrets
+  properties:
+    - PI_API_KEY
+    - ARK_ACCESS_TOKEN
+  slackProperties:
+    - SLACK_BOT_TOKEN
+    - SLACK_APP_TOKEN
+  # If a K8s Secret already exists out-of-band, name it here and set enabled: false.
+  existingSecret: ""
+
+ingress:
+  enabled: true
+  className: nginx
+  # TLS terminates at the cluster ALB (platform pattern); the ingress stays HTTP.
+  tls:
+    enabled: false
+  hosts: []               # set in the overlay
+  path: /onboarding-bot
+  # SSE streaming: nginx must not buffer the response or the token-by-token
+  # answer arrives all at once, which is the bug streaming exists to remove.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+  # Per-user identity in front of the bot (launch review, blocker 2), using the
+  # SAME auth-url pattern the doc site's funnel gate uses: a second Ingress on
+  # this path carrying nginx auth-url/auth-signin pointed at an oauth2-proxy.
+  # OFF by default: the shared ARK_ACCESS_TOKEN gates the beta. When enabled,
+  # authUrl and signinUrl are REQUIRED at render time -- nginx-ingress drops an
+  # empty auth-url and admits the Ingress anyway, i.e. a gate that fails OPEN.
+  authGate:
+    enabled: false
+    authUrl: ""
+    signinUrl: ""
+    # Forwarded upstream so the app can attribute requests once it reads them.
+    authResponseHeaders: "X-Auth-Request-Email,X-Auth-Request-User"
