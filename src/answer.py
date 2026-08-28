@@ -269,15 +269,33 @@ def _pi_is_retryable(status: int, body: str) -> bool:
     return False
 
 
+class PiAtCapacity(RuntimeError):
+    """Every gateway slot is taken. Distinct so callers can refuse instead of
+    falling back to a path that would wait for a slot all over again."""
+
+
 _PI_SLOTS: threading.BoundedSemaphore | None = None
+_PI_SLOT_COUNT = 0
 _PI_SLOTS_LOCK = threading.Lock()
 
 
+def _env_number(name: str, default: float) -> float:
+    """Lenient like the web-side knobs: a set-but-empty or non-numeric value
+    must not turn into a failure on every question."""
+    raw = os.environ.get(name, "").strip()
+    try:
+        return float(raw) if raw else default
+    except ValueError:
+        print(f"{name}={raw!r} is not a number; using {default}", flush=True)
+        return default
+
+
 def _pi_slots() -> threading.BoundedSemaphore:
-    global _PI_SLOTS
+    global _PI_SLOTS, _PI_SLOT_COUNT
     with _PI_SLOTS_LOCK:
         if _PI_SLOTS is None:
-            _PI_SLOTS = threading.BoundedSemaphore(int(os.environ.get("PI_MAX_CONCURRENCY", "16")))
+            _PI_SLOT_COUNT = max(1, int(_env_number("PI_MAX_CONCURRENCY", 16)))
+            _PI_SLOTS = threading.BoundedSemaphore(_PI_SLOT_COUNT)
         return _PI_SLOTS
 
 
@@ -287,12 +305,13 @@ def _pi_slot() -> Iterator[None]:
 
     The gateway was measured flat at 16-way concurrency; beyond that requests
     queue there and every one holds a worker thread here. Queue here instead,
-    briefly, and refuse with a message rather than hang.
+    briefly, and refuse with a message rather than hang. On the streaming
+    path the slot spans the client's read of the body, so a slow consumer
+    holds one longer than the gateway is busy -- accepted for one pod.
     """
     slots = _pi_slots()
-    wait = float(os.environ.get("PI_QUEUE_TIMEOUT_SECONDS", "30"))
-    if not slots.acquire(timeout=wait):
-        raise RuntimeError(f"Pi Inference is at capacity ({slots._initial_value} in flight); try again shortly")
+    if not slots.acquire(timeout=_env_number("PI_QUEUE_TIMEOUT_SECONDS", 30)):
+        raise PiAtCapacity(f"Pi Inference is at capacity ({_PI_SLOT_COUNT} in flight); try again shortly")
     try:
         yield
     finally:
@@ -1022,6 +1041,10 @@ def stream_answer(
                     stream_mode="pi-stream",
                 )
                 return
+            except PiAtCapacity:
+                # The blocking path would only queue for the same slots again;
+                # refuse now so the user hears "busy" once, not after two waits.
+                raise
             except Exception as exc:  # noqa: BLE001 -- any transport or parse failure
                 # Only safe because _emit_streamed_raw raises only while zero
                 # deltas have been emitted; after the first delta it finalizes

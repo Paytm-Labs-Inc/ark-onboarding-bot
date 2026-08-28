@@ -17,7 +17,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.answer import missing_backend_credential
+from src.answer import PiAtCapacity, missing_backend_credential
 from src.auth import (
     COOKIE_NAME,
     PUBLIC_PATHS,

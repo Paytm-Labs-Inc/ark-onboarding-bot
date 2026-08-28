@@ -889,5 +889,54 @@ class GatewaySlotTests(unittest.TestCase):
             os.environ.pop("PI_API_KEY", None)
         self.assertEqual(answer._pi_slots()._value, 1)  # released after the call
 
+
+class StreamSlotWiringTests(unittest.TestCase):
+    def test_the_stream_takes_a_gateway_slot(self) -> None:
+        from contextlib import contextmanager
+        from src import answer
+        entered = []
+
+        @contextmanager
+        def fake_slot():
+            entered.append(True)
+            yield
+
+        class FakeStream:
+            status_code = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def iter_lines(self): return iter(['data: {"choices":[{"delta":{"content":"{\\"answer\\":\\"ok\\"}"}}]}', "data: [DONE]"])
+
+        with patch.object(answer, "_pi_slot", fake_slot), patch.object(answer.httpx, "stream", return_value=FakeStream()), \
+             patch.dict(os.environ, {"PI_API_KEY": "pi-x"}):
+            list(answer._stream_pi_inference("prompt"))
+        self.assertEqual(entered, [True])
+
+    @patch.dict(os.environ, {"PI_MAX_CONCURRENCY": "", "PI_QUEUE_TIMEOUT_SECONDS": "abc"})
+    def test_slot_knobs_parse_leniently(self) -> None:
+        from src import answer
+        answer._PI_SLOTS = None
+        try:
+            self.assertEqual(answer._pi_slots()._value, 16)
+            self.assertEqual(answer._env_number("PI_QUEUE_TIMEOUT_SECONDS", 30), 30)
+        finally:
+            answer._PI_SLOTS = None
+
+    @patch("src.answer._generate_answer")
+    @patch("src.answer._stream_pi_inference")
+    def test_at_capacity_on_the_stream_does_not_fall_back_and_wait_again(self, mock_stream, mock_generate) -> None:
+        from src.answer import PiAtCapacity, stream_answer
+        def boom(_prompt):
+            raise PiAtCapacity("busy")
+            yield ""
+        mock_stream.side_effect = boom
+        os.environ["ANSWER_BACKEND"] = "pi"
+        try:
+            with self.assertRaises(PiAtCapacity):
+                list(stream_answer("q", [{"source": "s -- u", "text": "t"}]))
+        finally:
+            os.environ.pop("ANSWER_BACKEND", None)
+        mock_generate.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
