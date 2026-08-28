@@ -96,18 +96,16 @@
     "question": "who can onboard new team members — do I need tenant-admin?",
     "expected_source": [
       "faq-google-doc",
-      "faq",
-      "admin"
+      "faq"
     ],
-    "notes": "FAQ Q7 - team admins can. The FAQ is ingested twice (site scrape and Google Doc), and the admin page carries the team-admin grant the answer quotes; all three are correct citations.",
+    "notes": "FAQ Q7 - team admins can. The FAQ is ingested twice (site scrape and Google Doc); both carry this answer. The admin page is deliberately not accepted: it only shows the grant from the tenant-admin side, so citing it alone could pass with the opposite answer.",
     "answer_must_include": [
       "team admin",
       "team-admin"
     ],
     "page_evidence": {
       "faq-google-doc": "Team Admins now can",
-      "faq": "Team Admins now can",
-      "admin": "--role team-admin"
+      "faq": "Team Admins now can"
     }
   },
   {
