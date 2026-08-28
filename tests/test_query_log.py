@@ -107,5 +107,58 @@ class DegradedFieldTests(unittest.TestCase):
         self.assertEqual(record["stream_errors"], [])
 
 
+
+class ConcurrentAppendTests(unittest.TestCase):
+    """The lock's one promise: every line stays valid JSON under concurrent writers.
+
+    A single write() on an O_APPEND handle is atomic on Linux, so a plain
+    harness passes with the lock removed (review measured it). Force each
+    record through two syscalls with a yield between them, which is the shape
+    the lock actually guards against: 122 of 200 lines corrupt without it.
+    """
+
+    def test_concurrent_writers_never_interleave_a_line(self) -> None:
+        import json, tempfile, threading, time
+        from pathlib import Path
+
+        class SplitWritePath(type(Path())):
+            def open(self, *args, **kwargs):  # type: ignore[override]
+                handle = super().open(*args, **kwargs)
+                real_write = handle.write
+
+                def split_write(text):
+                    half = len(text) // 2
+                    real_write(text[:half])
+                    handle.flush()  # reach the OS now, not on close
+                    time.sleep(0.001)  # yield so another writer can interleave
+                    return real_write(text[half:])
+
+                handle.write = split_write
+                return handle
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = SplitWritePath(tmp) / "q.jsonl"
+            with patch.object(query_log_module, "QUERY_LOG_PATH", path):
+                big = "x" * 8000
+                def worker(i):
+                    for j in range(20):
+                        query_log_module.append_query_log({"w": i, "j": j, "pad": big})
+                threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
+                for t in threads: t.start()
+                for t in threads: t.join()
+                lines = path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 200)
+        for line in lines:
+            json.loads(line)
+
+    def test_a_held_lock_times_out_as_an_oserror_instead_of_hanging(self) -> None:
+        with patch.object(query_log_module, "_WRITE_LOCK_TIMEOUT_SECONDS", 0.05):
+            query_log_module._WRITE_LOCK.acquire()
+            try:
+                with self.assertRaises(OSError):
+                    query_log_module.append_query_log({"x": 1})
+            finally:
+                query_log_module._WRITE_LOCK.release()
+
 if __name__ == "__main__":
     unittest.main()

@@ -32,7 +32,12 @@ def load_records(path: Path) -> list[dict]:
         line = line.strip()
         if not line:
             continue
-        records.append(json.loads(line))
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            # A write that failed part-way leaves a truncated line; skip it the
+            # way read_feedback does rather than take the weekly triage down.
+            continue
     return records
 
 

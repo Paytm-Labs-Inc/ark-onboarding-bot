@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -10,13 +11,22 @@ from typing import Any
 FEEDBACK_PATH = Path(__file__).resolve().parent.parent / "eval" / "feedback.jsonl"
 
 
+_WRITE_LOCK = threading.Lock()
+_WRITE_LOCK_TIMEOUT_SECONDS = 2.0
+
+
 def append_feedback(record: dict[str, Any]) -> None:
     """Write one feedback record as a single JSONL line."""
     payload = dict(record)
     payload.setdefault("ts", datetime.now(timezone.utc).isoformat())
     FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with FEEDBACK_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    if not _WRITE_LOCK.acquire(timeout=_WRITE_LOCK_TIMEOUT_SECONDS):
+        raise OSError("feedback log is busy")
+    try:
+        with FEEDBACK_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    finally:
+        _WRITE_LOCK.release()
 
 
 def read_feedback(path: Path | None = None) -> list[dict[str, Any]]:

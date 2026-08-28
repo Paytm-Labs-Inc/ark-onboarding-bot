@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -71,11 +72,23 @@ def build_record(
     }
 
 
+_WRITE_LOCK = threading.Lock()
+_WRITE_LOCK_TIMEOUT_SECONDS = 2.0
+
+
 def append_query_log(record: dict[str, Any]) -> None:
     """Write one query observability record as a single JSONL line."""
     QUERY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with QUERY_LOG_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    # Requests are answered on a thread pool; serialize appends so two answers
+    # cannot interleave their bytes into one unparseable line. Bound the wait:
+    # a write hung on a stalled volume must not queue every answer behind it.
+    if not _WRITE_LOCK.acquire(timeout=_WRITE_LOCK_TIMEOUT_SECONDS):
+        raise OSError("query log is busy; dropping this record")
+    try:
+        with QUERY_LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    finally:
+        _WRITE_LOCK.release()
 
 
 def log_query(**kwargs: Any) -> None:

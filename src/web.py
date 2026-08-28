@@ -249,16 +249,22 @@ def api_reset(body: ResetRequest) -> dict[str, bool]:
 
 @app.post("/api/feedback")
 def api_feedback(body: FeedbackRequest) -> dict[str, bool]:
-    append_feedback(
-        {
-            "question": body.question.strip(),
-            "answer": body.answer.strip(),
-            "sources": body.sources,
-            "retrieved_sources": body.retrieved_sources,
-            "session_id": body.session_id,
-            "rating": body.rating,
-        }
-    )
+    try:
+        append_feedback(
+            {
+                "question": body.question.strip(),
+                "answer": body.answer.strip(),
+                "sources": body.sources,
+                "retrieved_sources": body.retrieved_sources,
+                "session_id": body.session_id,
+                "rating": body.rating,
+            }
+        )
+    except OSError as exc:
+        # Here the write is the request, so say so honestly rather than 500 --
+        # and say it in the log too, or availability improves while visibility drops.
+        print(f"feedback write failed: {exc}", flush=True)
+        raise HTTPException(status_code=503, detail="Feedback could not be saved right now.") from exc
     return {"ok": True}
 
 
