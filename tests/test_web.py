@@ -267,5 +267,44 @@ class BackendCredentialReadinessTests(unittest.TestCase):
         os.environ["PI_API_KEY"] = "pi-x"
         self.assertEqual(self.client.get("/ready").status_code, 200)
 
+
+class ErrorTextAndHeadersTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = TestClient(app)
+
+    @patch("src.web.ask_in_session", side_effect=RuntimeError("api.inference.paytm.com HTTP 503 for model qwen/qwen3-32b"))
+    def test_upstream_error_text_never_reaches_the_user(self, _ask) -> None:
+        response = self.client.post("/api/ask", json={"question": "q"})
+        self.assertEqual(response.status_code, 502)
+        self.assertNotIn("inference.paytm.com", response.text)
+        self.assertNotIn("qwen", response.text)
+
+    @patch("src.web.ask_in_session", side_effect=TimeoutError("read timed out after 20s at api.inference.paytm.com"))
+    def test_timeout_text_is_generic(self, _ask) -> None:
+        response = self.client.post("/api/ask", json={"question": "q"})
+        self.assertEqual(response.status_code, 504)
+        self.assertNotIn("inference.paytm.com", response.text)
+
+    def test_security_headers_on_every_response(self) -> None:
+        with patch("src.web.ask_in_session", side_effect=RuntimeError("x")):
+            responses = [
+                self.client.get("/health"),
+                self.client.post("/api/ask", json={"question": "q"}),  # 502
+                self.client.get("/reviews", follow_redirects=False),  # 303 to login when a token is set, else 200
+            ]
+        for response in responses:
+            headers = response.headers
+            self.assertEqual(headers["X-Frame-Options"], "DENY", response.url)
+            self.assertEqual(headers["X-Content-Type-Options"], "nosniff", response.url)
+            self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"], response.url)
+
+    @patch("src.web._log_upstream_failure")
+    @patch("src.web.ask_in_session", side_effect=ValueError("PI_API_KEY not set. Set it, or set ANSWER_BACKEND=cursor."))
+    def test_config_valueerror_is_logged_and_not_echoed(self, _ask, log) -> None:
+        response = self.client.post("/api/ask", json={"question": "q"})
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("PI_API_KEY", response.text)
+        log.assert_called_once()
+
 if __name__ == "__main__":
     unittest.main()
