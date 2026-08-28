@@ -335,9 +335,11 @@ def print_report(
     retrieval_pass = sum(1 for r in scored if r.retrieval_hit)
     print("\nEval summary")
     print("=" * 72)
+    accepted_labels = sum(len(str(r.expected_source).split("|")) for r in scored)
     print(
         f"Config: MAX_CHARS={max_chars}, top_k={top_k}, model={model_name}, "
-        f"pins={'on' if use_pins else 'off'}",
+        f"pins={'on' if use_pins else 'off'}, "
+        f"accepted_labels={accepted_labels} over {len(scored)} questions",
     )
     baseline = random_baseline(scored, top_k)
     baseline_note = f"   [random baseline {baseline:.1f}%]" if baseline is not None else ""

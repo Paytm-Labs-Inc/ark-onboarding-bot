@@ -30,27 +30,30 @@ class EvalGoldSetTests(unittest.TestCase):
 
 
 class MultiSourceLabelGuardrailTests(unittest.TestCase):
-    """A label may name several pages only when each of them carries the answer.
+    """A label may name several pages only with evidence that each one answers.
 
-    Multi-page labels make the page-level gate easier to satisfy, so every page
-    listed has to earn its place: it must contain every answer marker.
+    The shared answer markers are too generic to guard this ("workspace" and
+    "flow" appear on 14 of 17 pages), so a multi-page label carries
+    page_evidence: one quote per listed page that must occur on that page.
     """
 
-    def test_every_listed_page_carries_every_marker(self) -> None:
-        import json
-        from pathlib import Path
+    ROOT = Path(__file__).resolve().parents[1]
 
-        questions = json.loads(Path("eval/questions.json").read_text(encoding="utf-8"))
+    def test_every_listed_page_has_its_own_evidence_quote(self) -> None:
+        import json
+
+        questions = json.loads((self.ROOT / "eval" / "questions.json").read_text(encoding="utf-8"))
         for item in questions:
             expected = item.get("expected_source")
             if not isinstance(expected, list):
+                self.assertNotIn("page_evidence", item, f"{item['id']}: evidence without a multi-page label")
                 continue
-            markers = [str(m).lower() for m in item.get("answer_must_include") or []]
-            self.assertTrue(markers, f"{item['id']}: multi-page label needs answer markers")
-            for page in expected:
-                text = Path("data", f"{page}.md").read_text(encoding="utf-8").lower()
-                missing = [m for m in markers if m not in text]
-                self.assertEqual(missing, [], f"{item['id']}: {page} lacks {missing}")
+            evidence = item.get("page_evidence") or {}
+            self.assertEqual(sorted(evidence), sorted(expected), f"{item['id']}: page_evidence must cover exactly the listed pages")
+            for page, quote in evidence.items():
+                text = (self.ROOT / "data" / f"{page}.md").read_text(encoding="utf-8").lower()
+                self.assertIn(str(quote).lower(), text, f"{item['id']}: {page!r} does not contain {quote!r}")
+
 
 if __name__ == "__main__":
     unittest.main()

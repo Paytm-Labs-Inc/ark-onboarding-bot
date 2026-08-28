@@ -201,6 +201,18 @@ class MultiSourceLabelTests(unittest.TestCase):
         self.assertEqual(result.expected_source, "getting-started|first-run")
 
 
+class MultiSourceCitationTests(unittest.TestCase):
+    @patch("src.retrieve.retrieve", return_value=[{"source": "first-run -- u", "text": "x"}])
+    @patch("src.ask.ask")
+    def test_citation_of_any_listed_page_is_a_hit(self, mock_ask, _r) -> None:
+        item = {"id": "q", "question": "q?", "expected_source": ["getting-started", "first-run"],
+                "answer_must_include": ["nouns"]}
+        mock_ask.return_value = {"answer": "Four nouns.", "citations": ["first-run -- u"]}
+        self.assertTrue(evaluate_question(item, top_k=8, run_answer=True).citation_hit)
+        mock_ask.return_value = {"answer": "Four nouns.", "citations": ["roadmap -- u"]}
+        self.assertFalse(evaluate_question(item, top_k=8, run_answer=True).citation_hit)
+
+
 class MultiSourceNegativeTests(unittest.TestCase):
     @patch("src.retrieve.retrieve")
     def test_no_listed_page_is_a_miss(self, mock_retrieve) -> None:
