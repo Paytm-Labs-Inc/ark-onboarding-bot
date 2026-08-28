@@ -2,8 +2,9 @@
 #   Web bot:   python -m src.web         (default CMD; served behind the ingress)
 #   Slack app: python -m src.slack_app   (override the command; Socket Mode, no ingress)
 #
-# Secrets/config are injected at runtime (never baked): CURSOR_API_KEY,
-# ARK_ACCESS_TOKEN, SLACK_BOT_TOKEN, SLACK_APP_TOKEN, BASE_PATH=/onboarding-bot.
+# Secrets/config are injected at runtime (never baked): PI_API_KEY (required,
+# the default backend), ARK_ACCESS_TOKEN, SLACK_BOT_TOKEN, SLACK_APP_TOKEN,
+# BASE_PATH=/onboarding-bot. CURSOR_API_KEY only with ANSWER_BACKEND=cursor.
 FROM python:3.12-slim
 
 # System deps: curl for the Cursor agent CLI installer, ca-certificates for TLS.

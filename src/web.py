@@ -16,6 +16,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from src.answer import missing_backend_credential
 from src.auth import (
     COOKIE_NAME,
     PUBLIC_PATHS,
@@ -264,6 +265,11 @@ def ready() -> dict[str, object] | JSONResponse:
     ok, body = check_retrieval_ready()
     if not ok:
         return JSONResponse(status_code=503, content=body)
+    missing = missing_backend_credential()
+    if missing:
+        return JSONResponse(
+            status_code=503, content={**body, "status": "not_ready", "reason": missing}
+        )
     return body
 
 
@@ -434,6 +440,9 @@ def main() -> None:
     host = os.environ.get("WEB_HOST", "127.0.0.1")
     port = int(os.environ.get("WEB_PORT", "8765"))
 
+    missing = missing_backend_credential()
+    if missing:
+        raise SystemExit(f"Refusing to start: {missing}")
     if host not in LOOPBACK_HOSTS and not auth_enabled():
         raise SystemExit(
             f"Refusing to bind to non-loopback host {host!r} without ARK_ACCESS_TOKEN "

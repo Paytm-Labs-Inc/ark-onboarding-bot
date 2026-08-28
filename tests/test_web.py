@@ -11,7 +11,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from src import feedback as feedback_module
-from src.web import app
+from src.web import app, missing_backend_credential
 
 
 class WebAppTests(unittest.TestCase):
@@ -39,6 +39,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
 
+    @patch.dict(os.environ, {"PI_API_KEY": "pi-test", "ANSWER_BACKEND": "pi"})
     @patch("src.warmup.retrieve", return_value=[{"source": "x", "text": "y"}])
     @patch("src.warmup.load_chunks", return_value=[{"source": "x", "text": "y"}])
     def test_ready_returns_ok_when_corpus_loaded(
@@ -235,6 +236,36 @@ class AskRateLimitEdgeTests(unittest.TestCase):
                 web_module._evict_idle_clients(now=100.0)
             self.assertEqual(len(web_module._ask_hits), 0)
 
+class BackendCredentialReadinessTests(unittest.TestCase):
+    """A pod with no model credential must not report Ready."""
+
+    def setUp(self) -> None:
+        self.client = TestClient(app)
+        self._saved = {k: os.environ.pop(k, None) for k in ("PI_API_KEY", "CURSOR_API_KEY", "ANSWER_BACKEND")}
+
+    def tearDown(self) -> None:
+        for k, v in self._saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+    def test_names_the_missing_credential_for_each_backend(self) -> None:
+        self.assertIn("PI_API_KEY", missing_backend_credential())
+        os.environ["ANSWER_BACKEND"] = "cursor"
+        self.assertIn("CURSOR_API_KEY", missing_backend_credential())
+        os.environ["CURSOR_API_KEY"] = "crsr_x"
+        self.assertIsNone(missing_backend_credential())
+        os.environ["ANSWER_BACKEND"] = "groq"
+        self.assertIn("not a backend", missing_backend_credential())
+
+    @patch("src.web.check_retrieval_ready", return_value=(True, {"status": "ready", "chunks": 3}))
+    def test_ready_is_503_without_the_credential_and_200_with_it(self, _r) -> None:
+        response = self.client.get("/ready")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["status"], "not_ready")
+        self.assertIn("PI_API_KEY", response.json()["reason"])
+        os.environ["PI_API_KEY"] = "pi-x"
+        self.assertEqual(self.client.get("/ready").status_code, 200)
 
 if __name__ == "__main__":
     unittest.main()

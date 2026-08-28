@@ -17,16 +17,18 @@ and needs no firewall/security-group changes.
 - The box is an Ark registered-host (already enrolled) or any internal machine
   you can SSH into. It does **not** need to be enrolled for the web UI to run.
 - Python 3.11+ and `git`.
-- The **Cursor agent CLI** on `PATH` (`agent status` should work) — the answer
-  layer shells out to it. Install with `curl https://cursor.com/install -fsS | bash`.
-- A **`CURSOR_API_KEY`** (from https://cursor.com/dashboard/api).
+- A **`PI_API_KEY`** for the Pi Inference gateway (`api.inference.paytm.com`).
+  The default backend (`ANSWER_BACKEND=pi`) generates every answer with it; the
+  service refuses to start and `/ready` returns 503 without it.
+- Optional: `ANSWER_BACKEND=cursor` instead needs the **Cursor agent CLI** on
+  `PATH` and a `CURSOR_API_KEY`. It is ~10x slower and not the production path.
 
 ## 1. Clone and configure
 
 ```bash
 sudo git clone https://github.com/Paytm-Labs-Inc/ark-onboarding-bot.git /opt/ark-onboarding-bot
 cd /opt/ark-onboarding-bot
-printf 'CURSOR_API_KEY=crsr_your_key_here\n' | sudo tee .env >/dev/null
+printf 'PI_API_KEY=your_pi_inference_key\nARK_ACCESS_TOKEN=a_long_random_team_token\n' | sudo tee .env >/dev/null
 sudo chmod 600 .env
 ```
 
@@ -84,7 +86,8 @@ curl -s -X POST http://127.0.0.1:8765/api/ask \
   an Ark health probe).
 - **`GET /ready`** — readiness. Loads the corpus and runs a sample retrieval;
   returns `200 {"status":"ready","chunks":N}` when the instance can serve, or
-  `503 {"status":"not_ready","reason":...}` otherwise. The first `/ready` call
+  `503 {"status":"not_ready","reason":...}` otherwise — including when the
+  configured answer backend has no credential. The first `/ready` call
   warms the embedding model, so it can take a few seconds; later calls are fast.
 
 ## Updating a deployment
@@ -106,10 +109,12 @@ services**:
 - **Slack app** — `python -m src.slack_app` (override the command), uses **Socket
   Mode**, so it needs **no ingress** (only outbound WebSocket to Slack).
 
-The image bakes in the Cursor agent CLI, Python deps, and the embedding model.
-Secrets/config are injected at runtime (never baked into the image):
-`CURSOR_API_KEY`, `ARK_ACCESS_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and
-`BASE_PATH=/onboarding-bot`.
+The image bakes in Python deps, the embedding model, and the Cursor agent CLI
+(only used with `ANSWER_BACKEND=cursor`). Secrets/config are
+injected at runtime (never baked into the image): **`PI_API_KEY`** (required —
+the default backend), `ARK_ACCESS_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`,
+and `BASE_PATH=/onboarding-bot`. `CURSOR_API_KEY` only matters with
+`ANSWER_BACKEND=cursor`.
 
 ### Build
 
@@ -121,7 +126,7 @@ docker build -t ark-onboarding-bot:<tag> .   # tag by git SHA, not :latest
 
 ```bash
 docker run -p 8765:8765 \
-  -e CURSOR_API_KEY=... -e ARK_ACCESS_TOKEN=... -e BASE_PATH=/onboarding-bot \
+  -e PI_API_KEY=... -e ARK_ACCESS_TOKEN=... -e BASE_PATH=/onboarding-bot \
   -e FORWARDED_ALLOW_IPS=<ingress address or CIDR> \
   ark-onboarding-bot:<tag>
 ```
@@ -130,7 +135,7 @@ docker run -p 8765:8765 \
 
 ```bash
 docker run \
-  -e CURSOR_API_KEY=... -e SLACK_BOT_TOKEN=... -e SLACK_APP_TOKEN=... \
+  -e PI_API_KEY=... -e SLACK_BOT_TOKEN=... -e SLACK_APP_TOKEN=... \
   ark-onboarding-bot:<tag> python -m src.slack_app
 ```
 

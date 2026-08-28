@@ -167,6 +167,30 @@ def _answer_backend() -> str:
     return os.environ.get("ANSWER_BACKEND", DEFAULT_BACKEND).strip().lower()
 
 
+def missing_backend_credential() -> str | None:
+    """Name the credential the configured backend needs and does not have.
+
+    Both entrypoints call this at startup, and /ready calls it per probe: the
+    default backend reads PI_API_KEY per request, so without this a process
+    passes every probe and answers HTTP 400 to every question.
+    """
+    backend = _answer_backend()
+    if backend == "cursor":
+        if os.environ.get("CURSOR_API_KEY", "").strip():
+            return None
+        return "ANSWER_BACKEND=cursor needs CURSOR_API_KEY, which is not set."
+    if backend != "pi":
+        # An unknown value would otherwise look healthy here and fail every
+        # question later with "unknown backend".
+        return f"ANSWER_BACKEND={backend!r} is not a backend; use 'pi' or 'cursor'."
+    if os.environ.get("PI_API_KEY", "").strip():
+        return None
+    return (
+        "The answer backend is pi (the default) and PI_API_KEY is not set. "
+        "Set it, or set ANSWER_BACKEND=cursor with CURSOR_API_KEY."
+    )
+
+
 def _cursor_backend() -> str:
     """Which Cursor transport to use once the cursor provider is selected."""
     return os.environ.get("CURSOR_ANSWER_BACKEND", "auto").strip().lower()

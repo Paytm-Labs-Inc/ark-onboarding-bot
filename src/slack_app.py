@@ -7,8 +7,8 @@ grounded, cited answer back in-thread.
 Run as its own process with these env vars:
 - SLACK_BOT_TOKEN   (xoxb-...)  — from installing the Slack app
 - SLACK_APP_TOKEN   (xapp-...)  — App-Level Token with connections:write (Socket Mode)
-- CURSOR_API_KEY               — same key the web app / CLI use
-plus the Cursor `agent` CLI on PATH.
+- PI_API_KEY                   — the default answer backend (Pi Inference)
+Optional: ANSWER_BACKEND=cursor with CURSOR_API_KEY and the `agent` CLI on PATH.
 
 Socket Mode means Slack connects to us over an outbound WebSocket, so no public
 inbound URL / ingress is needed — it works from an internal host.
@@ -23,7 +23,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from src.answer import HANDOFF_LINE, is_non_answer
+from src.answer import HANDOFF_LINE, is_non_answer, missing_backend_credential
 from src.ask import ask, ask_stream
 
 _MENTION_RE = re.compile(r"^\s*<@[^>]+>\s*")
@@ -324,6 +324,10 @@ def main() -> None:
         pass
 
     _maybe_relax_ssl_for_corp_proxy()
+
+    missing = missing_backend_credential()
+    if missing:
+        raise SystemExit(f"Refusing to start: {missing}")
 
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
