@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.chunker import MAX_CHARS, OVERLAP_CHARS, _split_fixed, load_chunks
+from src.chunker import DATA_DIR, MAX_CHARS, OVERLAP_CHARS, _split_fixed, load_chunks
 
 
 class ChunkerTests(unittest.TestCase):
@@ -50,7 +50,7 @@ class ChunkerTests(unittest.TestCase):
         self.assertEqual(chunks[0]["text"], "plain body with no markdown headers at all")
 
     def test_oversized_section_is_split_with_fallback(self) -> None:
-        big = "x " * MAX_CHARS  # ~2*MAX_CHARS chars, no h2
+        big = "## Big\n\n" + "x " * MAX_CHARS  # ~2*MAX_CHARS chars, with a heading so the prefix path runs
         self._write("faq.md", f"Source: https://foundry.mypaytm.com/faq\n\n{big}")
         chunks = load_chunks(self.data_dir)
         self.assertGreater(len(chunks), 1)
@@ -77,6 +77,27 @@ class ChunkerTests(unittest.TestCase):
         joined = pieces[0][-OVERLAP_CHARS:]
         self.assertTrue(any(piece.startswith(joined) for piece in pieces[1:]))
 
+
+
+class SplitSectionKeepsHeadingTests(unittest.TestCase):
+    def test_every_piece_of_a_split_section_starts_with_its_heading(self) -> None:
+        from src import chunker
+        with tempfile.TemporaryDirectory() as tmp:
+            body = "## Start here\n\n" + ("step text " * 400)  # well over MAX_CHARS
+            Path(tmp, "page.md").write_text("Source: https://x/page\n" + body, encoding="utf-8")
+            chunks = chunker.load_chunks(Path(tmp))
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertTrue(chunk["text"].startswith("## Start here"), chunk["text"][:40])
+
+    def test_the_real_start_here_section_is_pinned_on_every_piece(self) -> None:
+        chunks = load_chunks(DATA_DIR)
+        # Every piece that carries the section's body must also carry its heading.
+        body_pieces = [c for c in chunks if "Four steps stand between" in c["text"]
+                       or c["text"].startswith("## Start here")]
+        self.assertGreater(len(body_pieces), 1, "section no longer splits; test needs updating")
+        for chunk in body_pieces:
+            self.assertTrue(chunk["text"].startswith("## Start here"), chunk["text"][:60])
 
 if __name__ == "__main__":
     unittest.main()

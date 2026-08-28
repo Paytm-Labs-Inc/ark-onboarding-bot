@@ -186,5 +186,27 @@ class RetrieverTests(unittest.TestCase):
 
 
 
+
+class PinnedMarkersMatchCorpusTests(unittest.TestCase):
+    """Every pinned marker must match at least one chunk of the real corpus.
+
+    A marker that matches nothing is a rule that silently stopped working.
+    Six of them had, after the #23 ingest rewrote the pages they were copied
+    from, and nothing noticed because a dead marker fails quietly.
+    """
+
+    def test_every_marker_matches_a_chunk(self) -> None:
+        from src.chunker import DATA_DIR, load_chunks
+
+        chunks = load_chunks(DATA_DIR)
+        dead: list[str] = []
+        for name in dir(retriever):
+            if not name.endswith("PINNED_MARKERS"):
+                continue
+            for marker in getattr(retriever, name):
+                if not any(marker in chunk["text"] for chunk in chunks):
+                    dead.append(f"{name}: {marker!r}")
+        self.assertEqual(dead, [], "pinned markers that match no chunk")
+
 if __name__ == "__main__":
     unittest.main()
