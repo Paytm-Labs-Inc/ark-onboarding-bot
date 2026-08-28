@@ -146,7 +146,9 @@ and `X-Forwarded-Proto` are honoured only from it. Unset, no forwarded headers
 are honoured at all (correct for the SSH-tunnel path). Behind the ingress it
 **must** be set: it is what makes the rate limit per-user instead of
 per-ingress and what marks the login cookie `Secure` behind TLS termination.
-`*` is refused at startup.
+`*` is accepted with a startup warning: it is the platform's interim while the
+pod is reachable only through the ingress (ClusterIP-only Service). Replace it
+with the ingress-pod CIDR as soon as it is known.
 
 ### On k8s
 

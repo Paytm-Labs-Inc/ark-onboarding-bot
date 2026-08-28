@@ -223,9 +223,15 @@ class AskRateLimitEdgeTests(unittest.TestCase):
             self.assertEqual(proxy_settings(), {"proxy_headers": False})
         with patch.dict(os.environ, {"FORWARDED_ALLOW_IPS": "10.42.0.0/16"}):
             self.assertEqual(proxy_settings(), {"proxy_headers": True, "forwarded_allow_ips": "10.42.0.0/16"})
+        # "*" is the platform's interim behind a ClusterIP-only Service: accepted,
+        # but loudly, so the warning is asserted rather than the refusal.
+        import io
+        from contextlib import redirect_stderr
         with patch.dict(os.environ, {"FORWARDED_ALLOW_IPS": "*"}):
-            with self.assertRaises(SystemExit):
-                proxy_settings()
+            err = io.StringIO()
+            with redirect_stderr(err):
+                self.assertEqual(proxy_settings(), {"proxy_headers": True, "forwarded_allow_ips": "*"})
+            self.assertIn("trusts every peer", err.getvalue())
 
     def test_idle_clients_are_evicted_when_the_table_is_full(self) -> None:
         from src import web as web_module
