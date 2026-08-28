@@ -94,12 +94,21 @@
   {
     "id": "onboard-team-members",
     "question": "who can onboard new team members — do I need tenant-admin?",
-    "expected_source": "faq-google-doc",
-    "notes": "FAQ Q7 — team admins can",
+    "expected_source": [
+      "faq-google-doc",
+      "faq",
+      "admin"
+    ],
+    "notes": "FAQ Q7 - team admins can. The FAQ is ingested twice (site scrape and Google Doc), and the admin page carries the team-admin grant the answer quotes; all three are correct citations.",
     "answer_must_include": [
       "team admin",
       "team-admin"
-    ]
+    ],
+    "page_evidence": {
+      "faq-google-doc": "Team Admins now can",
+      "faq": "Team Admins now can",
+      "admin": "--role team-admin"
+    }
   },
   {
     "id": "laptop-vs-managed",
@@ -206,13 +215,20 @@
   {
     "id": "out-of-scope-ci-tooling",
     "question": "how do I set up a custom CI pipeline for my team's repo?",
-    "expected_source": "authoring-your-own",
-    "notes": "Team pipeline maps to a workspace plus a flow; in-scope after the #23 corpus ingest",
+    "expected_source": [
+      "authoring-your-own",
+      "first-run"
+    ],
+    "notes": "Team pipeline maps to a workspace plus a flow; in-scope after the #23 corpus ingest. first-run walks the same `ark flow create` path, so it is a correct citation too.",
     "answer_must_include": [
       "ark workspace apply",
       "ark flow create",
       "named actions"
-    ]
+    ],
+    "page_evidence": {
+      "authoring-your-own": "ark flow create",
+      "first-run": "ark flow create"
+    }
   },
   {
     "id": "adversarial-cursor-typo",
