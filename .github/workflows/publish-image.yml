@@ -21,14 +21,15 @@ name: Publish image
 #                           (arn:...:repository/pai-mlops-platform/ark-chatbot).
 #                           The GHCR image keeps the repo's own name.
 #
-# Platform-side preconditions, in pi-risk-mlops (same as foundry-platform's
-# publish job documents them):
-#   - the ECR repository <prefix>/ark-onboarding-bot with a lifecycle policy
-#     (terraform/environments/platform/03-irsa/ark.tf)
-#   - the GitHub OIDC role's trust policy extended to
-#     repo:Paytm-Labs-Inc/ark-onboarding-bot:ref:refs/heads/main
-#     (13-github-oidc/github-oidc.tf) -- the foundry-platform role trusts
-#     only its own repo, so without this every push is AccessDenied
+# Platform-side preconditions, in pi-risk-mlops (all in place since
+# 2026-08-28; recorded so a new environment can reproduce them):
+#   - the ECR repository pai-mlops-platform/ark-chatbot with a lifecycle
+#     policy (terraform/environments/platform/03-irsa/ark.tf)
+#   - this repo's OIDC subject in the role's trust policy
+#     (13-github-oidc/product-tenant.locals.tf). Take the exact string from
+#     `gh api repos/<owner>/<repo>/actions/oidc/customization/sub` -- newer
+#     repos carry org/repo ids, older ones do not, and a wrong subject is
+#     denied identically to no grant at all.
 #   - platform-argocd-image-updater granted pull on the new repository
 #     (03-irsa/argocd-image-updater.tf)
 # The "Verify ECR repository exists" step below turns a missing repo into a
