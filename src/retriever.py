@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -133,10 +135,84 @@ USAGE_PINNED_MARKERS = (
 )
 
 
+_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9._\-/]*")
+_SUBTOKEN_RE = re.compile(r"[._\-/]")
+
+
+def _tokens(text: str) -> list[str]:
+    """Lexical tokens, keeping identifiers whole and also split.
+
+    Support questions are full of exact strings -- mcp.json, ark host enroll,
+    session_lifecycle -- which is where dense embeddings are weakest. Keep
+    `mcp.json` as one token and also emit `mcp` and `json`, so both the exact
+    identifier and its parts can match.
+    """
+    out: list[str] = []
+    for tok in _TOKEN_RE.findall(text.lower()):
+        out.append(tok)
+        parts = [p for p in _SUBTOKEN_RE.split(tok) if p and p != tok]
+        out.extend(parts)
+    return out
+
+
+class _BM25:
+    """Okapi BM25 over the chunk texts. Small corpus, plain Python, no dependency."""
+
+    def __init__(self, docs: list[list[str]], k1: float = 1.5, b: float = 0.75) -> None:
+        self.k1, self.b = k1, b
+        self.doc_lens = np.array([len(d) for d in docs], dtype=np.float32)
+        self.avgdl = float(self.doc_lens.mean()) if len(docs) else 0.0
+        self.tf: list[dict[str, int]] = []
+        df: dict[str, int] = {}
+        for d in docs:
+            counts: dict[str, int] = {}
+            for t in d:
+                counts[t] = counts.get(t, 0) + 1
+            self.tf.append(counts)
+            for t in counts:
+                df[t] = df.get(t, 0) + 1
+        n = len(docs)
+        self.idf = {t: math.log(1 + (n - f + 0.5) / (f + 0.5)) for t, f in df.items()}
+
+    def scores(self, query: list[str]) -> np.ndarray:
+        out = np.zeros(len(self.tf), dtype=np.float32)
+        if not self.tf:
+            return out
+        for t in set(query):
+            idf = self.idf.get(t)
+            if idf is None:
+                continue
+            for i, counts in enumerate(self.tf):
+                f = counts.get(t)
+                if not f:
+                    continue
+                denom = f + self.k1 * (1 - self.b + self.b * self.doc_lens[i] / self.avgdl)
+                out[i] += idf * f * (self.k1 + 1) / denom
+        return out
+
+
+def _rrf(*rankings: np.ndarray, k: int = 60) -> np.ndarray:
+    """Reciprocal-rank fusion: each list votes 1/(k+rank) for every document."""
+    fused = np.zeros(len(rankings[0]), dtype=np.float32)
+    for order in rankings:
+        for rank, doc in enumerate(order):
+            fused[int(doc)] += 1.0 / (k + rank + 1)
+    return fused
+
+
+_DENSE_VOTES = 2
+
+
+def hybrid_enabled() -> bool:
+    """ASK_HYBRID=0 falls back to dense-only; the eval compares both."""
+    return os.environ.get("ASK_HYBRID", "1").strip().lower() not in ("0", "false", "no")
+
+
 @dataclass(frozen=True)
 class Index:
     chunks: list[Chunk]
     embeddings: np.ndarray
+    bm25: "_BM25 | None" = None
 
 
 @dataclass(frozen=True)
@@ -170,7 +246,8 @@ def build_index(chunks: list[Chunk]) -> Index:
     if not chunks:
         return Index(chunks=[], embeddings=np.zeros((0, 0), dtype=np.float32))
     embeddings = _embed([c["text"] for c in chunks])
-    return Index(chunks=list(chunks), embeddings=embeddings)
+    bm25 = _BM25([_tokens(c["text"]) for c in chunks])
+    return Index(chunks=list(chunks), embeddings=embeddings, bm25=bm25)
 
 
 def _expand_query(question: str) -> str:
@@ -249,7 +326,21 @@ def retrieve_scored(
     query = _embed([search_query])[0]
     sims = index.embeddings @ query
     k = min(top_k, len(index.chunks))
-    order = np.argsort(-sims, kind="stable")[:k]
+    dense_order = np.argsort(-sims, kind="stable")
+    if hybrid_enabled() and index.bm25 is not None:
+        # Dense catches paraphrase and typos; BM25 catches the exact identifiers
+        # and error strings support questions are made of. Fuse by rank so
+        # neither score scale dominates.
+        lexical = index.bm25.scores(_tokens(question))
+        lexical_order = np.argsort(-lexical, kind="stable")
+        # Dense votes twice. Measured on the gold set: equal weight pulled one
+        # prose question's page out of the top 8 (BM25 rewarding "CI",
+        # "pipeline", "team"); 2:1 keeps every page and lifts chunk MRR
+        # 0.865 -> 0.887 with pins, 0.750 -> 0.796 without.
+        fused = _rrf(*([dense_order] * _DENSE_VOTES), lexical_order)
+        order = np.argsort(-fused, kind="stable")[:k]
+    else:
+        order = dense_order[:k]
     results = [index.chunks[int(i)] for i in order]
     if not use_pins:
         pass

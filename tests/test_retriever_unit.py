@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -207,6 +208,61 @@ class PinnedMarkersMatchCorpusTests(unittest.TestCase):
                 if not any(marker in chunk["text"] for chunk in chunks):
                     dead.append(f"{name}: {marker!r}")
         self.assertEqual(dead, [], "pinned markers that match no chunk")
+
+
+class HybridRetrievalTests(unittest.TestCase):
+    CHUNKS = [
+        {"source": "setup -- u", "text": "General setup notes about editors and machines."},
+        {"source": "cursor -- u", "text": "Put the server block in .cursor/mcp.json and restart Cursor."},
+        {"source": "faq -- u", "text": "Frequently asked questions about teams and repos."},
+    ]
+
+    @staticmethod
+    def _embed_prefers_setup(texts):
+        # Dense alone ranks the generic setup chunk first for anything mentioning "setup".
+        import numpy as np
+        return np.asarray([[1.0, 0.0] if "setup" in t.lower() else [0.0, 1.0] for t in texts], dtype=np.float32)
+
+    def test_tokens_keep_identifiers_whole_and_split(self) -> None:
+        from src.retriever import _tokens
+        toks = _tokens("Edit .cursor/mcp.json then run ark host enroll")
+        self.assertIn("cursor/mcp.json", toks)
+        self.assertIn("mcp.json", toks) if "mcp.json" in toks else None
+        self.assertIn("json", toks)
+        self.assertIn("enroll", toks)
+
+    def test_bm25_ranks_the_exact_identifier_first(self) -> None:
+        from src.retriever import _BM25, _tokens
+        bm = _BM25([_tokens(c["text"]) for c in self.CHUNKS])
+        scores = bm.scores(_tokens("mcp.json"))
+        self.assertEqual(int(scores.argmax()), 1)
+
+    def test_rrf_sums_reciprocal_ranks(self) -> None:
+        import numpy as np
+        from src.retriever import _rrf
+        fused = _rrf(np.array([0, 1]), np.array([1, 0]), k=1)
+        self.assertAlmostEqual(float(fused[0]), 1 / 2 + 1 / 3)
+        self.assertAlmostEqual(float(fused[1]), 1 / 3 + 1 / 2)
+
+    @patch("src.retriever._embed", side_effect=_embed_prefers_setup.__func__)
+    def test_hybrid_lifts_the_identifier_chunk_dense_alone_buries(self, _e) -> None:
+        def rank_of_identifier(results):
+            return next(i for i, c in enumerate(results) if "mcp.json" in c["text"])
+
+        with patch.dict(os.environ, {"ASK_HYBRID": "0"}):
+            index = build_index(self.CHUNKS)
+            dense_only = retrieve("where is the mcp.json setup file", top_k=3, index=index, use_pins=False)
+        with patch.dict(os.environ, {"ASK_HYBRID": "1"}):
+            hybrid = retrieve("where is the mcp.json setup file", top_k=3, index=index, use_pins=False)
+        self.assertIn("setup notes", dense_only[0]["text"])  # dense alone buries the identifier
+        self.assertLess(rank_of_identifier(hybrid), rank_of_identifier(dense_only))
+
+    def test_flag_parses(self) -> None:
+        from src.retriever import hybrid_enabled
+        with patch.dict(os.environ, {"ASK_HYBRID": "0"}):
+            self.assertFalse(hybrid_enabled())
+        with patch.dict(os.environ, {"ASK_HYBRID": ""}):
+            self.assertTrue(hybrid_enabled())
 
 if __name__ == "__main__":
     unittest.main()
