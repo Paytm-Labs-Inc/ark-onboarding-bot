@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -146,6 +147,94 @@ class FeedbackWriteFailureTests(unittest.TestCase):
             json={"question": "q", "answer": "a", "rating": "up"},
         )
         self.assertEqual(response.status_code, 503)
+class AskRateLimitTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from src import web as web_module
+        web_module._ask_hits.clear()
+        self.client = TestClient(app)
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "2"})
+    @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
+    def test_third_question_in_a_minute_is_429(self, _ask) -> None:
+        for _ in range(2):
+            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
+        response = self.client.post("/api/ask", json={"question": "q"})
+        self.assertEqual(response.status_code, 429)
+        self.assertIn("per minute", response.json()["detail"])
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "0"})
+    @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
+    def test_zero_disables_the_limit(self, _ask) -> None:
+        for _ in range(5):
+            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
+
+
+class AskRateLimitEdgeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from src import web as web_module
+        web_module._ask_hits.clear()
+        self.client = TestClient(app)
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "1"})
+    @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
+    def test_the_window_slides(self, _ask) -> None:
+        with patch("src.web._now", side_effect=[0.0, 1.0, 61.5]):
+            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
+            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 429)
+            self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "1"})
+    def test_the_stream_endpoint_is_limited_too(self) -> None:
+        def fake_stream(session_id, question):
+            yield {"type": "done", "answer": "ok", "citations": [], "session_id": "s"}
+        with patch("src.web.ask_in_session_stream", side_effect=fake_stream):
+            self.assertEqual(self.client.post("/api/ask/stream", json={"question": "q"}).status_code, 200)
+            self.assertEqual(self.client.post("/api/ask/stream", json={"question": "q"}).status_code, 429)
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "1"})
+    @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
+    def test_distinct_clients_get_distinct_buckets(self, _ask) -> None:
+        # Real key derivation: two clients with different peer addresses.
+        a = TestClient(app, client=("10.0.0.1", 1234))
+        b = TestClient(app, client=("10.0.0.2", 1234))
+        self.assertEqual(a.post("/api/ask", json={"question": "q"}).status_code, 200)
+        self.assertEqual(b.post("/api/ask", json={"question": "q"}).status_code, 200)
+        self.assertEqual(a.post("/api/ask", json={"question": "q"}).status_code, 429)
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "5"})
+    @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
+    def test_a_full_table_sheds_the_least_recent_client(self, _ask) -> None:
+        from src import web as web_module
+        with patch.object(web_module, "_ASK_MAX_TRACKED_CLIENTS", 2):
+            for host in ("10.0.0.1", "10.0.0.2", "10.0.0.3"):
+                TestClient(app, client=(host, 1)).post("/api/ask", json={"question": "q"})
+        self.assertNotIn("10.0.0.1", web_module._ask_hits)
+        self.assertIn("10.0.0.3", web_module._ask_hits)
+
+    @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": ""})
+    @patch("src.web.ask_in_session", return_value={"answer": "ok", "citations": [], "session_id": "s"})
+    def test_an_empty_limit_variable_does_not_500(self, _ask) -> None:
+        self.assertEqual(self.client.post("/api/ask", json={"question": "q"}).status_code, 200)
+
+    def test_proxy_settings(self) -> None:
+        from src.web import proxy_settings
+        with patch.dict(os.environ, {"FORWARDED_ALLOW_IPS": ""}):
+            self.assertEqual(proxy_settings(), {"proxy_headers": False})
+        with patch.dict(os.environ, {"FORWARDED_ALLOW_IPS": "10.42.0.0/16"}):
+            self.assertEqual(proxy_settings(), {"proxy_headers": True, "forwarded_allow_ips": "10.42.0.0/16"})
+        with patch.dict(os.environ, {"FORWARDED_ALLOW_IPS": "*"}):
+            with self.assertRaises(SystemExit):
+                proxy_settings()
+
+    def test_idle_clients_are_evicted_when_the_table_is_full(self) -> None:
+        from src import web as web_module
+        with patch.object(web_module, "_ASK_MAX_TRACKED_CLIENTS", 3):
+            for i, t in enumerate((0.0, 0.0, 0.0)):
+                web_module._ask_hits[f"c{i}"].append(t)
+            with web_module._ask_hits_lock:
+                web_module._evict_idle_clients(now=100.0)
+            self.assertEqual(len(web_module._ask_hits), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

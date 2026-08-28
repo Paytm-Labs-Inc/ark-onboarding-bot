@@ -5,11 +5,14 @@ from __future__ import annotations
 import html
 import json
 import os
+from collections import defaultdict, deque
+import time
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -119,6 +122,77 @@ async def enforce_auth(request: Request, call_next):
 app.add_middleware(PrefixStripMiddleware)
 
 
+# Per-client sliding window on the answer endpoints. The bot is an internal
+# tool, but it fronts a model anyone reachable can drive, and one loop can burn
+# the gateway's concurrency for everyone. In-process on purpose: it protects
+# one pod, which is the deployment shape for the beta.
+_ASK_WINDOW_SECONDS = 60.0
+# Keys are client addresses. With a wildcard trusted-proxy list any caller
+# could mint a fresh key per request via X-Forwarded-For, so main() no longer
+# trusts every peer (see FORWARDED_ALLOW_IPS) -- and the table is bounded
+# regardless, so a flood of keys cannot become a memory-growth vector.
+_ASK_MAX_TRACKED_CLIENTS = 5000
+_ask_hits: dict[str, deque[float]] = defaultdict(deque)
+_ask_hits_lock = threading.Lock()
+
+
+def ask_rate_limit_per_minute() -> int:
+    """Answers allowed per client per minute; 0 disables the limit.
+
+    A set-but-empty variable (the .env.example house style) must not turn
+    into a 500 on every question, so parse leniently and say what happened.
+    """
+    raw = os.environ.get("ASK_RATE_LIMIT_PER_MINUTE", "30").strip()
+    try:
+        return int(raw) if raw else 30
+    except ValueError:
+        print(f"ASK_RATE_LIMIT_PER_MINUTE={raw!r} is not a number; using 30", flush=True)
+        return 30
+
+
+def _client_key(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _now() -> float:
+    # Indirection so tests can drive the limiter's clock without patching the
+    # time module the ASGI test client itself depends on.
+    return time.monotonic()
+
+
+def enforce_ask_rate_limit(request: Request) -> None:
+    limit = ask_rate_limit_per_minute()
+    if limit <= 0:
+        return
+    now = _now()
+    key = _client_key(request)
+    with _ask_hits_lock:
+        if len(_ask_hits) >= _ASK_MAX_TRACKED_CLIENTS:
+            _evict_idle_clients(now)
+        hits = _ask_hits[key]
+        while hits and now - hits[0] > _ASK_WINDOW_SECONDS:
+            hits.popleft()
+        if len(hits) >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many questions; limit is {limit} per minute. Try again shortly.",
+            )
+        hits.append(now)
+
+
+def _evict_idle_clients(now: float) -> None:
+    """Drop clients with no hit inside the window; called under the lock."""
+    idle = [k for k, hits in _ask_hits.items() if not hits or now - hits[-1] > _ASK_WINDOW_SECONDS]
+    for k in idle:
+        del _ask_hits[k]
+    if len(_ask_hits) >= _ASK_MAX_TRACKED_CLIENTS:
+        # Still full of active clients: shed the least-recently-seen half
+        # rather than grow. Those clients get a fresh window -- a deliberate
+        # loosening under pressure, chosen over unbounded memory on one pod.
+        for k in sorted(_ask_hits, key=lambda k: _ask_hits[k][-1])[: len(_ask_hits) // 2]:
+            del _ask_hits[k]
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     session_id: Optional[str] = None
@@ -194,7 +268,7 @@ def ready() -> dict[str, object] | JSONResponse:
 
 
 @app.post("/api/ask")
-def api_ask(body: AskRequest) -> dict:
+def api_ask(body: AskRequest, _limit: None = Depends(enforce_ask_rate_limit)) -> dict:
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
@@ -226,7 +300,9 @@ def _ask_stream_events(session_id: str | None, question: str) -> Iterator[str]:
 
 
 @app.post("/api/ask/stream")
-def api_ask_stream(body: AskRequest) -> StreamingResponse:
+def api_ask_stream(
+    body: AskRequest, _limit: None = Depends(enforce_ask_rate_limit)
+) -> StreamingResponse:
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
@@ -374,13 +450,28 @@ def main() -> None:
     if prefix:
         print(f"Serving under subpath prefix {prefix!r} (expects a reverse proxy to strip it).")
     print(f"Ark onboarding bot web UI → http://{host}:{port}{prefix}/")
-    uvicorn.run(
-        app,
-        host=host,
-        port=port,
-        proxy_headers=True,
-        forwarded_allow_ips="*",
-    )
+    uvicorn.run(app, host=host, port=port, **proxy_settings())
+
+
+def proxy_settings() -> dict[str, object]:
+    """How uvicorn treats X-Forwarded-For / -Proto, from FORWARDED_ALLOW_IPS.
+
+    Unset: no proxy headers are honoured at all, so the rate-limit key is the
+    real peer and a client cannot mint keys with a header (review measured
+    that trusting loopback still let SSH-tunnel users do exactly that).
+    Set to the ingress CIDR: headers from the ingress are honoured, which is
+    what gives per-user keys and a Secure login cookie behind TLS termination.
+    "*" is refused: it trusts every caller.
+    """
+    trusted = os.environ.get("FORWARDED_ALLOW_IPS", "").strip()
+    if trusted == "*":
+        raise SystemExit(
+            "FORWARDED_ALLOW_IPS='*' trusts every peer's X-Forwarded-* headers; "
+            "set it to the ingress address or CIDR, or leave it unset."
+        )
+    if not trusted:
+        return {"proxy_headers": False}
+    return {"proxy_headers": True, "forwarded_allow_ips": trusted}
 
 
 if __name__ == "__main__":
