@@ -156,13 +156,22 @@
   {
     "id": "onboarding-steps",
     "question": "what are the steps to onboard ark",
-    "expected_source": "getting-started",
-    "notes": "Onboarding path numbered table on getting-started. Any-of markers: the getting-started table names step 2 'Set your personal credentials', while a FAQ-shaped answer says 'secrets'/'compute'. Accept either vocabulary.",
+    "expected_source": [
+      "getting-started",
+      "faq-google-doc",
+      "faq"
+    ],
+    "notes": "getting-started has the numbered path; both FAQ ingestions carry Q13 (join team → secrets → compute → doctor), which retrieval ranks first, so the model may cite the FAQ pair. Accept all three. Any-of markers: getting-started's table names step 2 'Set your personal credentials', while a FAQ-shaped answer says 'secrets'/'compute'.",
     "answer_must_include": [
       "secrets",
       "compute",
       "credentials"
-    ]
+    ],
+    "page_evidence": {
+      "getting-started": "Set your personal credentials",
+      "faq-google-doc": "Don't skip doctor",
+      "faq": "Don't skip doctor"
+    }
   },
   {
     "id": "post-onboarding-usage",
