@@ -11,7 +11,8 @@ DATA_DIR = ROOT / "data"
 
 # all-MiniLM-L6-v2 reads 256 tokens and silently drops the rest. At 2000 chars
 # the tail of 45% of chunks never reached the encoder (a third of all corpus
-# tokens). At 900 that is 17%: code blocks and URLs tokenise far denser than
+# tokens). At 900, with headings budgeted into split pieces, it is 15.6% (68 of
+# 437, measured 2026-08-28): code blocks and URLs tokenise far denser than
 # prose, so a character budget can only approximate the token window.
 MAX_CHARS = 900
 OVERLAP_CHARS = 200
@@ -43,22 +44,6 @@ def _split_fixed(text: str, max_chars: int, overlap: int) -> list[str]:
     return windows
 
 
-SECTION_PREFIXES: dict[str, str] = {
-    "### Register your own": (
-        "How to use Ark after onboarding — create agents, apply a workspace, register a flow.\n\n"
-    ),
-    "### Use them over MCP": (
-        "How to run Ark — discover flows, dispatch a session, and watch progress.\n\n"
-    ),
-    "### Worked example, end to end": (
-        "End-to-end Ark usage: agent create, workspace apply, flow create, start session.\n\n"
-    ),
-    "## Onboarding path": (
-        "Steps to onboard on Ark — full onboarding checklist and order.\n\n"
-    ),
-}
-
-
 def _sections(body: str) -> list[str]:
     parts = re.split(r"(?m)^(?=## )", body)
     sections: list[str] = []
@@ -72,13 +57,6 @@ def _sections(body: str) -> list[str]:
         else:
             sections.append(part)
     return sections
-
-
-def _prefix_section(section: str) -> str:
-    for heading, prefix in SECTION_PREFIXES.items():
-        if section.startswith(heading):
-            return prefix + section
-    return section
 
 
 def _heading_of(section: str) -> str | None:
@@ -97,18 +75,19 @@ def _chunk_file(path: Path) -> list[Chunk]:
 
     chunks: list[Chunk] = []
     for section in _sections(body):
-        section = _prefix_section(section)
-        pieces = [section] if len(section) <= MAX_CHARS else _split_fixed(
-            section, MAX_CHARS, OVERLAP_CHARS
-        )
         # A split section keeps its heading on every piece. The pin markers key
         # on headings, so without this only the first piece of "## Start here"
         # would be pinned and the rest of the checklist would drop out of the
         # answer -- which is what happened when chunks shrank to fit the encoder.
+        # The heading is budgeted inside the split so MAX_CHARS stays a bound.
         heading = _heading_of(section)
-        for index, piece in enumerate(pieces):
-            if index and heading and not piece.startswith(heading):
-                piece = f"{heading}\n\n{piece}"
+        prefix = f"{heading}\n\n" if heading else ""
+        if len(section) <= MAX_CHARS:
+            pieces = [section]
+        else:
+            pieces = _split_fixed(section, MAX_CHARS - len(prefix), OVERLAP_CHARS)
+            pieces = [pieces[0]] + [prefix + p for p in pieces[1:]]
+        for piece in pieces:
             chunks.append({"source": label, "text": piece})
     return chunks
 

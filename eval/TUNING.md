@@ -20,6 +20,6 @@ Re-run the grid with `python eval/tune_retrieval.py`. Raw numbers in `eval/tunin
 | 800 | 8 | 100% |
 | 2000 | 3 | 100% |
 | 2000 | 5 | 100% |
-| **2000** | **8** | **100%** ← shipped |
+| **2000** | **8** | **100%** ← this grid's winner (superseded, see note above) |
 
-Smaller chunks with low top-k miss occasionally; `2000` / `top_k=8` keeps full section context for the answer layer while clearing the gold set. No stronger embedding model needed on this corpus.
+Smaller chunks with low top-k missed occasionally on this grid, which never measured encoder truncation. Shipped since 2026-08-27: `900` / `top_k=8`, with every piece of a split section carrying its heading. Judge encoder changes on chunk-level MRR (#40), not this table.
