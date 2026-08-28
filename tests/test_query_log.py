@@ -129,7 +129,8 @@ class ConcurrentAppendTests(unittest.TestCase):
                 def split_write(text):
                     half = len(text) // 2
                     real_write(text[:half])
-                    time.sleep(0)  # yield so another writer can interleave
+                    handle.flush()  # reach the OS now, not on close
+                    time.sleep(0.001)  # yield so another writer can interleave
                     return real_write(text[half:])
 
                 handle.write = split_write
