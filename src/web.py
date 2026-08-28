@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import anyio
 import os
 from collections import defaultdict, deque
 import time
@@ -91,8 +92,21 @@ class PrefixStripMiddleware:
         await self.app(scope, receive, send)
 
 
+def threadpool_size() -> int:
+    """Worker threads for sync routes; the answer path holds one per question."""
+    raw = os.environ.get("WEB_THREADPOOL_SIZE", "64").strip()
+    try:
+        return max(8, int(raw)) if raw else 64
+    except ValueError:
+        return 64
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Every sync route shares anyio's default thread pool (40 tokens out of the
+    # box). A Pi stall pins a thread for up to ~60 s, so forty slow answers
+    # used to queue the probes behind them and k8s restarted a busy pod.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = threadpool_size()
     warm_services()
     yield
 
@@ -286,13 +300,13 @@ async def security_headers(request: Request, call_next):
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.get("/ready", response_model=None)
-def ready() -> dict[str, object] | JSONResponse:
-    ok, body = check_retrieval_ready()
+async def ready() -> dict[str, object] | JSONResponse:
+    ok, body = await anyio.to_thread.run_sync(check_retrieval_ready, limiter=_PROBE_LIMITER)
     if not ok:
         return JSONResponse(status_code=503, content=body)
     missing = missing_backend_credential()

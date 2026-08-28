@@ -305,6 +305,21 @@ class ErrorTextAndHeadersTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertNotIn("PI_API_KEY", response.text)
         log.assert_called_once()
+class ProbesOffTheAnswerPoolTests(unittest.TestCase):
+    def test_probes_are_async_so_they_never_wait_on_a_worker_thread(self) -> None:
+        import inspect
+        from src.web import health, ready
+        self.assertTrue(inspect.iscoroutinefunction(health))
+        self.assertTrue(inspect.iscoroutinefunction(ready))
+
+    def test_threadpool_size_parses_leniently(self) -> None:
+        from src.web import threadpool_size
+        with patch.dict(os.environ, {"WEB_THREADPOOL_SIZE": ""}):
+            self.assertEqual(threadpool_size(), 64)
+        with patch.dict(os.environ, {"WEB_THREADPOOL_SIZE": "128"}):
+            self.assertEqual(threadpool_size(), 128)
+        with patch.dict(os.environ, {"WEB_THREADPOOL_SIZE": "2"}):
+            self.assertEqual(threadpool_size(), 8)  # floor
 
 if __name__ == "__main__":
     unittest.main()
