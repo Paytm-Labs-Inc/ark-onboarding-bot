@@ -15,7 +15,11 @@ namespace: ark-onboarding-bot
 
 image:
   repository: 880170353725.dkr.ecr.ap-south-1.amazonaws.com/pai-mlops-platform/ark-chatbot
-  tag: "90000000000052-7fd1a50-arm64"   # first published image; image-updater overwrites on each main publish
+  # Must be an image built at or after f42cd5d (#58, ordinal 54). Earlier builds
+  # call SystemExit on FORWARDED_ALLOW_IPS="*", which is what the interim below
+  # sets, so pinning one of those crash-loops the pod on the very first sync
+  # before image-updater ever gets to bump it.
+  tag: "90000000000061-453b0bb-arm64"   # image-updater overwrites on each main publish
 
 web:
   # Interim per platform (Bhurva, 2026-08-28): the Service is ClusterIP-only, so
