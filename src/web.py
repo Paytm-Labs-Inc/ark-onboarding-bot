@@ -6,6 +6,7 @@ import html
 import json
 import anyio
 import os
+import sys
 from collections import defaultdict, deque
 import time
 import threading
@@ -533,13 +534,18 @@ def proxy_settings() -> dict[str, object]:
     that trusting loopback still let SSH-tunnel users do exactly that).
     Set to the ingress CIDR: headers from the ingress are honoured, which is
     what gives per-user keys and a Secure login cookie behind TLS termination.
-    "*" is refused: it trusts every caller.
+    "*" trusts every caller. It is the platform's interim while the pod sits
+    behind a ClusterIP-only Service (only the ingress can reach it), so it is
+    accepted with a warning rather than refused; anywhere a client can reach
+    the pod directly it lets that client mint its own rate-limit key.
     """
     trusted = os.environ.get("FORWARDED_ALLOW_IPS", "").strip()
     if trusted == "*":
-        raise SystemExit(
-            "FORWARDED_ALLOW_IPS='*' trusts every peer's X-Forwarded-* headers; "
-            "set it to the ingress address or CIDR, or leave it unset."
+        print(
+            "WARNING: FORWARDED_ALLOW_IPS='*' trusts every peer's X-Forwarded-* "
+            "headers. Acceptable only while nothing but the ingress can reach this "
+            "process; replace with the ingress address or CIDR when known.",
+            file=sys.stderr,
         )
     if not trusted:
         return {"proxy_headers": False}
