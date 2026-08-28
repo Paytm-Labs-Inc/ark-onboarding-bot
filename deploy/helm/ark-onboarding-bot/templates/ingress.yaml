@@ -1,0 +1,49 @@
+{{- if .Values.ingress.enabled }}
+# Path route on the doc-site hosts. nginx-ingress merges path rules for the same
+# host across Ingress objects and the MORE SPECIFIC prefix wins, so
+# /onboarding-bot lands here while / stays with foundry-site -- the same
+# mechanism the doc site's funnel gate uses. Backends must live in this
+# namespace, which is why the bot has its own Ingress rather than a line in
+# foundry-site's.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ark-onboarding-bot
+  namespace: {{ .Values.namespace }}
+  annotations:
+    kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if .Values.ingress.authGate.enabled }}
+    # Per-user identity gate (launch review, blocker 2). `required` in the guard:
+    # nginx-ingress drops an EMPTY auth-url and still admits the Ingress, which
+    # is a gate that looks on and fails OPEN.
+    nginx.ingress.kubernetes.io/auth-url: {{ .Values.ingress.authGate.authUrl | quote }}
+    nginx.ingress.kubernetes.io/auth-signin: {{ .Values.ingress.authGate.signinUrl | quote }}
+    nginx.ingress.kubernetes.io/auth-response-headers: {{ .Values.ingress.authGate.authResponseHeaders | quote }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        {{- range .Values.ingress.hosts }}
+        - {{ . }}
+        {{- end }}
+      secretName: ark-onboarding-bot-tls
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ . }}
+      http:
+        paths:
+          - path: {{ $.Values.ingress.path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: ark-onboarding-bot-web
+                port:
+                  name: http
+    {{- end }}
+{{- end }}

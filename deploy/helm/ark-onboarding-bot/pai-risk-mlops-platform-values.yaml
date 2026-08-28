@@ -1,0 +1,36 @@
+# Environment overlay for the pai-risk-mlops platform cluster.
+#
+# Helm release `ark-onboarding-bot`. Loaded by the pi-risk-mlops app-of-apps
+# `ark-onboarding-bot` Application (see README, "The GitOps change") via:
+#   helm:
+#     releaseName: ark-onboarding-bot
+#     valueFiles: ['values.yaml', 'pai-risk-mlops-platform-values.yaml']
+#
+# image.tag is written back here by argocd-image-updater from the tags the
+# repo's publish-image workflow pushes (`<ordinal>-<sha>-arm64`, alphabetical
+# strategy, same scheme as the control plane). Do not hand-edit it except to
+# roll back, and then only to a tag that exists in ECR.
+
+namespace: ark-onboarding-bot
+
+image:
+  repository: 880170353725.dkr.ecr.ap-south-1.amazonaws.com/pai-mlops-platform/ark-chatbot
+  tag: "90000000000052-7fd1a50-arm64"   # first published image; image-updater overwrites on each main publish
+
+web:
+  # Interim per platform (Bhurva, 2026-08-28): the Service is ClusterIP-only, so
+  # only nginx-ingress can reach the pod and set X-Forwarded-*. Replace with the
+  # ingress-controller pod CIDR when the EKS/VPC value arrives -- in this file,
+  # never with kubectl (selfHeal reverts it).
+  forwardedAllowIps: "*"
+
+externalSecret:
+  awsSecretPath: pai-risk-mlops/platform/ark-onboarding-bot
+
+ingress:
+  hosts:
+    - foundry.internal.ap-south-1.platform.mlops.pai.mypaytm.com
+    - foundry.mypaytm.com
+
+slack:
+  enabled: false   # flip once the Slack tokens are in the secret bag

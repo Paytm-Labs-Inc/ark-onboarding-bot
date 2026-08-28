@@ -1,0 +1,30 @@
+name: helm
+
+# Its own workflow on purpose: publish-image.yml gates on the *eval* workflow's
+# conclusion, and the chart is not in the image, so a chart typo must never be
+# able to stop an image from shipping (review of #56).
+on:
+  pull_request:
+    paths: ['deploy/helm/**', '.github/workflows/helm.yml']
+  push:
+    branches: [main]
+    paths: ['deploy/helm/**', '.github/workflows/helm.yml']
+
+jobs:
+  helm-render:
+    # The deploy chart lives with the app. Nothing else renders it, so a broken
+    # guard or template would first fail inside ArgoCD; lint and the render
+    # matrix run here on every change instead.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - name: helm lint
+        run: >-
+          helm lint deploy/helm/ark-onboarding-bot
+          -f deploy/helm/ark-onboarding-bot/pai-risk-mlops-platform-values.yaml
+      - name: Render-assert matrix
+        run: bash deploy/helm/ark-onboarding-bot/test-render.sh

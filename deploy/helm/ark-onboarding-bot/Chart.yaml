@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ark-onboarding-bot
+description: AskArk onboarding assistant -- web UI at /onboarding-bot and an optional Slack (Socket Mode) worker, both from the ark-onboarding-bot image.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

@@ -1,0 +1,64 @@
+{{- if .Values.slack.enabled }}
+# Same image, command overridden. Socket Mode is outbound-only, so no Service or
+# Ingress; nothing in the cluster can reach this pod and it needs nothing to.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ark-onboarding-bot-slack
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: ark-onboarding-bot
+    component: slack
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ark-onboarding-bot
+      component: slack
+  template:
+    metadata:
+      labels:
+        app: ark-onboarding-bot
+        component: slack
+      annotations:
+        checksum/env: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: ark-onboarding-bot
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.web.securityContext.runAsUser }}
+        fsGroup: {{ .Values.web.securityContext.fsGroup }}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: slack
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "src.slack_app"]
+          envFrom:
+            - configMapRef:
+                name: ark-onboarding-bot-env
+            - secretRef:
+                name: {{ include "ark-onboarding-bot.secretName" . }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ .Values.web.securityContext.readOnlyRootFilesystem }}
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: logs
+              mountPath: {{ .Values.logs.mountPath }}
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.slack.resources | nindent 12 }}
+      volumes:
+        - name: logs
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

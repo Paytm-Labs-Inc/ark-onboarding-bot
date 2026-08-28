@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ark-onboarding-bot-web
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: ark-onboarding-bot
+    component: web
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy:
+    type: {{ .Values.strategy }}
+  selector:
+    matchLabels:
+      app: ark-onboarding-bot
+      component: web
+  template:
+    metadata:
+      labels:
+        app: ark-onboarding-bot
+        component: web
+      annotations:
+        checksum/env: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: ark-onboarding-bot
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.web.securityContext.runAsUser }}
+        fsGroup: {{ .Values.web.securityContext.fsGroup }}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.web.port }}
+          envFrom:
+            - configMapRef:
+                name: ark-onboarding-bot-env
+            - secretRef:
+                name: {{ include "ark-onboarding-bot.secretName" . }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ .Values.web.securityContext.readOnlyRootFilesystem }}
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: logs
+              mountPath: {{ .Values.logs.mountPath }}
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet: { path: {{ .Values.web.probes.startup.path }}, port: http }
+            periodSeconds: {{ .Values.web.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.web.probes.startup.failureThreshold }}
+          readinessProbe:
+            httpGet: { path: {{ .Values.web.probes.readiness.path }}, port: http }
+            periodSeconds: {{ .Values.web.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.web.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet: { path: {{ .Values.web.probes.liveness.path }}, port: http }
+            periodSeconds: {{ .Values.web.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.web.probes.liveness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+      volumes:
+        - name: logs
+          {{- if .Values.logs.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: ark-onboarding-bot-logs
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
