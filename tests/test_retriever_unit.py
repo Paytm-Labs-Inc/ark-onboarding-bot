@@ -213,29 +213,32 @@ class PinnedMarkersMatchCorpusTests(unittest.TestCase):
 class HybridRetrievalTests(unittest.TestCase):
     CHUNKS = [
         {"source": "setup -- u", "text": "General setup notes about editors and machines."},
+        {"source": "notes-a -- u", "text": "More notes on editors."},
+        {"source": "notes-b -- u", "text": "Even more notes on machines."},
         {"source": "cursor -- u", "text": "Put the server block in .cursor/mcp.json and restart Cursor."},
-        {"source": "faq -- u", "text": "Frequently asked questions about teams and repos."},
     ]
+    # Dense alone ranks the identifier chunk LAST for this query; with dense
+    # voting 2:1 the lexical list can lift it, but only past the weakest dense
+    # neighbour -- which is the real claim, so that is what the test asserts.
+    VECTORS = {"General": [1.0, 0.0], "More": [0.9, 0.1], "Even": [0.8, 0.2], "Put": [0.0, 1.0]}
 
-    @staticmethod
-    def _embed_prefers_setup(texts):
-        # Dense alone ranks the generic setup chunk first for anything mentioning "setup".
+    @classmethod
+    def _embed(cls, texts):
         import numpy as np
-        return np.asarray([[1.0, 0.0] if "setup" in t.lower() else [0.0, 1.0] for t in texts], dtype=np.float32)
+        rows = [cls.VECTORS.get(t.split()[0], [1.0, 0.0]) for t in texts]  # query -> [1, 0]
+        return np.asarray(rows, dtype=np.float32)
 
     def test_tokens_keep_identifiers_whole_and_split(self) -> None:
         from src.retriever import _tokens
         toks = _tokens("Edit .cursor/mcp.json then run ark host enroll")
         self.assertIn("cursor/mcp.json", toks)
-        self.assertIn("mcp.json", toks) if "mcp.json" in toks else None
         self.assertIn("json", toks)
         self.assertIn("enroll", toks)
 
     def test_bm25_ranks_the_exact_identifier_first(self) -> None:
         from src.retriever import _BM25, _tokens
         bm = _BM25([_tokens(c["text"]) for c in self.CHUNKS])
-        scores = bm.scores(_tokens("mcp.json"))
-        self.assertEqual(int(scores.argmax()), 1)
+        self.assertEqual(int(bm.scores(_tokens("mcp.json")).argmax()), 3)
 
     def test_rrf_sums_reciprocal_ranks(self) -> None:
         import numpy as np
@@ -244,18 +247,18 @@ class HybridRetrievalTests(unittest.TestCase):
         self.assertAlmostEqual(float(fused[0]), 1 / 2 + 1 / 3)
         self.assertAlmostEqual(float(fused[1]), 1 / 3 + 1 / 2)
 
-    @patch("src.retriever._embed", side_effect=_embed_prefers_setup.__func__)
-    def test_hybrid_lifts_the_identifier_chunk_dense_alone_buries(self, _e) -> None:
+    def test_hybrid_lifts_the_identifier_chunk_dense_alone_buries(self) -> None:
         def rank_of_identifier(results):
             return next(i for i, c in enumerate(results) if "mcp.json" in c["text"])
 
-        with patch.dict(os.environ, {"ASK_HYBRID": "0"}):
+        with patch("src.retriever._embed", side_effect=self._embed):
             index = build_index(self.CHUNKS)
-            dense_only = retrieve("where is the mcp.json setup file", top_k=3, index=index, use_pins=False)
-        with patch.dict(os.environ, {"ASK_HYBRID": "1"}):
-            hybrid = retrieve("where is the mcp.json setup file", top_k=3, index=index, use_pins=False)
-        self.assertIn("setup notes", dense_only[0]["text"])  # dense alone buries the identifier
-        self.assertLess(rank_of_identifier(hybrid), rank_of_identifier(dense_only))
+            with patch.dict(os.environ, {"ASK_HYBRID": "0"}):
+                dense_only = retrieve("where is the mcp.json file", top_k=4, index=index, use_pins=False)
+            with patch.dict(os.environ, {"ASK_HYBRID": "1"}):
+                hybrid = retrieve("where is the mcp.json file", top_k=4, index=index, use_pins=False)
+        self.assertEqual(rank_of_identifier(dense_only), 3)  # buried last by dense
+        self.assertLess(rank_of_identifier(hybrid), 3)
 
     def test_flag_parses(self) -> None:
         from src.retriever import hybrid_enabled
