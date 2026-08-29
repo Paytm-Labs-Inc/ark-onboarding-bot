@@ -25,13 +25,13 @@ overlay for the cluster, secrets from AWS Secrets Manager through the cluster's
 
 ## Go-live, in order
 
-Each step unblocks the next. Steps 1-4 are platform-side.
+Each step unblocks the next. Steps 2-4 are platform-side.
 
-1. **ECR repository** `pai-mlops-platform/ark-chatbot`, and in the bot repo the
-   four variables `AWS_ECR_PUSH_ROLE_ARN / REGION / ACCOUNT_ID / REPO_PREFIX`. The
-   bot's `publish-image.yml` already emits the platform's tag scheme
-   (`<ordinal>-<sha>-arm64`) and is gated on its eval workflow; the next merge to
-   `main` pushes the first image.
+1. ~~**ECR repository** `pai-mlops-platform/ark-chatbot`, and the four
+   `AWS_ECR_*` variables in the bot repo.~~ **Done.** `publish-image.yml`
+   authenticates over GitHub OIDC, emits the platform's tag scheme
+   (`<ordinal>-<sha>-arm64`), and is gated on the eval workflow, so every green
+   merge to `main` publishes automatically and a red eval publishes nothing.
 2. **Secrets Manager entry** `pai-risk-mlops/platform/ark-onboarding-bot` with JSON
    properties `PI_API_KEY`, `ARK_ACCESS_TOKEN` (and `SLACK_BOT_TOKEN`,
    `SLACK_APP_TOKEN` when the Slack worker is enabled).
@@ -56,25 +56,37 @@ Each step unblocks the next. Steps 1-4 are platform-side.
        valueFiles:
          - values.yaml
          - pai-risk-mlops-platform-values.yaml
-     # image-updater, same scheme as the control plane:
-     annotations:
-       argocd-image-updater.argoproj.io/image-list: bot=880170353725.dkr.ecr.ap-south-1.amazonaws.com/pai-mlops-platform/ark-chatbot
-       argocd-image-updater.argoproj.io/bot.allow-tags: regexp:^[0-9]{14}-[a-f0-9]{7,40}-arm64$
-       argocd-image-updater.argoproj.io/bot.update-strategy: alphabetical
-       argocd-image-updater.argoproj.io/bot.helm.image-name: image.repository
-       argocd-image-updater.argoproj.io/bot.helm.image-tag: image.tag
-       argocd-image-updater.argoproj.io/write-back-method: git
-       argocd-image-updater.argoproj.io/write-back-target: helmvalues:./pai-risk-mlops-platform-values.yaml
    ```
-   This repository is public, so ArgoCD reads it with no repo-creds entry. If the
-   platform prefers charts co-located in foundry-platform, the same directory moves
-   there unchanged (it was written in that chart's shape).
+   **Raised as pi-risk-mlops PR #268.** This repository is public, so ArgoCD reads
+   it with no repo-creds entry -- the same arrangement `foundry-site` already uses.
+   If the platform prefers charts co-located in foundry-platform, the same
+   directory moves there unchanged (it was written in that chart's shape).
+
+   **The image tag is pinned here, not tracked by argocd-image-updater.** An
+   earlier version of this file suggested the control plane's updater annotations.
+   Two things were wrong with that, both checked against the app-of-apps repo:
+
+   - The key is `extraAnnotations:`, not `annotations:`. The bootstrap chart only
+     renders the former (`templates/application.yaml`), so the block would have
+     been dropped silently and the updater would never have run.
+   - `write-back-method: git` needs a **write-enabled** repository credential for
+     the repo it commits to, and credentials in that cluster are per-repository --
+     there are no repo-creds prefix templates. There is none for
+     `ark-onboarding-bot`. `pi-agents-insights-repo-external-secret.yaml` records
+     how the read-only case fails: ArgoCD syncs normally for a day, the updater
+     picks the right image and builds the commit, and then `git push` returns
+     `128 Unauthorized`.
+
+   So bumping the deployed image is a one-line PR to `image.tag` in the overlay in
+   *this* repo, which needs nobody outside the team. Wire the updater up later if
+   someone provisions a write-enabled credential -- and use `extraAnnotations`.
+
 5. **The overlay ships `web.forwardedAllowIps: "*"`**, the platform's interim
    behind the ClusterIP-only Service. When the nginx-ingress pod CIDR arrives
    (`kubectl -n <ingress-ns> get pods -o wide`), change it in the overlay file --
    never `kubectl edit`; `selfHeal` reverts that. The render refuses an empty
-   value. `image.tag` already carries the first published image; image-updater
-   moves it forward from there.
+   value. `image.tag` already carries a published image; bump it there to deploy a
+   newer one (step 4 explains why the updater is not wired up).
    **Secret rotation**: the pod reads the Secret at start (`envFrom`) and
    `checksum/env` covers only the ConfigMap, so a rotated `PI_API_KEY` needs
    `kubectl -n ark-onboarding-bot rollout restart deploy/ark-onboarding-bot-web`
