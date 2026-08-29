@@ -4,11 +4,19 @@ A **RAG chatbot that answers Ark onboarding questions** — grounded in the Ark 
 
 ## What it does
 
-Ask it "how do I enroll a host?" or "how do I set up Cursor?" → it retrieves relevant doc chunks and the **Cursor agent** answers **grounded in those chunks**, linking the source. No hallucinating.
+Ask it "how do I enroll a host?" or "how do I set up Cursor?" → it retrieves the relevant doc chunks and a model answers **grounded in those chunks**, citing the page it used. When the docs do not cover the question it says so and hands off, rather than guessing.
 
-## Architecture (v1)
+## Architecture
 
-`ingest docs → chunk → embed → retrieve top-k → Cursor generates a grounded, cited answer → CLI (web UI stretch)`
+```
+ingest docs → chunk (900 chars) → embed (all-MiniLM-L6-v2)
+            → retrieve top-8 (BM25 + dense, fused by reciprocal rank)
+            → model answers grounded in those chunks, with citations
+            → CLI · web UI (SSE streaming) · Slack bot
+```
+
+Answers are generated through the **Pi Inference** gateway (`qwen/qwen3-32b` by
+default) — a plain OpenAI-compatible completion call, no agent harness.
 
 ## Knowledge sources
 
@@ -19,9 +27,14 @@ Ask it "how do I enroll a host?" or "how do I set up Cursor?" → it retrieves r
 ## Layout
 
 - `data/` — ingested onboarding + FAQ corpus (one file per source)
-- `ingest/` — ingestion pipeline (Keerthi)
-- `src/` — retrieval, answer layer, and CLI
-- `tests/` — unit tests + eval harness
+- `ingest/` — ingestion pipeline
+- `src/` — retrieval, answer layer, CLI (`ask.py`), web UI (`web.py`), Slack bot
+  (`slack_app.py`), auth, and the query/feedback logs
+- `eval/` — the gold set (`questions.json`), the harness (`run_eval.py`), and
+  tuning notes
+- `tests/` — unit tests
+- `deploy/` — hosting notes, the smoke script, and the Helm chart
+  (`deploy/helm/ark-onboarding-bot`)
 
 ---
 
@@ -104,8 +117,8 @@ Example output:
 
 ```
 Retrieving relevant docs...
-retrieved 5 chunks in 29ms, top_score=0.509
-Generating answer (may take 1–2 min)...
+retrieved 8 chunks in 23ms, top_score=0.717
+Generating answer...
 
 --- Answer ---
 
@@ -128,6 +141,46 @@ I don't have that in the onboarding docs
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+---
+
+## Eval and the CI gates
+
+The gold set lives in `eval/questions.json`: scored questions carry an
+`expected_source` (the page that legitimately answers them) and
+`answer_must_include` markers; refusal questions assert the bot declines
+cleanly on things the docs do not cover.
+
+```bash
+python eval/run_eval.py --only-scored              # retrieval only, no model calls
+python eval/run_eval.py --only-scored --no-pins    # what the retriever scores unaided
+python eval/run_eval.py --full --only-scored       # end to end, needs PI_API_KEY
+```
+
+`.github/workflows/eval.yml` runs four jobs on every PR, and **a red run blocks
+the image publish** (`publish-image.yml` only publishes when the eval workflow
+succeeds on `main`):
+
+| job | what it asserts |
+|---|---|
+| `retrieval-eval` | every scored question retrieves an accepted page — no model calls |
+| `refusal-eval` | out-of-scope questions are declined cleanly |
+| `full-eval` | every scored question **cites** an accepted page, against a real model |
+| `workflow-lint` | the workflows themselves parse |
+
+Two things worth knowing before you touch the gold set:
+
+- **A citation miss is asked once more** and recorded as `retried` in the report,
+  so flakiness is visible rather than hidden. The run still fails if the second
+  ask misses too.
+- **A label may name several pages**, each with a `page_evidence` quote that must
+  appear on that page. Some facts genuinely live on more than one page, and the
+  FAQ is currently ingested twice (site scrape and Google Doc) at 96% similarity,
+  so a page-level label that names only one of a duplicated pair fails a
+  *correct* citation at random. `tests/test_eval_gold_set.py` enforces both rules.
+
+Every run writes a full report, answers included, to `eval/results/`; CI uploads
+it as the `full-eval-report` artifact even when the run fails.
 
 ---
 
