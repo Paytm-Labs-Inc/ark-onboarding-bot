@@ -45,11 +45,20 @@ web:
     PI_QUEUE_TIMEOUT_SECONDS: "30"
     WEB_THREADPOOL_SIZE: "64"
     ASK_HYBRID: "1"
-  # REQUIRED when ingress.enabled: the ingress controller's address or CIDR. It is
-  # what makes the rate limit per-user (not per-ingress) and marks the login
-  # cookie Secure behind TLS termination. Use the ingress CIDR when known; "*" is
-  # the platform's interim behind a ClusterIP-only Service. Empty is refused so
-  # a forgotten overlay still fails closed.
+  # REQUIRED when ingress.enabled: the ingress controller's address or CIDR. It
+  # marks the login cookie Secure behind TLS termination, because the pod honours
+  # X-Forwarded-Proto only from a trusted peer. Use the ingress CIDR when known;
+  # "*" is the platform's interim behind a ClusterIP-only Service. Empty is
+  # refused so a forgotten overlay still fails closed.
+  #
+  # It does NOT make the ask rate limit per-user on this cluster. ingress-nginx
+  # here sets no `use-forwarded-headers`, so it OVERWRITES X-Forwarded-For with
+  # $remote_addr -- the load balancer ENI -- and every user collapses into a
+  # handful of buckets sharing the 30/min. Swapping "*" for the ingress-pod CIDR
+  # does not fix it either: the walk-from-right lands on that same ENI. Per-user
+  # needs `use-forwarded-headers`/proxy-protocol at the controller, or a limiter
+  # keyed on identity rather than address (oauth2-proxy, below). Measured by
+  # Arindam on the pi-risk-mlops #268 review, 2026-08-28.
   forwardedAllowIps: ""
   resources:
     # all-MiniLM-L6-v2 + torch resident: ~700 MB warm. Requests sized to schedule

@@ -144,8 +144,17 @@ docker run \
 Set `FORWARDED_ALLOW_IPS` to the proxy's address or CIDR so `X-Forwarded-For`
 and `X-Forwarded-Proto` are honoured only from it. Unset, no forwarded headers
 are honoured at all (correct for the SSH-tunnel path). Behind the ingress it
-**must** be set: it is what makes the rate limit per-user instead of
-per-ingress and what marks the login cookie `Secure` behind TLS termination.
+**must** be set: it is what marks the login cookie `Secure` behind TLS
+termination.
+
+> **It does not give you a per-user rate limit on the Foundry cluster**, and an
+> earlier version of this file claimed it did. `ingress-nginx` there sets no
+> `use-forwarded-headers`, so it overwrites `X-Forwarded-For` with `$remote_addr`
+> — the load balancer ENI — and every user collapses into a handful of buckets
+> sharing the 30/min. The ingress-pod CIDR will not fix it either; the
+> walk-from-right lands on the same ENI. Per-user needs `use-forwarded-headers`
+> or proxy-protocol at the controller, or a limiter keyed on identity rather
+> than address. Fine for the beta, just not the protection this used to promise.
 `*` is accepted with a startup warning: it is the platform's interim while the
 pod is reachable only through the ingress (ClusterIP-only Service). Replace it
 with the ingress-pod CIDR as soon as it is known.
