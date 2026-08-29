@@ -6,16 +6,23 @@
 #     releaseName: ark-onboarding-bot
 #     valueFiles: ['values.yaml', 'pai-risk-mlops-platform-values.yaml']
 #
-# image.tag is written back here by argocd-image-updater from the tags the
-# repo's publish-image workflow pushes (`<ordinal>-<sha>-arm64`, alphabetical
-# strategy, same scheme as the control plane). Do not hand-edit it except to
-# roll back, and then only to a tag that exists in ECR.
+# image.tag is hand-maintained. argocd-image-updater is deliberately NOT wired
+# up for this app: `write-back-method: git` needs a write-enabled per-repo
+# credential and this cluster's credentials are per-repository, so there is none
+# for ark-onboarding-bot (see the chart README, "The GitOps change"). Bump this
+# tag in a PR here as part of each release, to a tag that exists in ECR.
 
 namespace: ark-onboarding-bot
 
 image:
   repository: 880170353725.dkr.ecr.ap-south-1.amazonaws.com/pai-mlops-platform/ark-chatbot
-  tag: "90000000000052-7fd1a50-arm64"   # first published image; image-updater overwrites on each main publish
+  # Must be an image built at or after f42cd5d (#58), which is ordinal 59.
+  # Earlier builds call SystemExit on FORWARDED_ALLOW_IPS="*", which is what the
+  # interim below sets, so pinning one of those crash-loops the pod on the very
+  # first sync -- and nothing recovers it, since there is no image-updater.
+  # The floor is 59, not 58: `90000000000058-47883f6-arm64` is a published image
+  # that still raises SystemExit on "*".
+  tag: "90000000000062-4b13c0a-arm64"   # main @ 4b13c0a; bump on release
 
 web:
   # Interim per platform (Bhurva, 2026-08-28): the Service is ClusterIP-only, so
