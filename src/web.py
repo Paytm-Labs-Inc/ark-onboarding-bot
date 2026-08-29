@@ -533,7 +533,11 @@ def proxy_settings() -> dict[str, object]:
     real peer and a client cannot mint keys with a header (review measured
     that trusting loopback still let SSH-tunnel users do exactly that).
     Set to the ingress CIDR: headers from the ingress are honoured, which is
-    what gives per-user keys and a Secure login cookie behind TLS termination.
+    what gives a Secure login cookie behind TLS termination. It does not by
+    itself buy per-user rate-limit keys -- that depends on the controller
+    actually forwarding the client address, and the Foundry ingress-nginx does
+    not (no `use-forwarded-headers`; it overwrites XFF with the LB ENI), so
+    every user there shares a handful of buckets. See deploy/README.md.
     "*" trusts every caller. It is the platform's interim while the pod sits
     behind a ClusterIP-only Service (only the ingress can reach it), so it is
     accepted with a warning rather than refused; anywhere a client can reach
