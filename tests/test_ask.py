@@ -53,6 +53,44 @@ class AskTests(unittest.TestCase):
     @patch("src.ask.log_query")
     @patch("src.ask.answer")
     @patch("src.ask.retrieve_scored")
+    def test_second_identical_ask_is_logged_as_a_cache_hit(
+        self, mock_retrieve_scored: MagicMock, mock_answer: MagicMock, mock_log: MagicMock
+    ) -> None:
+        """A cached reply and a real model call must be distinguishable in the log.
+
+        Without this they write identical records, so model-call volume, cost and
+        the real latency distribution are all unrecoverable afterwards.
+        """
+        clear_retrieval_cache()
+        clear_answer_cache()
+        chunks = [{"source": "getting-started -- https://example.com", "text": "enroll host"}]
+        mock_retrieve_scored.return_value = RetrievalResult(chunks=chunks, top_score=0.82)
+        mock_answer.return_value = {
+            "answer": "Run ark host enroll.",
+            "citations": ["getting-started -- https://example.com"],
+        }
+
+        ask("how do I enroll a host?")
+        ask("how do I enroll a host?")
+
+        # The model is called once; the log records two answers.
+        self.assertEqual(mock_answer.call_count, 1)
+        self.assertEqual(mock_log.call_count, 2)
+
+        first, second = (call.kwargs for call in mock_log.call_args_list)
+        self.assertFalse(first["cache_hit"], "first ask went to the model")
+        self.assertTrue(second["cache_hit"], "second ask was served from cache")
+
+        # Every record carries a duration and a correlation id, and the two asks
+        # are separate requests even though the answer is identical.
+        for record in (first, second):
+            self.assertIsInstance(record["duration_ms"], int)
+            self.assertTrue(record["request_id"])
+        self.assertNotEqual(first["request_id"], second["request_id"])
+
+    @patch("src.ask.log_query")
+    @patch("src.ask.answer")
+    @patch("src.ask.retrieve_scored")
     def test_ask_retrieval_includes_history_for_follow_ups(
         self, mock_retrieve_scored: MagicMock, mock_answer: MagicMock, _mock_log: MagicMock
     ) -> None:

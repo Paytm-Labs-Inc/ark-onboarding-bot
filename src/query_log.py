@@ -46,6 +46,10 @@ def build_record(
     stream_mode: str | None = None,
     stream_errors: list[str] | None = None,
     degraded: str | None = None,
+    cache_hit: bool = False,
+    duration_ms: int | None = None,
+    ttft_ms: int | None = None,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     refused = is_refused(answer)
     low_confidence = is_low_confidence(
@@ -69,6 +73,17 @@ def build_record(
         "stream_mode": stream_mode,
         "stream_errors": stream_errors or [],
         "degraded": degraded,
+        # Without cache_hit a 5 ms cached reply and a 20 s model call write
+        # identical records, so neither model-call volume, cost, nor a real
+        # latency distribution can be recovered from this file afterwards.
+        "cache_hit": cache_hit,
+        "duration_ms": duration_ms,
+        # First token, streaming path only. It is the number the user actually
+        # feels; duration_ms is what they wait for in full.
+        "ttft_ms": ttft_ms,
+        # Joins this record to the access log and to any error line for the
+        # same request. "It broke at 3pm" is unanswerable without it.
+        "request_id": request_id,
     }
 
 
