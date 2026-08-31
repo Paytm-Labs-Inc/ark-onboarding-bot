@@ -39,5 +39,18 @@ ingress:
     - foundry.internal.ap-south-1.platform.mlops.pai.mypaytm.com
     - foundry.mypaytm.com
 
+# The query log and the thumbs up/down are the only record of what users actually
+# asked and whether it helped. On the chart's default emptyDir they live and die
+# with the pod -- and `strategy: Recreate` means every release restarts it, so a
+# beta week of questions would be destroyed a few releases in. None of it can be
+# reconstructed afterwards, so persist it from the first real user onward.
+#
+# Safe to enable now: the volume mounts writable because `fsGroup: 10001` matches
+# the image's uid, and `readOnlyRootFilesystem` is still false. Flip that to true
+# only after confirming writes still land, not before.
+logs:
+  persistence:
+    enabled: true
+
 slack:
   enabled: false   # flip once the Slack tokens are in the secret bag
