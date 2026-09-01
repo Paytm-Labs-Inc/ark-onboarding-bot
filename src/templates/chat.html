@@ -309,8 +309,58 @@
     const statusEl = document.getElementById("status");
     const newChatBtn = document.getElementById("new-chat");
 
+    const CHAT_STORAGE_VERSION = 1;
+    const MAX_STORED_TURNS = 30;
+
     const EMPTY_TEXT =
       "Ask how to set up Cursor, enroll compute, fix a stuck session, and more.";
+
+    function chatStorageKey() {
+      const base = document.querySelector("base")?.getAttribute("href") || "/";
+      return `ark-onboarding-bot:chat:${base}`;
+    }
+
+    function readStoredChat() {
+      try {
+        const raw = localStorage.getItem(chatStorageKey());
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (data?.version !== CHAT_STORAGE_VERSION || !Array.isArray(data.turns)) {
+          return null;
+        }
+        return data;
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    function writeStoredChat(state) {
+      try {
+        localStorage.setItem(chatStorageKey(), JSON.stringify(state));
+      } catch (_err) {
+        // Quota or private mode — the chat still works, it just won't persist.
+      }
+    }
+
+    function clearStoredChat() {
+      try {
+        localStorage.removeItem(chatStorageKey());
+      } catch (_err) {}
+    }
+
+    function persistCompletedTurn(question, answer, sources, meta) {
+      const stored = readStoredChat() || {
+        version: CHAT_STORAGE_VERSION,
+        sessionId: null,
+        turns: [],
+      };
+      stored.sessionId = meta.session_id || sessionId;
+      stored.turns.push({ question, answer, sources: sources || [], meta });
+      if (stored.turns.length > MAX_STORED_TURNS) {
+        stored.turns = stored.turns.slice(-MAX_STORED_TURNS);
+      }
+      writeStoredChat(stored);
+    }
 
     function setStatus(message, isError = false) {
       statusEl.textContent = message || "";
@@ -390,7 +440,7 @@
       turn.appendChild(row);
     }
 
-    function appendTurn(question, answer, sources, meta) {
+    function renderCompletedTurn(question, answer, sources, meta, { scroll = true } = {}) {
       const empty = document.getElementById("empty-state");
       if (empty) empty.remove();
 
@@ -401,12 +451,27 @@
         <div class="answer">
           <div class="answer-label">Answer</div>
           <div class="answer-text">${escapeHtml(answer)}</div>
-          ${renderCitations(sources)}
         </div>
       `;
+      const answerBlock = turn.querySelector(".answer");
+      if (meta && meta.handoff) {
+        answerBlock.insertAdjacentHTML("beforeend",
+          '<p class="degraded-note">If this is a live issue, post in <strong>#foundry-users</strong> '
+          + "with your session id, the exact command and its output.</p>");
+      }
+      const degradedHtml = renderDegradedNote(meta && meta.degraded, sources);
+      if (degradedHtml) {
+        answerBlock.insertAdjacentHTML("beforeend", degradedHtml);
+      }
+      const citationsHtml = renderCitations(sources);
+      if (citationsHtml) {
+        answerBlock.insertAdjacentHTML("beforeend", citationsHtml);
+      }
       appendFeedbackButtons(turn, meta);
       chat.appendChild(turn);
-      turn.scrollIntoView({ behavior: "smooth", block: "end" });
+      if (scroll) {
+        turn.scrollIntoView({ behavior: "smooth", block: "end" });
+      }
       return turn;
     }
 
@@ -457,6 +522,22 @@
       }
       appendFeedbackButtons(turn, meta);
       turn.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+
+    function restoreChatFromStorage() {
+      const stored = readStoredChat();
+      if (!stored || !stored.turns.length) {
+        showEmptyState();
+        return;
+      }
+      sessionId = stored.sessionId || null;
+      chat.replaceChildren();
+      for (const turn of stored.turns) {
+        renderCompletedTurn(turn.question, turn.answer, turn.sources, turn.meta, {
+          scroll: false,
+        });
+      }
+      chat.lastElementChild?.scrollIntoView({ block: "end" });
     }
 
     async function consumeAskStream(response, question, answerEl, turn) {
@@ -546,6 +627,7 @@
           answerEl.textContent = payload.answer;
         }
         finishStreamingTurn(liveTurn, answerEl, payload.sources, meta);
+        persistCompletedTurn(question, payload.answer, payload.sources, meta);
         questionEl.value = "";
         setStatus("");
       } catch (error) {
@@ -557,19 +639,6 @@
       }
     });
 
-    // Enter sends, Shift+Enter starts a new line -- the convention every chat
-    // app uses. A textarea submits on neither by default, so without this the
-    // only way to ask is reaching for the mouse on every single message.
-    questionEl.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" || event.shiftKey) return;
-      // Mid-composition Enter commits the candidate in an IME (any non-Latin
-      // keyboard); sending here would swallow the character being typed.
-      if (event.isComposing || event.keyCode === 229) return;
-      event.preventDefault();
-      if (submitBtn.disabled) return;   // an answer is already streaming
-      form.requestSubmit();             // not form.submit(): that skips the handler
-    });
-
     newChatBtn.addEventListener("click", async () => {
       if (sessionId) {
         await fetch("api/reset", {
@@ -579,6 +648,7 @@
         });
       }
       sessionId = null;
+      clearStoredChat();
       showEmptyState();
       questionEl.value = "";
       setStatus("");
@@ -586,7 +656,7 @@
       questionEl.focus();
     });
 
-    showEmptyState();
+    restoreChatFromStorage();
     questionEl.focus();
   </script>
 </body>
