@@ -64,6 +64,14 @@ render -f "$CHART/pai-risk-mlops-platform-values.yaml" --set image.tag=900000000
 
 echo "== H: log persistence -- PVC and claim =="
 render "${BASE[@]}" --set logs.persistence.enabled=true; [ "$RC" -eq 0 ] && grep -q 'kind: PersistentVolumeClaim' <<<"$OUT" && grep -q 'claimName: ark-onboarding-bot-logs' <<<"$OUT" && pass "PVC wired when enabled" || fail "persistence render wrong"
-render "${BASE[@]}"; grep -q 'PersistentVolumeClaim' <<<"$OUT" && fail "PVC present by default" || pass "emptyDir by default (documented as ephemeral)"
+# The deployed overlay MUST persist: on an emptyDir every release destroys the
+# query log and the feedback, which is the beta's only record of what was asked.
+render "${BASE[@]}"; [ "$RC" -eq 0 ] && grep -q 'kind: PersistentVolumeClaim' <<<"$OUT" && grep -q 'claimName: ark-onboarding-bot-logs' <<<"$OUT" && pass "production overlay persists the log" || fail "overlay no longer persists the query log"
+# The chart's own default stays ephemeral -- persistence is an explicit per-
+# environment choice, not something a new consumer of the chart inherits silently.
+# awsSecretPath is required by a guard, so it must be supplied or the render
+# FAILS and the absence of a PVC in an error message would read as a pass --
+# an assertion that can never fail. RC is checked for exactly that reason.
+render --set image.tag=90000000000001-abcdef0-arm64 --set ingress.enabled=false --set externalSecret.awsSecretPath=example/path; [ "$RC" -eq 0 ] && ! grep -q 'PersistentVolumeClaim' <<<"$OUT" && pass "chart default is emptyDir (documented as ephemeral)" || fail "chart default should render, and stay emptyDir"
 
 echo; [ "$FAILED" -eq 0 ] && echo "All ark-onboarding-bot render assertions passed." || echo "Render assertions FAILED."; exit "$FAILED"
