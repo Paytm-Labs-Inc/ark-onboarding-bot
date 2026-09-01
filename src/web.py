@@ -33,6 +33,7 @@ from src.warmup import check_retrieval_ready, warm_services
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 TEMPLATE_PATH = TEMPLATE_DIR / "chat.html"
 LOGIN_TEMPLATE_PATH = TEMPLATE_DIR / "login.html"
+REVIEWS_TEMPLATE_PATH = TEMPLATE_DIR / "reviews.html"
 
 # 12 hours; a shared team token doesn't need long-lived sessions.
 SESSION_MAX_AGE = 12 * 60 * 60
@@ -414,79 +415,47 @@ def api_feedback(body: FeedbackRequest) -> dict[str, bool]:
     return {"ok": True}
 
 
-def render_reviews(records: list[dict]) -> str:
-    """Server-render the feedback review page (no template engine needed)."""
-    ups = sum(1 for r in records if r.get("rating") == "up")
-    downs = sum(1 for r in records if r.get("rating") == "down")
+def _render_review_items(records: list[dict]) -> str:
+    if not records:
+        return (
+            '<p class="empty">No feedback yet. '
+            "Thumbs up/down in the chat will show up here.</p>"
+        )
 
-    rows: list[str] = []
+    cards: list[str] = []
     for record in records:
         rating = record.get("rating")
         badge = "up" if rating == "up" else "down"
         icon = "👍" if rating == "up" else "👎"
         sources = record.get("sources") or record.get("retrieved_sources") or []
         source_labels = ", ".join(html.escape(str(s)) for s in sources) or "—"
-        rows.append(
-            f"""
-        <tr class="{badge}">
-          <td class="rating">{icon}</td>
-          <td>
-            <div class="q">{html.escape(str(record.get("question", "")))}</div>
-            <div class="a">{html.escape(str(record.get("answer", "")))}</div>
-            <div class="src">{source_labels}</div>
-          </td>
-          <td class="ts">{html.escape(str(record.get("ts", "")))}</td>
-        </tr>"""
-        )
-
-    body = "".join(rows) or (
-        '<tr><td colspan="3" class="empty">No feedback yet. '
-        "Thumbs up/down in the chat will show up here.</td></tr>"
-    )
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ark Onboarding Bot — Feedback</title>
-  <base href="{base_href()}">
-  <style>
-    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-      background:#f6f7f9; color:#1f2937; }}
-    .wrap {{ max-width:900px; margin:0 auto; padding:24px 16px 40px; }}
-    header {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }}
-    h1 {{ font-size:1.3rem; margin:0; }}
-    a.back {{ color:#2563eb; text-decoration:none; font-size:0.9rem; }}
-    .counts {{ color:#6b7280; margin-bottom:16px; font-size:0.92rem; }}
-    table {{ width:100%; border-collapse:collapse; background:#fff;
-      border:1px solid #e5e7eb; border-radius:12px; overflow:hidden; }}
-    th, td {{ text-align:left; padding:12px 14px; border-bottom:1px solid #eef0f2; vertical-align:top; }}
-    th {{ font-size:0.78rem; text-transform:uppercase; letter-spacing:0.04em; color:#6b7280; }}
-    td.rating {{ font-size:1.2rem; width:44px; }}
-    tr.down td.rating {{ color:#b91c1c; }}
-    .q {{ font-weight:600; }}
-    .a {{ color:#374151; margin-top:4px; white-space:pre-wrap; }}
-    .src {{ color:#6b7280; font-size:0.82rem; margin-top:6px; }}
-    td.ts {{ color:#9ca3af; font-size:0.8rem; white-space:nowrap; }}
-    td.empty {{ text-align:center; color:#6b7280; padding:28px; }}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <header>
-      <h1>Feedback review</h1>
-      <a class="back" href=".">&larr; Back to chat</a>
-    </header>
-    <div class="counts">{ups} 👍 &nbsp; {downs} 👎 &nbsp; ({len(records)} total)</div>
-    <table>
-      <thead><tr><th>Rating</th><th>Question / answer</th><th>When</th></tr></thead>
-      <tbody>{body}
-      </tbody>
-    </table>
+        timestamp = html.escape(str(record.get("ts", "")))
+        time_tag = f"<time>{timestamp}</time>" if timestamp else ""
+        cards.append(
+            f"""<article class="review-card {badge}">
+  <div class="review-meta">
+    <span class="rating" aria-label="{badge}">{icon}</span>
+    {time_tag}
   </div>
-</body>
-</html>"""
+  <div class="q">{html.escape(str(record.get("question", "")))}</div>
+  <div class="a">{html.escape(str(record.get("answer", "")))}</div>
+  <div class="src">{source_labels}</div>
+</article>"""
+        )
+    return "".join(cards)
+
+
+def render_reviews(records: list[dict]) -> str:
+    """Server-render the feedback review page from the shared Ark template."""
+    ups = sum(1 for r in records if r.get("rating") == "up")
+    downs = sum(1 for r in records if r.get("rating") == "down")
+    template = _render_template(REVIEWS_TEMPLATE_PATH)
+    return (
+        template.replace("<!--COUNTS_UP-->", str(ups))
+        .replace("<!--COUNTS_DOWN-->", str(downs))
+        .replace("<!--COUNTS_TOTAL-->", str(len(records)))
+        .replace("<!--REVIEW_ITEMS-->", _render_review_items(records))
+    )
 
 
 def main() -> None:
