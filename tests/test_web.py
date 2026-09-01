@@ -355,3 +355,34 @@ class ProbeAndSlotWiringTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DesignTokenConsistencyTests(unittest.TestCase):
+    """Every screen resolves the same variables, or the page renders unstyled.
+
+    The three screens each carried their own palette before: chat used the Ark
+    tokens, login and reviews had hand-picked hexes. They are now injected from
+    one file, and this asserts each page actually receives them -- a missing
+    marker fails silently, leaving a page whose rules reference variables that
+    were never defined.
+    """
+
+    def setUp(self) -> None:
+        self.client = TestClient(app, follow_redirects=False)
+
+    def test_every_screen_carries_the_shared_tokens(self) -> None:
+        for path in ("/", "/login", "/reviews"):
+            with self.subTest(path=path):
+                body = self.client.get(path).text
+                self.assertIn("--ark-violet-500", body, f"{path} lost the token block")
+                self.assertIn("--ark-bg", body)
+                # The marker must have been substituted, not shipped verbatim.
+                self.assertNotIn("<!--TOKENS-->", body, f"{path} shipped the marker")
+
+    def test_no_screen_hardcodes_the_old_palette(self) -> None:
+        """The hexes the login and reviews pages used before they shared tokens."""
+        for path in ("/", "/login", "/reviews"):
+            with self.subTest(path=path):
+                body = self.client.get(path).text
+                for stale in ("#f6f7f9", "#2563eb", "#1f2937"):
+                    self.assertNotIn(stale, body, f"{path} still hardcodes {stale}")
