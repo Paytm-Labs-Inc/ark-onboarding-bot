@@ -639,6 +639,19 @@
       }
     });
 
+    // Enter sends, Shift+Enter starts a new line -- the convention every chat
+    // app uses. A textarea submits on neither by default, so without this the
+    // only way to ask is reaching for the mouse on every single message.
+    questionEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.shiftKey) return;
+      // Mid-composition Enter commits the candidate in an IME (any non-Latin
+      // keyboard); sending here would swallow the character being typed.
+      if (event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      if (submitBtn.disabled) return;   // an answer is already streaming
+      form.requestSubmit();             // not form.submit(): that skips the handler
+    });
+
     newChatBtn.addEventListener("click", async () => {
       if (sessionId) {
         await fetch("api/reset", {
