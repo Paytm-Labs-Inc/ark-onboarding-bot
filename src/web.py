@@ -16,6 +16,7 @@ from typing import Iterator, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from src.answer import PiAtCapacity, missing_backend_credential
@@ -31,7 +32,9 @@ from src.feedback import append_feedback, read_feedback
 from src.warmup import check_retrieval_ready, warm_services
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 TEMPLATE_PATH = TEMPLATE_DIR / "chat.html"
+EMBED_TEMPLATE_PATH = TEMPLATE_DIR / "chat-embed.html"
 LOGIN_TEMPLATE_PATH = TEMPLATE_DIR / "login.html"
 
 # 12 hours; a shared team token doesn't need long-lived sessions.
@@ -55,6 +58,19 @@ def base_href() -> str:
     """`<base>` value so in-page relative URLs resolve under the prefix."""
     prefix = base_path()
     return f"{prefix}/" if prefix else "/"
+
+
+def _embeddable_path(path: str) -> bool:
+    return path == "/embed" or path.startswith("/embed/")
+
+
+def embed_frame_ancestors() -> str:
+    """CSP frame-ancestors for routes loaded inside the Foundry overlay iframe."""
+    extra = os.environ.get("EMBED_FRAME_ANCESTORS", "").strip()
+    ancestors = "'self'"
+    if extra:
+        ancestors = f"{ancestors} {extra}"
+    return ancestors
 
 
 def _render_template(path: Path) -> str:
@@ -238,6 +254,14 @@ def index() -> str:
     return _render_template(TEMPLATE_PATH)
 
 
+@app.get("/embed", response_class=HTMLResponse)
+def embed_chat() -> str:
+    return _render_template(EMBED_TEMPLATE_PATH)
+
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page() -> str:
     return _render_template(LOGIN_TEMPLATE_PATH)
@@ -287,17 +311,28 @@ def _log_upstream_failure(exc: BaseException) -> None:
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     response = await call_next(request)
-    response.headers.setdefault("X-Frame-Options", "DENY")
+    path = request.url.path
+    prefix = base_path()
+    if prefix and path.startswith(prefix):
+        path = path[len(prefix) :] or "/"
+
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "same-origin")
-    # The templates are fully inline (no external scripts, styles or fonts),
-    # so the policy can be strict about origins while allowing inline code.
-    response.headers.setdefault(
-        "Content-Security-Policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-        "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'",
-    )
+
+    if _embeddable_path(path):
+        response.headers.setdefault("Content-Security-Policy", (
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            f"connect-src 'self'; frame-ancestors {embed_frame_ancestors()}; base-uri 'self'"
+        ))
+    else:
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'",
+        )
     return response
 
 
@@ -523,6 +558,7 @@ def main() -> None:
     if prefix:
         print(f"Serving under subpath prefix {prefix!r} (expects a reverse proxy to strip it).")
     print(f"Ark onboarding bot web UI → http://{host}:{port}{prefix}/")
+    print(f"Embeddable chat → http://{host}:{port}{prefix}/embed")
     uvicorn.run(app, host=host, port=port, **proxy_settings())
 
 
