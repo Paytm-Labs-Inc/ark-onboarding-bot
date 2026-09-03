@@ -38,7 +38,28 @@ def is_non_answer(text: str) -> bool:
     the eval. Match on the normalised opening instead.
     """
     head = _normalise_decline(text)[:_DECLINE_WINDOW]
-    return any(_normalise_decline(p) in head for p in (REFUSAL_PHRASE, ROADMAP_PHRASE))
+    return any(key in head for key in _DECLINE_KEYS)
+
+
+# Match the distinctive tail, not the whole phrase: models also swap the
+# pronoun. Measured 2026-09-03 -- llama-3.3-70b answered
+# "You don't have an answer for that yet." to an out-of-scope question, a
+# correct decline that the full-phrase match scored as a grounded answer,
+# so the user got no hand-off line, the query log recorded an answer, and
+# the refusal gate went red on a question the model got right.
+# Only the refusal key drops its pronoun. The roadmap phrase keeps its full
+# text on purpose: `_finalize_parsed` strips the *exact* ROADMAP_PHRASE, so
+# widening the detector without widening the strip would let a grounded answer
+# that merely ends with a roadmap-shaped clause be reported as a decline while
+# the clause itself survives -- hand-off line shown, citations dropped, and the
+# query log recording a refusal that did not happen.
+#
+# Already in normalised form (lowercase, alphanumerics and spaces only), so
+# these compare directly against _normalise_decline() output.
+_DECLINE_KEYS = (
+    "have an answer for that yet",
+    "we have this on our roadmap and are working towards it",
+)
 
 
 # A decline is recognised when the phrase sits within the first stretch of the
@@ -59,7 +80,25 @@ DEFAULT_BACKEND = "pi"
 # Pi Inference. Note the host: app.inference.paytm.com is the control plane and
 # 404s on completions; inference lives on api.inference.paytm.com.
 PI_DEFAULT_BASE_URL = "https://api.inference.paytm.com"
-PI_DEFAULT_MODEL = "qwen/qwen3-32b"
+# INCIDENT 2026-09-01: the gateway deregistered `qwen/qwen3-32b`. It is absent
+# from the catalog under every spelling and every generation returns HTTP 404
+# `model_not_found`, so this default took production down while /health and
+# /ready stayed green -- neither checks the gateway is reachable.
+#
+# llama-3.3-70b-versatile measured end to end on the 85-row scored set: 34/35
+# single-source citations, 31/85 fully correct, zero failed generations -- and
+# it beats gpt-oss-120b at matched retrieval by 16 markers (p=0.003). It is
+# non-reasoning, so there is no <think> block to suppress and none of the
+# reasoning-plus-JSON fragility the Qwen request params existed for; its score
+# was also flat across top-k 8/24 and token budgets 800/2000, which is what
+# makes it safe to default to while retrieval is still being changed.
+PI_DEFAULT_MODEL = "llama-3.3-70b-versatile"
+
+# 800 truncates a verbose model mid-JSON, which surfaces as a parse failure and
+# reads as a quality collapse rather than a budget one. Measured on gpt-oss-120b
+# over the 85-row scored set: at 800 it loses 11 answers outright and 13 gold
+# facts; at 2000 it loses none. The models that fit in 800 are unaffected.
+PI_DEFAULT_MAX_TOKENS = 2000
 
 # Request parameters certain models need. Qwen3 is a hybrid reasoning model:
 # without these it spends the token budget on a <think> block and never emits
@@ -81,11 +120,14 @@ Rules:
 2. Do not invent steps, commands, URLs, or policy details.
 3. Document chunks are provided — you MUST synthesize an answer from them when any chunk
    mentions the topic, even if the answer is partial or spread across chunks. Do not refuse
-   merely because no single chunk is a perfect match.
+   merely because no single chunk is a perfect match. This does not override rule 4(a): a
+   question that is not about Ark is declined even when a chunk happens to mention the same
+   technology.
 4. Decline ONLY in these two cases, and use the exact wording given:
    (a) The question is not about Ark at all — resetting a Jira or Bitbucket password,
        general programming help, company or financial information, deploying an app to AWS
-       production, generic CI setup — or it asks you to subvert Ark, such as bypassing auth
+       production, generic CI setup, or installing third-party infrastructure on your own
+       machine such as Kubernetes — or it asks you to subvert Ark, such as bypassing auth
        or revealing internal connection strings.
        Answer exactly: "{REFUSAL_PHRASE}"
    (b) The question IS about Ark — a capability, integration, platform behaviour or
@@ -335,7 +377,7 @@ def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
 
     body: dict[str, Any] = {
         "model": chosen,
-        "max_tokens": int(os.environ.get("PI_MAX_TOKENS", "800")),
+        "max_tokens": int(os.environ.get("PI_MAX_TOKENS", str(PI_DEFAULT_MAX_TOKENS))),
         "messages": [{"role": "user", "content": prompt}],
     }
     body.update(_pi_request_params(chosen))
@@ -728,7 +770,24 @@ def _generate_answer(
 ) -> dict[str, Any]:
     user_content = _build_user_content(question, chunks, history=history)
     raw = _call_model(user_content, model=model)
-    return _parse_and_finalize(raw, chunks)
+    try:
+        return _parse_and_finalize(raw, chunks)
+    except ValueError:
+        # The model broke its own JSON, which is a sampling failure rather than
+        # a bad request -- the same class as the Groq JSON-mode 400 that
+        # _call_pi_inference already retries. Measured 2026-09-03: asked "why
+        # does Claude Code show ark connected but tools fetch failed?", the
+        # model wrote a shell command containing raw double quotes inside the
+        # "answer" string and the payload stopped being parseable. The same
+        # question parsed cleanly on other runs, so one re-ask clears it.
+        #
+        # Only the blocking path does this. Streaming cannot: once a delta is
+        # out the user has seen text and a retry would replay the answer on top
+        # of it, which is why _emit_streamed_raw salvages instead. It reaches
+        # this retry anyway whenever it fails before emitting, because that is
+        # the case where it falls back to this function.
+        raw = _call_model(user_content, model=model)
+        return _parse_and_finalize(raw, chunks)
 
 
 def _finalize_parsed(
@@ -963,7 +1022,7 @@ def _stream_pi_inference(prompt: str, *, model: str | None = None) -> Iterator[s
 
     body: dict[str, Any] = {
         "model": chosen,
-        "max_tokens": int(os.environ.get("PI_MAX_TOKENS", "800")),
+        "max_tokens": int(os.environ.get("PI_MAX_TOKENS", str(PI_DEFAULT_MAX_TOKENS))),
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
     }
