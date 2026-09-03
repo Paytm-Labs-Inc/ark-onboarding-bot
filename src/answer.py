@@ -47,11 +47,18 @@ def is_non_answer(text: str) -> bool:
 # correct decline that the full-phrase match scored as a grounded answer,
 # so the user got no hand-off line, the query log recorded an answer, and
 # the refusal gate went red on a question the model got right.
+# Only the refusal key drops its pronoun. The roadmap phrase keeps its full
+# text on purpose: `_finalize_parsed` strips the *exact* ROADMAP_PHRASE, so
+# widening the detector without widening the strip would let a grounded answer
+# that merely ends with a roadmap-shaped clause be reported as a decline while
+# the clause itself survives -- hand-off line shown, citations dropped, and the
+# query log recording a refusal that did not happen.
+#
 # Already in normalised form (lowercase, alphanumerics and spaces only), so
-# they compare directly against _normalise_decline() output.
+# these compare directly against _normalise_decline() output.
 _DECLINE_KEYS = (
     "have an answer for that yet",
-    "on our roadmap and are working towards it",
+    "we have this on our roadmap and are working towards it",
 )
 
 
@@ -760,7 +767,24 @@ def _generate_answer(
 ) -> dict[str, Any]:
     user_content = _build_user_content(question, chunks, history=history)
     raw = _call_model(user_content, model=model)
-    return _parse_and_finalize(raw, chunks)
+    try:
+        return _parse_and_finalize(raw, chunks)
+    except ValueError:
+        # The model broke its own JSON, which is a sampling failure rather than
+        # a bad request -- the same class as the Groq JSON-mode 400 that
+        # _call_pi_inference already retries. Measured 2026-09-03: asked "why
+        # does Claude Code show ark connected but tools fetch failed?", the
+        # model wrote a shell command containing raw double quotes inside the
+        # "answer" string and the payload stopped being parseable. The same
+        # question parsed cleanly on other runs, so one re-ask clears it.
+        #
+        # Only the blocking path does this. Streaming cannot: once a delta is
+        # out the user has seen text and a retry would replay the answer on top
+        # of it, which is why _emit_streamed_raw salvages instead. It reaches
+        # this retry anyway whenever it fails before emitting, because that is
+        # the case where it falls back to this function.
+        raw = _call_model(user_content, model=model)
+        return _parse_and_finalize(raw, chunks)
 
 
 def _finalize_parsed(

@@ -476,11 +476,45 @@ class DeclineWordingTests(unittest.TestCase):
         failed on a question the model got right.
         """
         self.assertTrue(is_non_answer("You don't have an answer for that yet."))
-        self.assertTrue(is_non_answer("This is on our roadmap and are working towards it."))
         # A grounded answer that merely discusses answers must not be swallowed.
         self.assertFalse(
             is_non_answer("You can install Kubernetes on your laptop, but an EKS pool is better.")
         )
+
+    @patch("src.answer._call_model")
+    def test_unparseable_json_is_asked_once_more(self, mock_call: MagicMock) -> None:
+        """Regression, 2026-09-03: a shell command in the answer broke the JSON.
+
+        The model emitted raw double quotes inside the "answer" string. That is
+        a sampling failure -- the same question parsed on other runs -- so it is
+        re-asked once rather than surfaced as an error.
+        """
+        mock_call.side_effect = [
+            '{"answer": "run curl -H "Authorization: x"", "chunks_used": [1]}',
+            '{"answer": "Use the workspace doctor.", "chunks_used": [1]}',
+        ]
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(result["answer"], "Use the workspace doctor.")
+        self.assertEqual(mock_call.call_count, 2)
+
+    @patch("src.answer._call_model")
+    def test_a_second_unparseable_response_still_raises(self, mock_call: MagicMock) -> None:
+        """One re-ask, not a loop: a persistently broken model must surface."""
+        mock_call.side_effect = ['not json at all', 'still not json']
+        with self.assertRaises(ValueError):
+            answer("q", self.CHUNKS)
+        self.assertEqual(mock_call.call_count, 2)
+
+    def test_only_the_refusal_key_drops_its_pronoun(self) -> None:
+        """The roadmap phrase stays matched in full, and deliberately so.
+
+        `_finalize_parsed` strips the exact ROADMAP_PHRASE. A looser detector
+        would report a grounded answer ending in a roadmap-shaped clause as a
+        decline while leaving the clause in place -- citations dropped and a
+        refusal logged that never happened.
+        """
+        self.assertTrue(is_non_answer(ROADMAP_PHRASE))
+        self.assertFalse(is_non_answer("This is on our roadmap and are working towards it."))
 
     def test_prompt_gives_the_model_both_exact_strings(self) -> None:
         self.assertIn(REFUSAL_PHRASE, SYSTEM_PROMPT)
