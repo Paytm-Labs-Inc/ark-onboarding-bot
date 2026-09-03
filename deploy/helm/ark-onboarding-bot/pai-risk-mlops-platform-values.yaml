@@ -30,6 +30,19 @@ web:
   # ingress-controller pod CIDR when the EKS/VPC value arrives -- in this file,
   # never with kubectl (selfHeal reverts it).
   forwardedAllowIps: "*"
+  # INCIDENT 2026-09-01: the gateway stopped serving `qwen/qwen3-32b`. It is
+  # absent from /v1/models and every generation returns
+  # `HTTP 404 {"error":{"message":"Model not found"}}`. The app defaults to that
+  # model, so every answer failed while /health and /ready stayed green -- neither
+  # checks the gateway is reachable, only that the credential is present.
+  #
+  # llama-3.3-70b-versatile is non-reasoning, so there is no <think> block to
+  # suppress and none of the reasoning-plus-JSON fragility that made the Qwen
+  # request params necessary. `PI_MODEL_PARAMS` is keyed by model name, so it
+  # correctly contributes nothing here. Chosen among the models the gateway does
+  # serve on measured citation behaviour, which is what this bot is judged on.
+  env:
+    PI_MODEL: llama-3.3-70b-versatile
 
 externalSecret:
   awsSecretPath: pai-risk-mlops/platform/ark-onboarding-bot
