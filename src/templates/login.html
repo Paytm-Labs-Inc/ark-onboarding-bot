@@ -6,51 +6,57 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ark Onboarding Bot — Sign in</title>
   <style>
-    :root { color-scheme: light; }
+    /* <!--TOKENS--> */
     * { box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
-      margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f6f7f9;
-      color: #1f2937;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      margin: 0; background: var(--ark-bg); color: var(--ark-fg);
+      font-family: var(--ark-font-sans); font-size: var(--ark-text-base);
+      line-height: var(--ark-leading-base); -webkit-font-smoothing: antialiased;
+      display: flex; align-items: center; justify-content: center;
+      padding: var(--ark-space-4);
     }
     .card {
-      background: #fff;
-      border: 1px solid #e5e7eb;
-      border-radius: 12px;
-      padding: 28px 24px;
-      width: 100%;
-      max-width: 380px;
+      width: 100%; max-width: 380px;
+      background: var(--ark-panel); border: 1px solid var(--ark-line);
+      border-radius: var(--ark-radius-lg); padding: var(--ark-space-6) var(--ark-space-5);
+      box-shadow: var(--ark-shadow-modal);
+      display: flex; flex-direction: column; gap: var(--ark-space-3);
     }
-    h1 { font-size: 1.2rem; margin: 0 0 4px; }
-    p.sub { color: #6b7280; font-size: 0.9rem; margin: 0 0 18px; }
-    label { display: block; font-size: 0.85rem; margin-bottom: 6px; color: #374151; }
+    h1 {
+      margin: 0; font-size: var(--ark-text-lg); font-weight: 600;
+      letter-spacing: var(--ark-tracking-lg); line-height: var(--ark-leading-lg);
+    }
+    p.sub { margin: 0; color: var(--ark-fg-muted); font-size: var(--ark-text-sm); }
+    form { display: flex; flex-direction: column; gap: var(--ark-space-2); margin: 0; }
+    label {
+      font-size: var(--ark-text-xs); font-weight: 600;
+      letter-spacing: var(--ark-tracking-caps); text-transform: uppercase;
+      color: var(--ark-fg-muted);
+    }
     input {
-      width: 100%;
-      border: 1px solid #e5e7eb;
-      border-radius: 10px;
-      padding: 11px 12px;
-      font: inherit;
-      margin-bottom: 14px;
+      font: inherit; font-size: var(--ark-text-base);
+      background: var(--ark-elevated); color: var(--ark-fg);
+      border: 1px solid var(--ark-line-strong); border-radius: var(--ark-radius-sm);
+      padding: var(--ark-space-2) var(--ark-space-3); width: 100%;
     }
-    input:focus { outline: 2px solid rgba(37,99,235,0.25); border-color: #2563eb; }
+    input::placeholder { color: var(--ark-fg-faint); }
+    input:focus-visible, button:focus-visible {
+      outline: none; box-shadow: var(--ark-focus-ring);
+    }
     button {
-      width: 100%;
-      background: #2563eb;
-      color: #fff;
-      border: none;
-      border-radius: 10px;
-      padding: 11px 14px;
-      font: inherit;
-      font-weight: 600;
-      cursor: pointer;
+      font: inherit; font-size: var(--ark-text-base); font-weight: 500;
+      background: var(--ark-violet-500); border: 1px solid var(--ark-violet-500);
+      color: var(--ark-on-accent); border-radius: var(--ark-radius-sm);
+      padding: var(--ark-space-2) var(--ark-space-3); cursor: pointer;
+      margin-top: var(--ark-space-1);
+      transition: background var(--ark-duration-1) var(--ark-ease),
+                  border-color var(--ark-duration-1) var(--ark-ease);
     }
-    button:hover { background: #1d4ed8; }
-    .status { min-height: 1.1rem; margin-top: 12px; font-size: 0.86rem; color: #b91c1c; }
+    button:hover { background: var(--ark-violet-400); border-color: var(--ark-violet-400); }
+    .status {
+      min-height: 1.1rem; font-size: var(--ark-text-sm); color: var(--ark-danger);
+    }
   </style>
 </head>
 <body>
@@ -59,7 +65,7 @@
     <p class="sub">Team access only. Enter the shared access token to continue.</p>
     <form id="login-form">
       <label for="token">Access token</label>
-      <input id="token" type="password" autocomplete="current-password" placeholder="crsr-team-token" />
+      <input id="token" type="password" autocomplete="current-password" placeholder="Paste your team access token" />
       <button type="submit">Sign in</button>
     </form>
     <div class="status" id="status"></div>
