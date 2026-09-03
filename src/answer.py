@@ -38,7 +38,21 @@ def is_non_answer(text: str) -> bool:
     the eval. Match on the normalised opening instead.
     """
     head = _normalise_decline(text)[:_DECLINE_WINDOW]
-    return any(_normalise_decline(p) in head for p in (REFUSAL_PHRASE, ROADMAP_PHRASE))
+    return any(key in head for key in _DECLINE_KEYS)
+
+
+# Match the distinctive tail, not the whole phrase: models also swap the
+# pronoun. Measured 2026-09-03 -- llama-3.3-70b answered
+# "You don't have an answer for that yet." to an out-of-scope question, a
+# correct decline that the full-phrase match scored as a grounded answer,
+# so the user got no hand-off line, the query log recorded an answer, and
+# the refusal gate went red on a question the model got right.
+# Already in normalised form (lowercase, alphanumerics and spaces only), so
+# they compare directly against _normalise_decline() output.
+_DECLINE_KEYS = (
+    "have an answer for that yet",
+    "on our roadmap and are working towards it",
+)
 
 
 # A decline is recognised when the phrase sits within the first stretch of the

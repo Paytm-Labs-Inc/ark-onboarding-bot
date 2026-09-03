@@ -467,6 +467,21 @@ class DeclineWordingTests(unittest.TestCase):
         self.assertTrue(is_non_answer(f"  {ROADMAP_PHRASE}  "))
         self.assertFalse(is_non_answer("Run `ark host enroll`."))
 
+    def test_a_declining_pronoun_swap_still_counts_as_a_decline(self) -> None:
+        """Regression, 2026-09-03: llama-3.3-70b declined in the second person.
+
+        "You don't have an answer for that yet." is a correct refusal. The
+        full-phrase match scored it as a grounded answer, so the user got no
+        hand-off line, the query log recorded an answer, and the refusal gate
+        failed on a question the model got right.
+        """
+        self.assertTrue(is_non_answer("You don't have an answer for that yet."))
+        self.assertTrue(is_non_answer("This is on our roadmap and are working towards it."))
+        # A grounded answer that merely discusses answers must not be swallowed.
+        self.assertFalse(
+            is_non_answer("You can install Kubernetes on your laptop, but an EKS pool is better.")
+        )
+
     def test_prompt_gives_the_model_both_exact_strings(self) -> None:
         self.assertIn(REFUSAL_PHRASE, SYSTEM_PROMPT)
         self.assertIn(ROADMAP_PHRASE, SYSTEM_PROMPT)
