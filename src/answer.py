@@ -787,7 +787,11 @@ def _generate_answer(
         # this retry anyway whenever it fails before emitting, because that is
         # the case where it falls back to this function.
         raw = _call_model(user_content, model=model)
-        return _parse_and_finalize(raw, chunks)
+        # Second failure: salvage rather than raise. Some questions pull the
+        # same mis-escaped shell command out of the model every time, so a
+        # third ask would not help and the user would get "answer service
+        # unavailable" for a question that was actually answered.
+        return _parse_and_finalize(raw, chunks, allow_salvage=True)
 
 
 def _finalize_parsed(
@@ -860,12 +864,51 @@ class _AnswerFieldStreamer:
         return new_text
 
 
-def _parse_and_finalize(raw: str, chunks: list[dict[str, Any]]) -> dict[str, Any]:
+def _parse_and_finalize(
+    raw: str, chunks: list[dict[str, Any]], *, allow_salvage: bool = False
+) -> dict[str, Any]:
+    """Parse a model payload. `allow_salvage` is the last resort, not the first.
+
+    A clean re-ask beats a truncated salvage, so the caller enables this only
+    once the retry has also failed.
+    """
     try:
         parsed = _parse_json_response(raw)
     except (json.JSONDecodeError, IndexError, KeyError) as exc:
-        raise ValueError(f"Could not parse model response as JSON: {raw!r}") from exc
+        salvaged = _salvage_payload(raw) if allow_salvage else None
+        if salvaged is None:
+            raise ValueError(f"Could not parse model response as JSON: {raw!r}") from exc
+        parsed = salvaged
     return _finalize_parsed(parsed, chunks)
+
+
+def _salvage_payload(raw: str) -> dict[str, Any] | None:
+    """Recover answer and citations from a payload the model mis-escaped.
+
+    The failure this exists for: asked about the MCP "tools fetch failed" error,
+    the model answers with a curl command, writes its inner double quotes raw
+    inside the "answer" string, and breaks its own JSON. Re-asking does not
+    reliably help -- the question pulls the same shell command out every time --
+    so the blocking path would surface "answer service unavailable" for a
+    question the model actually answered correctly.
+
+    `chunks_used` survives intact at the end of the payload, so both fields can
+    be recovered: the answer is truncated at the offending quote, but a slightly
+    short answer with correct citations beats an error. This is the same
+    trade-off `_emit_streamed_raw` already makes when a stream breaks after the
+    first delta; doing it here keeps the two paths consistent.
+
+    Returns None when there is nothing worth salvaging, so a genuinely empty or
+    non-JSON response still raises.
+    """
+    answer_text = _answer_text_from_partial_json(raw)
+    if not answer_text.strip():
+        return None
+    payload: dict[str, Any] = {"answer": answer_text}
+    used = re.search(r'"chunks_used"\s*:\s*\[([0-9,\s]*)\]', raw)
+    if used:
+        payload["chunks_used"] = [int(n) for n in re.findall(r"\d+", used.group(1))]
+    return payload
 
 
 def _stream_cursor_sdk(prompt: str, *, model: str) -> Iterator[str]:
