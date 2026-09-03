@@ -59,7 +59,25 @@ DEFAULT_BACKEND = "pi"
 # Pi Inference. Note the host: app.inference.paytm.com is the control plane and
 # 404s on completions; inference lives on api.inference.paytm.com.
 PI_DEFAULT_BASE_URL = "https://api.inference.paytm.com"
-PI_DEFAULT_MODEL = "qwen/qwen3-32b"
+# INCIDENT 2026-09-01: the gateway deregistered `qwen/qwen3-32b`. It is absent
+# from the catalog under every spelling and every generation returns HTTP 404
+# `model_not_found`, so this default took production down while /health and
+# /ready stayed green -- neither checks the gateway is reachable.
+#
+# llama-3.3-70b-versatile measured end to end on the 85-row scored set: 34/35
+# single-source citations, 31/85 fully correct, zero failed generations -- and
+# it beats gpt-oss-120b at matched retrieval by 16 markers (p=0.003). It is
+# non-reasoning, so there is no <think> block to suppress and none of the
+# reasoning-plus-JSON fragility the Qwen request params existed for; its score
+# was also flat across top-k 8/24 and token budgets 800/2000, which is what
+# makes it safe to default to while retrieval is still being changed.
+PI_DEFAULT_MODEL = "llama-3.3-70b-versatile"
+
+# 800 truncates a verbose model mid-JSON, which surfaces as a parse failure and
+# reads as a quality collapse rather than a budget one. Measured on gpt-oss-120b
+# over the 85-row scored set: at 800 it loses 11 answers outright and 13 gold
+# facts; at 2000 it loses none. The models that fit in 800 are unaffected.
+PI_DEFAULT_MAX_TOKENS = 2000
 
 # Request parameters certain models need. Qwen3 is a hybrid reasoning model:
 # without these it spends the token budget on a <think> block and never emits
@@ -335,7 +353,7 @@ def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
 
     body: dict[str, Any] = {
         "model": chosen,
-        "max_tokens": int(os.environ.get("PI_MAX_TOKENS", "800")),
+        "max_tokens": int(os.environ.get("PI_MAX_TOKENS", str(PI_DEFAULT_MAX_TOKENS))),
         "messages": [{"role": "user", "content": prompt}],
     }
     body.update(_pi_request_params(chosen))
@@ -963,7 +981,7 @@ def _stream_pi_inference(prompt: str, *, model: str | None = None) -> Iterator[s
 
     body: dict[str, Any] = {
         "model": chosen,
-        "max_tokens": int(os.environ.get("PI_MAX_TOKENS", "800")),
+        "max_tokens": int(os.environ.get("PI_MAX_TOKENS", str(PI_DEFAULT_MAX_TOKENS))),
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
     }

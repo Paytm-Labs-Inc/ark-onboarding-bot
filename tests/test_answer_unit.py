@@ -355,13 +355,42 @@ class PiInferenceBackendTests(unittest.TestCase):
         self.assertIn("api.inference.paytm.com", url)
 
     @patch("src.answer.httpx.post")
-    def test_qwen_is_the_default_model_and_carries_its_params(self, mock_post: MagicMock) -> None:
-        """Qwen3 needs reasoning disabled and JSON mode or it emits a <think> block."""
+    def test_default_model_is_llama_and_carries_no_special_params(self, mock_post: MagicMock) -> None:
+        """The default must be a model the gateway actually serves.
+
+        qwen/qwen3-32b was deregistered on 2026-09-01 and every call 404s, so a
+        test asserting it as the default was asserting an outage. llama-3.3-70b
+        is non-reasoning: it needs neither reasoning_effort nor JSON mode, and
+        sending response_format to this provider is a 400.
+        """
         mock_post.return_value = self._response({"answer": "ok", "chunks_used": []})
         answer("q", self.CHUNKS)
 
         body = mock_post.call_args.kwargs["json"]
-        self.assertEqual(body["model"], "qwen/qwen3-32b")
+        self.assertEqual(body["model"], "llama-3.3-70b-versatile")
+        self.assertNotIn("reasoning_effort", body)
+        self.assertNotIn("response_format", body)
+
+    @patch("src.answer.httpx.post")
+    def test_default_token_budget_is_2000(self, mock_post: MagicMock) -> None:
+        """800 truncates a verbose model mid-JSON; that reads as a bad answer."""
+        mock_post.return_value = self._response({"answer": "ok", "chunks_used": []})
+        answer("q", self.CHUNKS)
+        self.assertEqual(mock_post.call_args.kwargs["json"]["max_tokens"], 2000)
+
+    @patch("src.answer.httpx.post")
+    def test_a_model_with_params_still_receives_them(self, mock_post: MagicMock) -> None:
+        """The per-model table must keep working now that the default uses none.
+
+        Asserted against the qwen entry because that is the only one in the
+        table. The entry is kept even though the gateway no longer serves the
+        model: it documents what a reasoning model needs, and it is what this
+        mechanism will carry for the next one.
+        """
+        os.environ["PI_MODEL"] = "qwen/qwen3-32b"
+        mock_post.return_value = self._response({"answer": "ok", "chunks_used": []})
+        answer("q", self.CHUNKS)
+        body = mock_post.call_args.kwargs["json"]
         self.assertEqual(body["reasoning_effort"], "none")
         self.assertEqual(body["response_format"], {"type": "json_object"})
 
@@ -401,7 +430,7 @@ class PiInferenceBackendTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             answer("q", self.CHUNKS)
         self.assertIn("404", str(ctx.exception))
-        self.assertIn("qwen/qwen3-32b", str(ctx.exception))
+        self.assertIn("llama-3.3-70b-versatile", str(ctx.exception))
 
     def test_unknown_backend_is_rejected(self) -> None:
         os.environ["ANSWER_BACKEND"] = "banana"
