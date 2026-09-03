@@ -71,3 +71,48 @@ class AuthDisabledTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SsoIdentityTests(unittest.TestCase):
+    """The SSO header is only trustworthy where the ingress gate overwrites it."""
+
+    HEADER = "X-Auth-Request-Email"
+
+    def setUp(self) -> None:
+        os.environ["ARK_ACCESS_TOKEN"] = TOKEN
+        self.client = TestClient(app, follow_redirects=False)
+
+    def tearDown(self) -> None:
+        os.environ.pop("ARK_ACCESS_TOKEN", None)
+        os.environ.pop("SSO_IDENTITY_HEADER", None)
+
+    def test_header_alone_is_not_enough_when_sso_is_not_configured(self) -> None:
+        """The auth-bypass guard, and the reason this is opt-in.
+
+        Without the ingress auth gate in front, nginx does not overwrite a
+        client-supplied value. Honouring the header unconditionally would let
+        anyone skip the token entirely by setting one header.
+        """
+        response = self.client.post(
+            "/api/ask",
+            json={"question": "hi"},
+            headers={self.HEADER: "someone@paytm.com"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_header_authenticates_once_explicitly_configured(self) -> None:
+        os.environ["SSO_IDENTITY_HEADER"] = self.HEADER
+        response = self.client.post(
+            "/api/ask",
+            json={},  # invalid body: the route rejects it, but only after the gate
+            headers={self.HEADER: "someone@paytm.com"},
+        )
+        # Anything other than the auth responses means the gate let it through.
+        self.assertNotIn(response.status_code, (401, 303))
+
+    def test_configured_but_empty_header_falls_back_to_the_token(self) -> None:
+        os.environ["SSO_IDENTITY_HEADER"] = self.HEADER
+        response = self.client.post(
+            "/api/ask", json={"question": "hi"}, headers={self.HEADER: "   "}
+        )
+        self.assertEqual(response.status_code, 401)
