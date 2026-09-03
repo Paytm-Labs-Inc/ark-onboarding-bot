@@ -355,13 +355,42 @@ class PiInferenceBackendTests(unittest.TestCase):
         self.assertIn("api.inference.paytm.com", url)
 
     @patch("src.answer.httpx.post")
-    def test_qwen_is_the_default_model_and_carries_its_params(self, mock_post: MagicMock) -> None:
-        """Qwen3 needs reasoning disabled and JSON mode or it emits a <think> block."""
+    def test_default_model_is_llama_and_carries_no_special_params(self, mock_post: MagicMock) -> None:
+        """The default must be a model the gateway actually serves.
+
+        qwen/qwen3-32b was deregistered on 2026-09-01 and every call 404s, so a
+        test asserting it as the default was asserting an outage. llama-3.3-70b
+        is non-reasoning: it needs neither reasoning_effort nor JSON mode, and
+        sending response_format to this provider is a 400.
+        """
         mock_post.return_value = self._response({"answer": "ok", "chunks_used": []})
         answer("q", self.CHUNKS)
 
         body = mock_post.call_args.kwargs["json"]
-        self.assertEqual(body["model"], "qwen/qwen3-32b")
+        self.assertEqual(body["model"], "llama-3.3-70b-versatile")
+        self.assertNotIn("reasoning_effort", body)
+        self.assertNotIn("response_format", body)
+
+    @patch("src.answer.httpx.post")
+    def test_default_token_budget_is_2000(self, mock_post: MagicMock) -> None:
+        """800 truncates a verbose model mid-JSON; that reads as a bad answer."""
+        mock_post.return_value = self._response({"answer": "ok", "chunks_used": []})
+        answer("q", self.CHUNKS)
+        self.assertEqual(mock_post.call_args.kwargs["json"]["max_tokens"], 2000)
+
+    @patch("src.answer.httpx.post")
+    def test_a_model_with_params_still_receives_them(self, mock_post: MagicMock) -> None:
+        """The per-model table must keep working now that the default uses none.
+
+        Asserted against the qwen entry because that is the only one in the
+        table. The entry is kept even though the gateway no longer serves the
+        model: it documents what a reasoning model needs, and it is what this
+        mechanism will carry for the next one.
+        """
+        os.environ["PI_MODEL"] = "qwen/qwen3-32b"
+        mock_post.return_value = self._response({"answer": "ok", "chunks_used": []})
+        answer("q", self.CHUNKS)
+        body = mock_post.call_args.kwargs["json"]
         self.assertEqual(body["reasoning_effort"], "none")
         self.assertEqual(body["response_format"], {"type": "json_object"})
 
@@ -401,7 +430,7 @@ class PiInferenceBackendTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             answer("q", self.CHUNKS)
         self.assertIn("404", str(ctx.exception))
-        self.assertIn("qwen/qwen3-32b", str(ctx.exception))
+        self.assertIn("llama-3.3-70b-versatile", str(ctx.exception))
 
     def test_unknown_backend_is_rejected(self) -> None:
         os.environ["ANSWER_BACKEND"] = "banana"
@@ -437,6 +466,55 @@ class DeclineWordingTests(unittest.TestCase):
         self.assertTrue(is_non_answer(ROADMAP_PHRASE))
         self.assertTrue(is_non_answer(f"  {ROADMAP_PHRASE}  "))
         self.assertFalse(is_non_answer("Run `ark host enroll`."))
+
+    def test_a_declining_pronoun_swap_still_counts_as_a_decline(self) -> None:
+        """Regression, 2026-09-03: llama-3.3-70b declined in the second person.
+
+        "You don't have an answer for that yet." is a correct refusal. The
+        full-phrase match scored it as a grounded answer, so the user got no
+        hand-off line, the query log recorded an answer, and the refusal gate
+        failed on a question the model got right.
+        """
+        self.assertTrue(is_non_answer("You don't have an answer for that yet."))
+        # A grounded answer that merely discusses answers must not be swallowed.
+        self.assertFalse(
+            is_non_answer("You can install Kubernetes on your laptop, but an EKS pool is better.")
+        )
+
+    @patch("src.answer._call_model")
+    def test_unparseable_json_is_asked_once_more(self, mock_call: MagicMock) -> None:
+        """Regression, 2026-09-03: a shell command in the answer broke the JSON.
+
+        The model emitted raw double quotes inside the "answer" string. That is
+        a sampling failure -- the same question parsed on other runs -- so it is
+        re-asked once rather than surfaced as an error.
+        """
+        mock_call.side_effect = [
+            '{"answer": "run curl -H "Authorization: x"", "chunks_used": [1]}',
+            '{"answer": "Use the workspace doctor.", "chunks_used": [1]}',
+        ]
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(result["answer"], "Use the workspace doctor.")
+        self.assertEqual(mock_call.call_count, 2)
+
+    @patch("src.answer._call_model")
+    def test_a_second_unparseable_response_still_raises(self, mock_call: MagicMock) -> None:
+        """One re-ask, not a loop: a persistently broken model must surface."""
+        mock_call.side_effect = ['not json at all', 'still not json']
+        with self.assertRaises(ValueError):
+            answer("q", self.CHUNKS)
+        self.assertEqual(mock_call.call_count, 2)
+
+    def test_only_the_refusal_key_drops_its_pronoun(self) -> None:
+        """The roadmap phrase stays matched in full, and deliberately so.
+
+        `_finalize_parsed` strips the exact ROADMAP_PHRASE. A looser detector
+        would report a grounded answer ending in a roadmap-shaped clause as a
+        decline while leaving the clause in place -- citations dropped and a
+        refusal logged that never happened.
+        """
+        self.assertTrue(is_non_answer(ROADMAP_PHRASE))
+        self.assertFalse(is_non_answer("This is on our roadmap and are working towards it."))
 
     def test_prompt_gives_the_model_both_exact_strings(self) -> None:
         self.assertIn(REFUSAL_PHRASE, SYSTEM_PROMPT)
