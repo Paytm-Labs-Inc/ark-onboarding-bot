@@ -28,8 +28,15 @@ if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
   "${VENV_DIR}/bin/pip" install -r "${REPO_ROOT}/requirements.txt"
 fi
 
+if [[ -f "${REPO_ROOT}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/.env"
+  set +a
+fi
+
 # The app refuses to start without the configured backend's credential, which
-# it reads from the environment / .env (via python-dotenv).
+# it reads from the environment / .env (via python-dotenv in src.web main).
 if [[ ! -f "${REPO_ROOT}/.env" && -z "${PI_API_KEY:-}" && -z "${CURSOR_API_KEY:-}" ]]; then
   echo "[run_web] WARNING: no .env file and neither PI_API_KEY nor CURSOR_API_KEY is set; the app will refuse to start." >&2
 fi

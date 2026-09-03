@@ -1,0 +1,170 @@
+/* Floating onboarding chat — Ark / Foundry design tokens (matches chat.html). */
+:root {
+  --ark-bg: #fafafc;
+  --ark-panel: #ffffff;
+  --ark-elevated: #f1f0f6;
+  --ark-line: #e8e6ef;
+  --ark-line-strong: #c9c5d8;
+  --ark-fg: #161520;
+  --ark-fg-muted: #6b6683;
+  --ark-violet-700: #5b46c0;
+  --ark-violet-500: #705bd6;
+  --ark-violet-400: #8e79e3;
+  --ark-on-accent: #ffffff;
+  --ark-shadow-modal: 0 16px 48px rgba(22, 21, 32, 0.18);
+  --ark-radius: 8px;
+  --ark-radius-lg: 10px;
+  --ark-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ark-duration-2: 200ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ark-bg: #0c0b14;
+    --ark-panel: #14131e;
+    --ark-elevated: #1c1a2b;
+    --ark-line: #232134;
+    --ark-line-strong: #34314c;
+    --ark-fg: #f2f1f7;
+    --ark-fg-muted: #8b87a3;
+    --ark-shadow-modal: 0 12px 48px rgba(0, 0, 0, 0.6);
+  }
+}
+
+.ark-overlay-root {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+.ark-overlay-launcher {
+  pointer-events: auto;
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 56px;
+  height: 56px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ark-violet-500);
+  color: var(--ark-on-accent);
+  box-shadow: var(--ark-shadow-modal);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform var(--ark-duration-2) var(--ark-ease),
+    background var(--ark-duration-2) var(--ark-ease);
+}
+
+.ark-overlay-launcher:hover {
+  background: var(--ark-violet-400);
+  transform: translateY(-2px);
+}
+
+.ark-overlay-launcher svg {
+  width: 26px;
+  height: 26px;
+}
+
+.ark-overlay-panel {
+  pointer-events: auto;
+  position: fixed;
+  right: 24px;
+  bottom: 92px;
+  width: min(420px, calc(100vw - 32px));
+  height: min(640px, calc(100vh - 120px));
+  border: 1px solid var(--ark-line-strong);
+  border-radius: var(--ark-radius-lg);
+  background: var(--ark-panel);
+  box-shadow: var(--ark-shadow-modal);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(12px) scale(0.98);
+  visibility: hidden;
+  transition: opacity var(--ark-duration-2) var(--ark-ease),
+    transform var(--ark-duration-2) var(--ark-ease),
+    visibility var(--ark-duration-2) var(--ark-ease);
+}
+
+.ark-overlay-panel.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  visibility: visible;
+}
+
+.ark-overlay-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--ark-line);
+  background: var(--ark-panel);
+}
+
+.ark-overlay-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 600 0.875rem/1.2 -apple-system, "Segoe UI", "Inter", sans-serif;
+  color: var(--ark-fg);
+}
+
+.ark-overlay-panel-title svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+.ark-overlay-close {
+  border: 0;
+  background: transparent;
+  color: var(--ark-fg-muted);
+  font: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--ark-radius);
+}
+
+.ark-overlay-close:hover {
+  background: var(--ark-elevated);
+  color: var(--ark-fg);
+}
+
+.ark-overlay-frame {
+  flex: 1;
+  border: 0;
+  width: 100%;
+  background: var(--ark-bg);
+}
+
+.ark-overlay-root.is-open .ark-overlay-launcher {
+  transform: scale(0.95);
+}
+
+@media (max-width: 640px) {
+  .ark-overlay-panel {
+    right: 12px;
+    bottom: 84px;
+    width: calc(100vw - 24px);
+    height: calc(100vh - 108px);
+  }
+
+  .ark-overlay-launcher {
+    right: 16px;
+    bottom: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ark-overlay-launcher,
+  .ark-overlay-panel {
+    transition: none;
+  }
+}
