@@ -1,0 +1,115 @@
+{
+ "judge": "claude-sonnet-5",
+ "records": [
+  {
+   "id": "multihop-devops-k8s-prereqs",
+   "arch": "rag8",
+   "model": "llama-3.3-70b-versatile",
+   "judge": "claude-sonnet-5",
+   "multihop": true,
+   "n_chunks": 8,
+   "answer": "Your DevOps team needs to set up a network path from the control plane to your API server, as well as a cross-account IAM role. Additionally, your cluster admin needs to set up Kubernetes RBAC for that role, and the platform team needs to set up the network path from your pods back to the control plane. You will also need to create a namespace before creating the pool, and have both the cluster name and the AWS account id of the node group.",
+   "citations": [
+    "k8s-compute -- https://foundry.mypaytm.com/onboarding/k8s-compute"
+   ],
+   "gen_ms": 1177.4,
+   "gold_pages": [
+    "k8s-compute",
+    "faq-quick-answers"
+   ],
+   "sources_truncated": true,
+   "verdict": {
+    "correct": 2,
+    "complete": 1,
+    "grounded": 1,
+    "actionable": 1,
+    "usable": false,
+    "why": "Omits the required ECR pull grant step (step 5) needed before pool creation succeeds, leaving the user blocked despite an otherwise accurate summary of the DevOps/platform/cluster-admin responsibilities."
+   }
+  },
+  {
+   "id": "multihop-team-shared-secret",
+   "arch": "rag8",
+   "model": "llama-3.3-70b-versatile",
+   "judge": "claude-sonnet-5",
+   "multihop": true,
+   "n_chunks": 8,
+   "answer": "You can set the API key at the team scope. According to the scope resolution rules, secrets resolve narrowest first: user, then team, then tenant, and the first hit for each name wins. So, setting the API key at the team scope will allow all team members to use it, unless a user has overridden it at their own user scope. However, be aware that personal credentials should always be set at the user scope, and not at the team scope, to avoid overwriting teammates' credentials.",
+   "citations": [
+    "faq -- https://foundry.mypaytm.com/faq",
+    "faq-quick-answers -- generated from the Ark onboarding corpus",
+    "secrets -- https://foundry.mypaytm.com/onboarding/secrets"
+   ],
+   "gen_ms": 1959.0,
+   "gold_pages": [
+    "admin",
+    "faq-quick-answers"
+   ],
+   "sources_truncated": true,
+   "verdict": {
+    "correct": 0,
+    "complete": 1,
+    "grounded": 1,
+    "actionable": 1,
+    "usable": false,
+    "why": "Recommends sharing an API key via team-scoped secrets, directly contradicting the sources' explicit guidance that keys must be per-person, identity-bound, and never shared."
+   }
+  },
+  {
+   "id": "multihop-cursor-demands-claude",
+   "arch": "rag8",
+   "model": "llama-3.3-70b-versatile",
+   "judge": "claude-sonnet-5",
+   "multihop": true,
+   "n_chunks": 8,
+   "answer": "You can still be asked for Claude credentials even if you set your session runtime to Cursor, because the workspace requires them. Dispatch checks every secret the workspace declares, and selecting a runtime does not change what the workspace requires. If your workspace lists `CLAUDE_CODE_OAUTH_TOKEN`, you will be asked for it even on a Cursor run. Either supply the token, or use a workspace that does not declare it.",
+   "citations": [
+    "troubleshooting -- https://foundry.mypaytm.com/onboarding/troubleshooting",
+    "secrets -- https://foundry.mypaytm.com/onboarding/secrets"
+   ],
+   "gen_ms": 1300.0,
+   "gold_pages": [
+    "set-up-cursor",
+    "getting-started"
+   ],
+   "sources_truncated": true,
+   "verdict": {
+    "correct": 2,
+    "complete": 2,
+    "grounded": 1,
+    "actionable": 1,
+    "usable": true,
+    "why": "Accurately and completely explains the workspace-secret vs runtime distinction, matching the retrieved context without inventing details."
+   }
+  },
+  {
+   "id": "multihop-tenant-mismatch-key",
+   "arch": "rag8",
+   "model": "llama-3.3-70b-versatile",
+   "judge": "claude-sonnet-5",
+   "multihop": true,
+   "n_chunks": 8,
+   "answer": "The CLI and the MCP authenticate independently and can resolve to different tenants. If the tenant the MCP reports is not in your token list, it's a cached connection: restart the editor. If it is in the list, it's a separate-credential case: regenerate the key from the tenant you want and update the MCP registration. You can check the tokens by running `grep -ho 'ark_t-[a-f0-9]*' ~/.claude.json ~/.claude/settings.json 2>/dev/null | sort -u` for Claude Code or `grep -ho 'ark_t-[a-f0-9]*' ~/.cursor/mcp.json .cursor/mcp.json 2>/dev/null | sort -u` for Cursor. If your API key is rejected, it may be a stale or duplicate registration. You should see your own email, role, and tenant by running `ark auth whoami`. If not, see the troubleshooting section for credentials and keys.",
+   "citations": [
+    "getting-access -- https://foundry.mypaytm.com/onboarding/getting-access",
+    "troubleshooting -- https://foundry.mypaytm.com/onboarding/troubleshooting",
+    "faq-quick-answers -- generated from the Ark onboarding corpus",
+    "first-run -- https://foundry.mypaytm.com/onboarding/getting-started"
+   ],
+   "gen_ms": 1580.2,
+   "gold_pages": [
+    "getting-access",
+    "troubleshooting"
+   ],
+   "sources_truncated": true,
+   "verdict": {
+    "correct": 2,
+    "complete": 1,
+    "grounded": 1,
+    "actionable": 1,
+    "usable": false,
+    "why": "Handles the tenant-mismatch diagnosis well but never gives the concrete API-key verification steps (curl auth/whoami, checking role:member vs worker, minting a new key) that the sources specify for the rejected-key half of the question."
+   }
+  }
+ ]
+}

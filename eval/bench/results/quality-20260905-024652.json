@@ -1,0 +1,182 @@
+{
+ "judge": "claude-sonnet-5",
+ "records": [
+  {
+   "id": "multihop-devops-k8s-prereqs",
+   "arch": "rag8",
+   "model": "llama-3.3-70b-versatile",
+   "judge": "claude-sonnet-5",
+   "multihop": true,
+   "n_chunks": 8,
+   "answer": "Your DevOps team needs to set up the network path from the control plane to your API server, which is step 1 in the onboarding process, and also set up the cross-account IAM role, which is step 2. Additionally, they need to verify the network path from the control plane to your API server. You, as the cluster admin, need to set up Kubernetes RBAC for the cross-account IAM role, which is step 3. The platform team also needs to be involved in steps 1, 4, and 5.",
+   "citations": [
+    "k8s-compute -- https://foundry.mypaytm.com/onboarding/k8s-compute"
+   ],
+   "gen_ms": 2309.9,
+   "gold_pages": [
+    "k8s-compute",
+    "faq-quick-answers"
+   ],
+   "sources_truncated": true,
+   "verdict": {
+    "error": "unparseable judge reply"
+   }
+  },
+  {
+   "id": "multihop-team-shared-secret",
+   "arch": "rag8",
+   "model": "llama-3.3-70b-versatile",
+   "judge": "claude-sonnet-5",
+   "multihop": true,
+   "n_chunks": 8,
+   "answer": "You can add the API key at the team scope, so it will be shared among all team members. This way, you can avoid having each person set up their own API key. To do this, follow the secret resolution order: user \u2192 team \u2192 tenant, and the first match wins. Setting a value at the team scope will override the tenant default for your team only. Note that the narrowest scope wins, and team secrets are scoped to that session's environment. You should also be aware that there's a ~10-minute cache for secrets, so if you add a new secret, it may take some time to propagate.",
+   "citations": [
+    "faq -- https://foundry.mypaytm.com/faq",
+    "faq-quick-answers -- generated from the Ark onboarding corpus",
+    "secrets -- https://foundry.mypaytm.com/onboarding/secrets"
+   ],
+   "gen_ms": 1369.2,
+   "gold_pages": [
+    "admin",
+    "faq-quick-answers"
+   ],
+   "sources_truncated": true,
+   "verdict": {
+    "error": "unparseable judge reply"
+   }
+  },
+  {
+   "id": "multihop-cursor-demands-claude",
+   "arch": "rag8",
+   "model": "llama-3.3-70b-versatile",
+   "judge": "claude-sonnet-5",
+   "multihop": true,
+   "n_chunks": 8,
+   "answer": "You can use the Cursor runtime with `CURSOR_API_KEY` set instead of Claude credentials, but selecting a runtime does not change what the workspace requires. If your workspace declares `CLAUDE_CODE_OAUTH_TOKEN`, it will still demand it even on a Cursor run. You can either supply the token or use a workspace that does not declare it.",
+   "citations": [
+    "troubleshooting -- https://foundry.mypaytm.com/onboarding/troubleshooting",
+    "secrets -- https://foundry.mypaytm.com/onboarding/secrets"
+   ],
+   "gen_ms": 967.0,
+   "gold_pages": [
+    "set-up-cursor",
+    "getting-started"
+   ],
+   "sources_truncated": true,
+   "verdict": {
+    "error": "unparseable judge reply"
+   }
+  },
+  {
+   "id": "multihop-tenant-mismatch-key",
+   "arch": "rag8",
+   "model": "llama-3.3-70b-versatile",
+   "judge": "claude-sonnet-5",
+   "multihop": true,
+   "n_chunks": 8,
+   "answer": "You have a situation where the CLI and the MCP are authenticating independently and resolving to different tenants. This can happen due to separate credentials or a stale connection. To troubleshoot, you can run `ark auth whoami` on both surfaces and compare the results. If the tenant the MCP reports is not in the list of tokens, it's likely a stale connection and you should restart your editor. If it is in the list, it's a separate-credential case and you should regenerate the key from the tenant you want and update the MCP registration. Additionally, if your API key is rejected, it could be due to a stale or duplicate registration, and you should check the troubleshooting section for credentials and keys.",
+   "citations": [
+    "getting-access -- https://foundry.mypaytm.com/onboarding/getting-access",
+    "troubleshooting -- https://foundry.mypaytm.com/onboarding/troubleshooting",
+    "faq-quick-answers -- generated from the Ark onboarding corpus",
+    "first-run -- https://foundry.mypaytm.com/onboarding/getting-started"
+   ],
+   "gen_ms": 4504.4,
+   "gold_pages": [
+    "getting-access",
+    "troubleshooting"
+   ],
+   "sources_truncated": true,
+   "verdict": {
+    "error": "unparseable judge reply"
+   }
+  },
+  {
+   "id": "multihop-devops-k8s-prereqs",
+   "arch": "rag24",
+   "model": "llama-3.3-70b-versatile",
+   "judge": "claude-sonnet-5",
+   "multihop": true,
+   "n_chunks": 24,
+   "answer": "Your DevOps team needs to set up VPC peering and a cross-account IAM role to run Ark compute in your team's AWS account. They should raise a VPC peering request to the Ark account, send back the `pcx-` id, open Foundry's Connect page, generate the cross-account role from the AWS card, apply it, and send back the role ARN and the ExternalId.",
+   "citations": [
+    "team-infra -- https://foundry.mypaytm.com/onboarding/team-infra"
+   ],
+   "gen_ms": 1270.4,
+   "gold_pages": [
+    "k8s-compute",
+    "faq-quick-answers"
+   ],
+   "sources_truncated": true,
+   "verdict": {
+    "error": "unparseable judge reply"
+   }
+  },
+  {
+   "id": "multihop-team-shared-secret",
+   "arch": "rag24",
+   "model": "llama-3.3-70b-versatile",
+   "judge": "claude-sonnet-5",
+   "multihop": true,
+   "n_chunks": 24,
+   "answer": "You can set a team-scoped secret for the API key. Teams can override identity secrets for all their members at once - web UI \u2192 Secrets \u2192 Add secret \u2192 scope **team**. Resolution is **user \u2192 team \u2192 tenant** , first hit per key wins; a team that sets nothing simply inherits tenant defaults. Team writes require a team-admin grant for that team (or tenant-admin).",
+   "citations": [
+    "set-up-cursor -- https://foundry.mypaytm.com/onboarding/cursor",
+    "admin -- https://foundry.mypaytm.com/onboarding/admin"
+   ],
+   "gen_ms": 1531.0,
+   "gold_pages": [
+    "admin",
+    "faq-quick-answers"
+   ],
+   "sources_truncated": true,
+   "verdict": {
+    "error": "unparseable judge reply"
+   }
+  },
+  {
+   "id": "multihop-cursor-demands-claude",
+   "arch": "rag24",
+   "model": "llama-3.3-70b-versatile",
+   "judge": "claude-sonnet-5",
+   "multihop": true,
+   "n_chunks": 24,
+   "answer": "You can run a session on the Cursor runtime, but the workspace you're using still declares `CLAUDE_CODE_OAUTH_TOKEN`, which is required even when running on Cursor. Either supply the token or use a workspace that does not declare it.",
+   "citations": [
+    "troubleshooting -- https://foundry.mypaytm.com/onboarding/troubleshooting",
+    "secrets -- https://foundry.mypaytm.com/onboarding/secrets"
+   ],
+   "gen_ms": 2151.2,
+   "gold_pages": [
+    "set-up-cursor",
+    "getting-started"
+   ],
+   "sources_truncated": true,
+   "verdict": {
+    "error": "unparseable judge reply"
+   }
+  },
+  {
+   "id": "multihop-tenant-mismatch-key",
+   "arch": "rag24",
+   "model": "llama-3.3-70b-versatile",
+   "judge": "claude-sonnet-5",
+   "multihop": true,
+   "n_chunks": 24,
+   "answer": "The CLI and the MCP authenticate independently and can resolve to different tenants. If they disagree, you have a stale or duplicate registration. Check if a token for the other tenant exists in your config. If it does, regenerate a key in the tenant you want and update the MCP registration. If it doesn't, fully restart your editor. Verify the key with the `auth/whoami` check. If the key is rejected, ensure it's a user API key, not a worker token, and check if it's valid and not expired.",
+   "citations": [
+    "troubleshooting -- https://foundry.mypaytm.com/onboarding/troubleshooting",
+    "faq-quick-answers -- generated from the Ark onboarding corpus"
+   ],
+   "gen_ms": 1561.4,
+   "gold_pages": [
+    "getting-access",
+    "troubleshooting"
+   ],
+   "sources_truncated": true,
+   "verdict": {
+    "error": "unparseable judge reply"
+   }
+  }
+ ]
+}
