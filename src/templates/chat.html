@@ -452,6 +452,17 @@
         showEmptyState();
         return;
       }
+      // Restoring the id keeps server-side context across an ordinary refresh,
+      // which is the common case and the point of this feature. The limitation,
+      // deliberately accepted rather than fixed here: sessions live in an
+      // in-process dict (src/chat.py get_session) and die on every deploy, so
+      // after a release the restored id is unknown, get_session silently mints a
+      // fresh one, and the screen shows a thread the server has no history for.
+      // A follow-up like "where does it go?" then loses its referent.
+      // Not fixed by dropping the id -- that would throw away context in the
+      // common case to avoid a rarer one. The real fix is server-side sessions
+      // (Postgres, on the backlog) or having the server report that the id was
+      // unknown so restored turns can be marked as history. Author's call.
       sessionId = stored.sessionId || null;
       chat.replaceChildren();
       for (const turn of stored.turns) {

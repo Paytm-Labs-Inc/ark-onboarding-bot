@@ -400,6 +400,26 @@ class DesignTokenConsistencyTests(unittest.TestCase):
         # the CALL site, not the function definition, which sits far earlier
         self.assertLess(guard, body.index("persistCompletedTurn(question, payload.answer"))
 
+        # The guard must ABORT, not merely exist. Presence-and-order assertions
+        # survive neutralising the body -- ArkBot demonstrated exactly that
+        # mutation staying green on the first version of this test. Read the
+        # block between the guard's braces and require a bare `return`.
+        open_brace = body.index("{", guard)
+        depth, i = 0, open_brace
+        while i < len(body):
+            if body[i] == "{":
+                depth += 1
+            elif body[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        block = body[open_brace + 1 : i]
+        self.assertRegex(
+            block, r"(?m)^\s*return\s*;",
+            "the generation guard must return; a guard that falls through does nothing",
+        )
+
     def test_no_screen_hardcodes_the_old_palette(self) -> None:
         """The hexes the login and reviews pages used before they shared tokens."""
         for path in ("/", "/login", "/reviews"):
