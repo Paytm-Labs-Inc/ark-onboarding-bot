@@ -220,6 +220,10 @@
 
   <script>
     let sessionId = null;
+    // Bumped by New chat. An ask captures it at submit and discards its own
+    // result if it changed, so abandoning a running answer cannot write the
+    // turn back into a store the user just cleared.
+    let chatGeneration = 0;
     const chat = document.getElementById("chat");
     const form = document.getElementById("ask-form");
     const questionEl = document.getElementById("question");
@@ -227,8 +231,58 @@
     const statusEl = document.getElementById("status");
     const newChatBtn = document.getElementById("new-chat");
 
+    const CHAT_STORAGE_VERSION = 1;
+    const MAX_STORED_TURNS = 30;
+
     const EMPTY_TEXT =
       "Ask how to set up Cursor, enroll compute, fix a stuck session, and more.";
+
+    function chatStorageKey() {
+      const base = document.querySelector("base")?.getAttribute("href") || "/";
+      return `ark-onboarding-bot:chat:${base}`;
+    }
+
+    function readStoredChat() {
+      try {
+        const raw = localStorage.getItem(chatStorageKey());
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (data?.version !== CHAT_STORAGE_VERSION || !Array.isArray(data.turns)) {
+          return null;
+        }
+        return data;
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    function writeStoredChat(state) {
+      try {
+        localStorage.setItem(chatStorageKey(), JSON.stringify(state));
+      } catch (_err) {
+        // Quota or private mode — the chat still works, it just won't persist.
+      }
+    }
+
+    function clearStoredChat() {
+      try {
+        localStorage.removeItem(chatStorageKey());
+      } catch (_err) {}
+    }
+
+    function persistCompletedTurn(question, answer, sources, meta) {
+      const stored = readStoredChat() || {
+        version: CHAT_STORAGE_VERSION,
+        sessionId: null,
+        turns: [],
+      };
+      stored.sessionId = meta.session_id || sessionId;
+      stored.turns.push({ question, answer, sources: sources || [], meta });
+      if (stored.turns.length > MAX_STORED_TURNS) {
+        stored.turns = stored.turns.slice(-MAX_STORED_TURNS);
+      }
+      writeStoredChat(stored);
+    }
 
     function setStatus(message, isError = false) {
       statusEl.textContent = message || "";
@@ -308,7 +362,7 @@
       turn.appendChild(row);
     }
 
-    function appendTurn(question, answer, sources, meta) {
+    function renderCompletedTurn(question, answer, sources, meta, { scroll = true } = {}) {
       const empty = document.getElementById("empty-state");
       if (empty) empty.remove();
 
@@ -319,12 +373,27 @@
         <div class="answer">
           <div class="answer-label">Answer</div>
           <div class="answer-text">${escapeHtml(answer)}</div>
-          ${renderCitations(sources)}
         </div>
       `;
+      const answerBlock = turn.querySelector(".answer");
+      if (meta && meta.handoff) {
+        answerBlock.insertAdjacentHTML("beforeend",
+          '<p class="degraded-note">If this is a live issue, post in <strong>#foundry-users</strong> '
+          + "with your session id, the exact command and its output.</p>");
+      }
+      const degradedHtml = renderDegradedNote(meta && meta.degraded, sources);
+      if (degradedHtml) {
+        answerBlock.insertAdjacentHTML("beforeend", degradedHtml);
+      }
+      const citationsHtml = renderCitations(sources);
+      if (citationsHtml) {
+        answerBlock.insertAdjacentHTML("beforeend", citationsHtml);
+      }
       appendFeedbackButtons(turn, meta);
       chat.appendChild(turn);
-      turn.scrollIntoView({ behavior: "smooth", block: "end" });
+      if (scroll) {
+        turn.scrollIntoView({ behavior: "smooth", block: "end" });
+      }
       return turn;
     }
 
@@ -377,6 +446,33 @@
       turn.scrollIntoView({ behavior: "smooth", block: "end" });
     }
 
+    function restoreChatFromStorage() {
+      const stored = readStoredChat();
+      if (!stored || !stored.turns.length) {
+        showEmptyState();
+        return;
+      }
+      // Restoring the id keeps server-side context across an ordinary refresh,
+      // which is the common case and the point of this feature. The limitation,
+      // deliberately accepted rather than fixed here: sessions live in an
+      // in-process dict (src/chat.py get_session) and die on every deploy, so
+      // after a release the restored id is unknown, get_session silently mints a
+      // fresh one, and the screen shows a thread the server has no history for.
+      // A follow-up like "where does it go?" then loses its referent.
+      // Not fixed by dropping the id -- that would throw away context in the
+      // common case to avoid a rarer one. The real fix is server-side sessions
+      // (Postgres, on the backlog) or having the server report that the id was
+      // unknown so restored turns can be marked as history. Author's call.
+      sessionId = stored.sessionId || null;
+      chat.replaceChildren();
+      for (const turn of stored.turns) {
+        renderCompletedTurn(turn.question, turn.answer, turn.sources, turn.meta, {
+          scroll: false,
+        });
+      }
+      chat.lastElementChild?.scrollIntoView({ block: "end" });
+    }
+
     async function consumeAskStream(response, question, answerEl, turn) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -424,6 +520,7 @@
 
       submitBtn.disabled = true;
       setStatus("Thinking…");
+      const generation = chatGeneration;
 
       const answerEl = beginStreamingTurn(question);
       const liveTurn = chat.lastElementChild;
@@ -450,6 +547,12 @@
         }
 
         const payload = await consumeAskStream(response, question, answerEl, liveTurn);
+        if (generation !== chatGeneration) {
+          // New chat ran while this was in flight. The turn's DOM is already
+          // gone; adopting its session id or persisting it would resurrect the
+          // conversation the user cleared.
+          return;
+        }
         sessionId = payload.session_id;
         const meta = {
           question,
@@ -464,6 +567,7 @@
           answerEl.textContent = payload.answer;
         }
         finishStreamingTurn(liveTurn, answerEl, payload.sources, meta);
+        persistCompletedTurn(question, payload.answer, payload.sources, meta);
         questionEl.value = "";
         setStatus("");
       } catch (error) {
@@ -497,6 +601,8 @@
         });
       }
       sessionId = null;
+      chatGeneration += 1;
+      clearStoredChat();
       showEmptyState();
       questionEl.value = "";
       setStatus("");
@@ -504,7 +610,7 @@
       questionEl.focus();
     });
 
-    showEmptyState();
+    restoreChatFromStorage();
     questionEl.focus();
   </script>
 </body>
