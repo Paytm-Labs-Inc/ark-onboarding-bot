@@ -1,0 +1,4 @@
+# MCP server only -- deliberately NOT in requirements.txt, since the deployed
+# image never runs it. Install locally to expose the bot to Cursor/Claude Code:
+#   pip install -r requirements-mcp.txt
+mcp>=1.2,<2.0
