@@ -57,10 +57,24 @@ def base_href() -> str:
     return f"{prefix}/" if prefix else "/"
 
 
+TOKENS_PATH = Path(__file__).resolve().parent / "templates" / "_tokens.css"
+
+
+def design_tokens() -> str:
+    """The shared Ark token block, so every screen resolves the same variables.
+
+    Read per call rather than cached at import: the file is a few KB and this
+    keeps a template edit visible without a restart during development.
+    """
+    return TOKENS_PATH.read_text(encoding="utf-8")
+
+
 def _render_template(path: Path) -> str:
-    """Load a template and inject the <base> tag for the current prefix."""
-    return path.read_text(encoding="utf-8").replace(
-        "<!--BASE_TAG-->", f'<base href="{base_href()}">'
+    """Load a template, inject the <base> tag for the prefix and the tokens."""
+    return (
+        path.read_text(encoding="utf-8")
+        .replace("<!--BASE_TAG-->", f'<base href="{base_href()}">')
+        .replace("/* <!--TOKENS--> */", design_tokens())
     )
 
 
@@ -423,25 +437,25 @@ def render_reviews(records: list[dict]) -> str:
     for record in records:
         rating = record.get("rating")
         badge = "up" if rating == "up" else "down"
-        icon = "👍" if rating == "up" else "👎"
+        icon = "▲" if rating == "up" else "▼"
         sources = record.get("sources") or record.get("retrieved_sources") or []
         source_labels = ", ".join(html.escape(str(s)) for s in sources) or "—"
         rows.append(
             f"""
-        <tr class="{badge}">
-          <td class="rating">{icon}</td>
-          <td>
-            <div class="q">{html.escape(str(record.get("question", "")))}</div>
-            <div class="a">{html.escape(str(record.get("answer", "")))}</div>
-            <div class="src">{source_labels}</div>
-          </td>
-          <td class="ts">{html.escape(str(record.get("ts", "")))}</td>
-        </tr>"""
+      <article class="item {badge}">
+        <div class="meta">
+          <span class="verdict {badge}">{icon} {badge}</span>
+          <span>{html.escape(str(record.get("ts", "")))}</span>
+        </div>
+        <div class="q">{html.escape(str(record.get("question", "")))}</div>
+        <div class="a">{html.escape(str(record.get("answer", "")))}</div>
+        <div class="src">{source_labels}</div>
+      </article>"""
         )
 
     body = "".join(rows) or (
-        '<tr><td colspan="3" class="empty">No feedback yet. '
-        "Thumbs up/down in the chat will show up here.</td></tr>"
+        '<div class="empty">No feedback yet. '
+        "Thumbs up or down in the chat will show up here.</div>"
     )
 
     return f"""<!DOCTYPE html>
@@ -452,24 +466,72 @@ def render_reviews(records: list[dict]) -> str:
   <title>Ark Onboarding Bot — Feedback</title>
   <base href="{base_href()}">
   <style>
-    body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-      background:#f6f7f9; color:#1f2937; }}
-    .wrap {{ max-width:900px; margin:0 auto; padding:24px 16px 40px; }}
-    header {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }}
-    h1 {{ font-size:1.3rem; margin:0; }}
-    a.back {{ color:#2563eb; text-decoration:none; font-size:0.9rem; }}
-    .counts {{ color:#6b7280; margin-bottom:16px; font-size:0.92rem; }}
-    table {{ width:100%; border-collapse:collapse; background:#fff;
-      border:1px solid #e5e7eb; border-radius:12px; overflow:hidden; }}
-    th, td {{ text-align:left; padding:12px 14px; border-bottom:1px solid #eef0f2; vertical-align:top; }}
-    th {{ font-size:0.78rem; text-transform:uppercase; letter-spacing:0.04em; color:#6b7280; }}
-    td.rating {{ font-size:1.2rem; width:44px; }}
-    tr.down td.rating {{ color:#b91c1c; }}
-    .q {{ font-weight:600; }}
-    .a {{ color:#374151; margin-top:4px; white-space:pre-wrap; }}
-    .src {{ color:#6b7280; font-size:0.82rem; margin-top:6px; }}
-    td.ts {{ color:#9ca3af; font-size:0.8rem; white-space:nowrap; }}
-    td.empty {{ text-align:center; color:#6b7280; padding:28px; }}
+{design_tokens()}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0; background: var(--ark-bg); color: var(--ark-fg);
+      font-family: var(--ark-font-sans); font-size: var(--ark-text-base);
+      line-height: var(--ark-leading-base); -webkit-font-smoothing: antialiased;
+    }}
+    .wrap {{
+      max-width: 860px; margin: 0 auto;
+      padding: var(--ark-space-5) var(--ark-space-4) var(--ark-space-6);
+      display: flex; flex-direction: column; gap: var(--ark-space-4);
+    }}
+    header {{
+      display: flex; align-items: center; justify-content: space-between;
+      gap: var(--ark-space-4); flex-wrap: wrap;
+      padding-bottom: var(--ark-space-4); border-bottom: 1px solid var(--ark-line);
+    }}
+    h1 {{
+      margin: 0; font-size: var(--ark-text-lg); font-weight: 600;
+      letter-spacing: var(--ark-tracking-lg); line-height: var(--ark-leading-lg);
+    }}
+    a.back {{
+      font-size: var(--ark-text-base); border-radius: var(--ark-radius-sm);
+      border: 1px solid var(--ark-line-strong); background: var(--ark-panel);
+      color: var(--ark-fg); padding: var(--ark-space-2) var(--ark-space-3);
+      text-decoration: none; white-space: nowrap;
+      transition: background var(--ark-duration-1) var(--ark-ease);
+    }}
+    a.back:hover {{ background: var(--ark-elevated); }}
+    a:focus-visible {{ outline: none; box-shadow: var(--ark-focus-ring); }}
+    .counts {{
+      display: flex; gap: var(--ark-space-4); align-items: baseline;
+      color: var(--ark-fg-muted); font-size: var(--ark-text-sm);
+    }}
+    .counts b {{
+      color: var(--ark-fg); font-size: var(--ark-text-md); font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }}
+    .list {{ display: flex; flex-direction: column; gap: var(--ark-space-3); }}
+    .item {{
+      background: var(--ark-panel); border: 1px solid var(--ark-line);
+      border-left: 3px solid var(--ark-line-strong);
+      border-radius: var(--ark-radius); padding: var(--ark-space-4);
+      box-shadow: var(--ark-shadow-card);
+      display: flex; flex-direction: column; gap: var(--ark-space-2);
+    }}
+    .item.up {{ border-left-color: var(--ark-success); }}
+    .item.down {{ border-left-color: var(--ark-danger); }}
+    .meta {{
+      display: flex; align-items: center; gap: var(--ark-space-3);
+      font-size: var(--ark-text-xs); letter-spacing: var(--ark-tracking-caps);
+      text-transform: uppercase; color: var(--ark-fg-muted);
+    }}
+    .verdict.up {{ color: var(--ark-success); font-weight: 600; }}
+    .verdict.down {{ color: var(--ark-danger); font-weight: 600; }}
+    .q {{ font-weight: 600; overflow-wrap: anywhere; }}
+    .a {{ color: var(--ark-fg-muted); white-space: pre-wrap; overflow-wrap: anywhere; }}
+    .src {{
+      font-family: var(--ark-font-mono); font-size: var(--ark-text-xs);
+      color: var(--ark-fg-faint); overflow-wrap: anywhere;
+    }}
+    .empty {{
+      background: var(--ark-panel); border: 1px dashed var(--ark-line-strong);
+      border-radius: var(--ark-radius); padding: var(--ark-space-6);
+      text-align: center; color: var(--ark-fg-muted);
+    }}
   </style>
 </head>
 <body>
@@ -478,12 +540,13 @@ def render_reviews(records: list[dict]) -> str:
       <h1>Feedback review</h1>
       <a class="back" href=".">&larr; Back to chat</a>
     </header>
-    <div class="counts">{ups} 👍 &nbsp; {downs} 👎 &nbsp; ({len(records)} total)</div>
-    <table>
-      <thead><tr><th>Rating</th><th>Question / answer</th><th>When</th></tr></thead>
-      <tbody>{body}
-      </tbody>
-    </table>
+    <div class="counts">
+      <span><b>{ups}</b> helpful</span>
+      <span><b>{downs}</b> not helpful</span>
+      <span><b>{len(records)}</b> total</span>
+    </div>
+    <div class="list">{body}
+    </div>
   </div>
 </body>
 </html>"""

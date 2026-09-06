@@ -499,11 +499,28 @@ class DeclineWordingTests(unittest.TestCase):
 
     @patch("src.answer._call_model")
     def test_a_second_unparseable_response_still_raises(self, mock_call: MagicMock) -> None:
-        """One re-ask, not a loop: a persistently broken model must surface."""
+        """One re-ask, not a loop, and nothing salvageable must still surface."""
         mock_call.side_effect = ['not json at all', 'still not json']
         with self.assertRaises(ValueError):
             answer("q", self.CHUNKS)
         self.assertEqual(mock_call.call_count, 2)
+
+    @patch("src.answer._call_model")
+    def test_a_mis_escaped_payload_is_salvaged_after_the_retry(self, mock_call: MagicMock) -> None:
+        """Some questions break the JSON every time, so the second failure salvages.
+
+        Asked about the MCP "tools fetch failed" error the model answers with a
+        curl command and writes its inner double quotes raw. Re-asking pulls the
+        same command out again, so without this the user gets "answer service
+        unavailable" for a question the model answered correctly.
+        """
+        broken = '{"answer": "Run `curl -H "Authorization: x"` first.", "chunks_used": [1]}'
+        mock_call.side_effect = [broken, broken]
+        result = answer("q", self.CHUNKS)
+        self.assertEqual(mock_call.call_count, 2)
+        self.assertTrue(result["answer"].startswith("Run `curl"))
+        # Citations survive: chunks_used is intact at the end of the payload.
+        self.assertEqual(result["citations"], [self.CHUNKS[0]["source"]])
 
     def test_only_the_refusal_key_drops_its_pronoun(self) -> None:
         """The roadmap phrase stays matched in full, and deliberately so.

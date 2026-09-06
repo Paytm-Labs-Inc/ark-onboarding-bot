@@ -72,7 +72,7 @@ def answer_text(raw_question: str) -> str:
     question = strip_mention(raw_question)
     if not question:
         return PROMPT_HINT
-    return format_response(ask(question))
+    return format_response(ask(question, channel="slack"))
 
 
 def should_answer_dm(event: dict) -> bool:

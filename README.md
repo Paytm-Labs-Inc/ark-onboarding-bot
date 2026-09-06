@@ -199,6 +199,46 @@ compute — internal-only, no open bind — see **[deploy/README.md](deploy/READ
 
 ---
 
+## Use it from your editor (MCP)
+
+The bot can be exposed to Cursor, Claude Code or any other MCP client, so you can
+ask onboarding questions without leaving the editor.
+
+It runs **on your machine** and calls the deployed bot over HTTP — there is no
+extra service to deploy, and it uses the same team token you already sign in
+with.
+
+```bash
+pip install -r requirements-mcp.txt
+```
+
+Then add it to your client's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "ark-onboarding-bot": {
+      "command": "python",
+      "args": ["-m", "src.mcp_server"],
+      "cwd": "/path/to/ark-onboarding-bot",
+      "env": {
+        "ARK_BOT_URL": "https://foundry.mypaytm.com/onboarding-bot",
+        "ARK_ACCESS_TOKEN": "your-team-token"
+      }
+    }
+  }
+}
+```
+
+That gives one tool, `ask_ark_onboarding`, which returns a grounded answer with
+its source pages — and says plainly when the docs do not cover the question.
+
+`ARK_BOT_URL` defaults to the deployed URL; point it at `http://127.0.0.1:8765`
+to use a local instance instead. `mcp` is deliberately kept out of
+`requirements.txt`, since the deployed image never runs this.
+
+---
+
 ## Ingest docs (rebuild corpus)
 
 Rebuild the `data/` corpus from Foundry onboarding pages + the Google Docs FAQ:

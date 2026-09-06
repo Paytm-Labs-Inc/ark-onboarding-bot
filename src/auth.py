@@ -2,7 +2,7 @@
 
 The gate is intentionally lightweight (a single team-wide token) so the deployed
 UI is not open to anyone who can reach it. Real SSO can be layered in later via
-`sso_stub_identity` without touching the routes.
+`sso_identity` without touching the routes.
 
 Enforcement rule: auth is applied whenever `ARK_ACCESS_TOKEN` is set. When it is
 unset the app runs open (handy for local dev and tests), but `src.web.main`
@@ -55,17 +55,35 @@ def request_authorized(request: Any) -> bool:
     """True when the request may proceed (auth disabled, SSO identity, or token)."""
     if not auth_enabled():
         return True
-    if sso_stub_identity(request) is not None:
+    if sso_identity(request) is not None:
         return True
     return token_valid(token_from_request(request))
 
 
-def sso_stub_identity(request: Any) -> Optional[str]:
-    """Extension point for real SSO.
+def sso_identity_header() -> str:
+    """Name of the header carrying the SSO-verified user, or "" when unconfigured."""
+    return os.environ.get("SSO_IDENTITY_HEADER", "").strip()
 
-    A future OIDC/SSO integration would validate an upstream session or identity
-    header here and return the authenticated user id. Returning None means "no
-    SSO identity", so the shared-token path is used instead. Kept as a stub so
-    the wiring exists without committing to a specific provider.
+
+def sso_identity(request: Any) -> Optional[str]:
+    """The user id an upstream SSO proxy vouched for, or None.
+
+    oauth2-proxy runs as nginx external auth: it authenticates the browser and
+    nginx copies the identity onto the upstream request, overwriting whatever
+    the client sent. We read that header rather than speaking OIDC ourselves.
+
+    Trusted ONLY when `SSO_IDENTITY_HEADER` names a header explicitly, because
+    the header is only trustworthy while two things hold: the ingress auth gate
+    is on (so nginx overwrites a client-supplied value) and nothing but nginx
+    can reach the pod (the Service is ClusterIP-only, the same reasoning behind
+    accepting FORWARDED_ALLOW_IPS="*").
+
+    Reading it unconditionally would therefore be an auth BYPASS, not an
+    upgrade: absent the gate, anyone could send the header and skip the token.
+    Unset means "no SSO", so this fails closed by default and turns on only
+    where the chart also renders the gate.
     """
-    return None
+    header = sso_identity_header()
+    if not header:
+        return None
+    return (request.headers.get(header, "") or "").strip() or None

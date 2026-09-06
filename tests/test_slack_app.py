@@ -80,7 +80,7 @@ class SlackHelpersTests(unittest.TestCase):
     def test_answer_text_forwards_stripped_question_to_ask(self, mock_ask) -> None:
         mock_ask.return_value = {"answer": "Use ~/.cursor/mcp.json", "citations": []}
         result = answer_text("<@U1> how do I set up Cursor?")
-        mock_ask.assert_called_once_with("how do I set up Cursor?")
+        mock_ask.assert_called_once_with("how do I set up Cursor?", channel="slack")
         self.assertIn("Use ~/.cursor/mcp.json", result)
 
     @patch("src.slack_app.ask")
