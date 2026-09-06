@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -40,10 +40,13 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "ok")
 
     @patch.dict(os.environ, {"PI_API_KEY": "pi-test", "ANSWER_BACKEND": "pi"})
+    # /ready now also requires a reachable gateway. A unit test has none, and a
+    # unit test should never call out, so the check is stubbed here.
+    @patch("src.web.unusable_backend_model", return_value=None)
     @patch("src.warmup.retrieve", return_value=[{"source": "x", "text": "y"}])
     @patch("src.warmup.load_chunks", return_value=[{"source": "x", "text": "y"}])
     def test_ready_returns_ok_when_corpus_loaded(
-        self, _mock_chunks: object, _mock_retrieve: object
+        self, _mock_chunks: object, _mock_retrieve: object, _gateway: object
     ) -> None:
         response = self.client.get("/ready")
         self.assertEqual(response.status_code, 200)
@@ -341,6 +344,7 @@ class ProbeAndSlotWiringTests(unittest.TestCase):
 
         with patch("src.web.anyio.to_thread.run_sync", side_effect=fake_run_sync), \
              patch("src.web.check_retrieval_ready", return_value=(True, {"status": "ready", "chunks": 1})), \
+             patch("src.web.unusable_backend_model", return_value=None), \
              patch.dict(os.environ, {"PI_API_KEY": "pi-x", "ANSWER_BACKEND": "pi"}):
             self.assertEqual(TestClient(app).get("/ready").status_code, 200)
         self.assertIs(seen["limiter"], web_module._PROBE_LIMITER)
@@ -378,6 +382,70 @@ class DesignTokenConsistencyTests(unittest.TestCase):
                 self.assertIn("--ark-bg", body)
                 # The marker must have been substituted, not shipped verbatim.
                 self.assertNotIn("<!--TOKENS-->", body, f"{path} shipped the marker")
+
+    def test_ready_fails_when_the_gateway_rejects_the_key(self) -> None:
+        """The 2026-09-06 incident: a rotated key the pod never picked up."""
+        import src.answer as answer_mod
+
+        answer_mod._gateway_check = (0.0, None)
+        os.environ["PI_API_KEY"] = "stale-key"
+        with patch("src.answer.httpx.get") as get:
+            get.return_value = MagicMock(status_code=401)
+            reason = answer_mod.unusable_backend_model()
+        self.assertIsNotNone(reason)
+        self.assertIn("credential", str(reason))
+
+    def test_ready_fails_when_the_model_is_not_served(self) -> None:
+        """The 2026-09-01 incident: qwen/qwen3-32b deregistered under us."""
+        import src.answer as answer_mod
+
+        answer_mod._gateway_check = (0.0, None)
+        os.environ["PI_API_KEY"] = "k"
+        os.environ["PI_MODEL"] = "qwen/qwen3-32b"
+        try:
+            with patch("src.answer.httpx.get") as get:
+                get.return_value = MagicMock(
+                    status_code=200,
+                    json=lambda: {"data": [{"id": "llama-3.3-70b-versatile"}]},
+                )
+                reason = answer_mod.unusable_backend_model()
+        finally:
+            os.environ.pop("PI_MODEL", None)
+        self.assertIsNotNone(reason)
+        self.assertIn("not served", str(reason))
+
+    def test_ready_survives_a_transient_gateway_failure(self) -> None:
+        """A blip must NOT take the single replica out of service.
+
+        Failing readiness on a timeout or a 5xx would turn a slow gateway into
+        an ingress 503 with no friendly message, for a condition the
+        per-request retry already handles. Only auth and a missing model are
+        certainly fatal and certainly persistent.
+        """
+        import src.answer as answer_mod
+
+        os.environ["PI_API_KEY"] = "k"
+        for failure in (TimeoutError("read timeout"), None):
+            with self.subTest(failure=failure):
+                answer_mod._gateway_check = (0.0, None)
+                with patch("src.answer.httpx.get") as get:
+                    if failure is None:
+                        get.return_value = MagicMock(status_code=503)
+                    else:
+                        get.side_effect = failure
+                    self.assertIsNone(answer_mod.unusable_backend_model())
+
+    def test_the_gateway_check_is_cached(self) -> None:
+        """kubelet polls /ready every few seconds; an uncached check is traffic."""
+        import src.answer as answer_mod
+
+        answer_mod._gateway_check = (0.0, None)
+        os.environ["PI_API_KEY"] = "k"
+        with patch("src.answer.httpx.get") as get:
+            get.return_value = MagicMock(status_code=200, json=lambda: {"data": []})
+            for _ in range(5):
+                answer_mod.unusable_backend_model(now=1000.0)
+        self.assertEqual(get.call_count, 1, "the probe must not call out every time")
 
     def test_new_chat_cannot_be_undone_by_an_in_flight_answer(self) -> None:
         """Regression: an abandoned ask used to rewrite the cleared store.

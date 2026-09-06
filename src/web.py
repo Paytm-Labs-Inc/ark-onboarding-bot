@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.answer import PiAtCapacity, missing_backend_credential
+from src.answer import PiAtCapacity, missing_backend_credential, unusable_backend_model
 from src.auth import (
     COOKIE_NAME,
     PUBLIC_PATHS,
@@ -333,6 +333,14 @@ async def ready() -> dict[str, object] | JSONResponse:
     if missing:
         return JSONResponse(
             status_code=503, content={**body, "status": "not_ready", "reason": missing}
+        )
+    # A present credential is not a working one. This is cached for 60s and only
+    # fails on a rejected key or a model the gateway does not serve -- the two
+    # conditions that previously hid a total outage behind a green probe.
+    unusable = unusable_backend_model()
+    if unusable:
+        return JSONResponse(
+            status_code=503, content={**body, "status": "not_ready", "reason": unusable}
         )
     return body
 

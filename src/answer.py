@@ -245,6 +245,67 @@ def _answer_backend() -> str:
     return os.environ.get("ANSWER_BACKEND", DEFAULT_BACKEND).strip().lower()
 
 
+# The gateway probe is cached: /ready is polled every few seconds by kubelet and
+# an uncached check would make the readiness probe itself a traffic source.
+_GATEWAY_CHECK_TTL_SECONDS = 60.0
+_gateway_check: tuple[float, str | None] = (0.0, None)
+_gateway_check_lock = threading.Lock()
+
+
+def unusable_backend_model(*, now: float | None = None) -> str | None:
+    """Name the reason the configured model cannot answer, or None.
+
+    /ready previously checked only that a credential was PRESENT. Twice that let
+    a total outage sit behind a green probe for days: on 2026-09-01 the gateway
+    deregistered `qwen/qwen3-32b` and every answer 404'd, and on 2026-09-06 a
+    rotated key was not picked up because the pod reads it at start. Both look
+    identical from outside -- probes green, every answer failing.
+
+    Deliberately narrow. This returns a reason ONLY for the two conditions that
+    are certainly fatal and certainly persistent:
+      - the credential is rejected (401/403)
+      - the configured model is absent from the catalog
+    A timeout, a 5xx or an unparseable body returns None. Those are transient,
+    and failing readiness on them would take the single replica out of service
+    for a blip that the per-request retry already handles -- turning a slow
+    answer into an ingress 503 with no friendly message.
+    """
+    global _gateway_check
+    if _answer_backend() != "pi":
+        return None
+    api_key = os.environ.get("PI_API_KEY", "").strip()
+    if not api_key:
+        return None                      # missing_backend_credential covers this
+
+    clock = time.monotonic() if now is None else now
+    with _gateway_check_lock:
+        checked_at, cached = _gateway_check
+        if checked_at and clock - checked_at < _GATEWAY_CHECK_TTL_SECONDS:
+            return cached
+
+    reason: str | None = None
+    chosen = (os.environ.get("PI_MODEL") or PI_DEFAULT_MODEL).strip()
+    base_url = os.environ.get("PI_BASE_URL", PI_DEFAULT_BASE_URL).rstrip("/")
+    try:
+        resp = httpx.get(
+            f"{base_url}/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=float(os.environ.get("PI_READY_TIMEOUT_SECONDS", "5")),
+        )
+        if resp.status_code in (401, 403):
+            reason = f"gateway rejected the credential (HTTP {resp.status_code})"
+        elif resp.status_code == 200:
+            served = {str(m.get("id", "")) for m in (resp.json().get("data") or [])}
+            if served and chosen not in served:
+                reason = f"model {chosen!r} is not served by the gateway"
+    except Exception:  # noqa: BLE001 -- transient by assumption; see docstring
+        reason = None
+
+    with _gateway_check_lock:
+        _gateway_check = (clock, reason)
+    return reason
+
+
 def missing_backend_credential() -> str | None:
     """Name the credential the configured backend needs and does not have.
 
