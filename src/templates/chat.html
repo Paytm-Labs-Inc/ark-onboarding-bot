@@ -220,6 +220,10 @@
 
   <script>
     let sessionId = null;
+    // Bumped by New chat. An ask captures it at submit and discards its own
+    // result if it changed, so abandoning a running answer cannot write the
+    // turn back into a store the user just cleared.
+    let chatGeneration = 0;
     const chat = document.getElementById("chat");
     const form = document.getElementById("ask-form");
     const questionEl = document.getElementById("question");
@@ -505,6 +509,7 @@
 
       submitBtn.disabled = true;
       setStatus("Thinking…");
+      const generation = chatGeneration;
 
       const answerEl = beginStreamingTurn(question);
       const liveTurn = chat.lastElementChild;
@@ -531,6 +536,12 @@
         }
 
         const payload = await consumeAskStream(response, question, answerEl, liveTurn);
+        if (generation !== chatGeneration) {
+          // New chat ran while this was in flight. The turn's DOM is already
+          // gone; adopting its session id or persisting it would resurrect the
+          // conversation the user cleared.
+          return;
+        }
         sessionId = payload.session_id;
         const meta = {
           question,
@@ -579,6 +590,7 @@
         });
       }
       sessionId = null;
+      chatGeneration += 1;
       clearStoredChat();
       showEmptyState();
       questionEl.value = "";

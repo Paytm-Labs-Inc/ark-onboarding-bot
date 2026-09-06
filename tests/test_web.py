@@ -379,6 +379,27 @@ class DesignTokenConsistencyTests(unittest.TestCase):
                 # The marker must have been substituted, not shipped verbatim.
                 self.assertNotIn("<!--TOKENS-->", body, f"{path} shipped the marker")
 
+    def test_new_chat_cannot_be_undone_by_an_in_flight_answer(self) -> None:
+        """Regression: an abandoned ask used to rewrite the cleared store.
+
+        New chat runs clearStoredChat and nulls sessionId, but an ask already in
+        flight still resolved and called persistCompletedTurn, so a refresh
+        restored the conversation the user had just cleared. The fix is a
+        generation counter: the ask captures it at submit and discards its own
+        result if New chat has bumped it. Asserted on the served page because
+        this behaviour lives in the template, and there is no JS test harness.
+        """
+        body = self.client.get("/").text
+        self.assertIn("let chatGeneration = 0;", body)
+        self.assertIn("const generation = chatGeneration;", body)
+        self.assertIn("chatGeneration += 1;", body, "New chat must bump the generation")
+        # The guard has to sit BEFORE the session id is adopted and the turn is
+        # persisted, or it does not prevent either.
+        guard = body.index("if (generation !== chatGeneration)")
+        self.assertLess(guard, body.index("sessionId = payload.session_id;"))
+        # the CALL site, not the function definition, which sits far earlier
+        self.assertLess(guard, body.index("persistCompletedTurn(question, payload.answer"))
+
     def test_no_screen_hardcodes_the_old_palette(self) -> None:
         """The hexes the login and reviews pages used before they shared tokens."""
         for path in ("/", "/login", "/reviews"):
