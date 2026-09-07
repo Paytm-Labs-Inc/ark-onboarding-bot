@@ -930,10 +930,13 @@ class NonAnswerMatchingTests(unittest.TestCase):
 class BareDeclineIsNotACrashTests(unittest.TestCase):
     """llama-3.3-70b declines out-of-scope questions with no JSON envelope.
 
-    Measured 2026-09-05: 10 of 634 llama rows, 0 of 606 gpt-oss rows. Every one
-    was a guardrail question where declining is the correct answer, so the bug
-    fired precisely on the adversarial traffic the refusal exists to handle,
-    and only on the model that is currently the default.
+    Measured 2026-09-05: 5 of the 38 guardrail rows (5 of 634 llama rows
+    overall; gpt-oss 0 of 606). Each was a question where declining is the
+    correct answer, so the bug fired on the adversarial traffic the refusal
+    exists to handle, and only on the model that is currently the default.
+
+    The other 5 llama parse failures in that sweep were substantive answers
+    with a broken envelope -- the salvage case, deliberately not handled here.
     """
 
     CHUNKS = [{"text": "t", "source": "getting-started -- https://x/"}]
@@ -949,8 +952,11 @@ class BareDeclineIsNotACrashTests(unittest.TestCase):
             "Sorry, I don't have an answer for that yet.",
             "  I don’t have an answer for that yet.  ",
         ):
-            self.assertEqual(_parse_and_finalize(raw, self.CHUNKS)["citations"], [])
-            self.assertTrue(is_non_answer(_parse_and_finalize(raw, self.CHUNKS)["answer"]), raw)
+            result = _parse_and_finalize(raw, self.CHUNKS)
+            self.assertEqual(result["citations"], [])
+            # Canonical, not the raw text: the pronoun-swapped form must not
+            # reach a user, and anything trailing the decline is ungrounded.
+            self.assertEqual(result["answer"], REFUSAL_PHRASE, raw)
 
     def test_a_bare_roadmap_promise_is_downgraded_not_kept(self) -> None:
         # An unbacked roadmap promise is still a refusal, and must not carry
@@ -959,6 +965,15 @@ class BareDeclineIsNotACrashTests(unittest.TestCase):
         result = _parse_and_finalize(ROADMAP_PHRASE, self.CHUNKS)
         self.assertEqual(result["answer"], REFUSAL_PHRASE)
         self.assertEqual(result["citations"], [])
+
+    def test_text_trailing_a_decline_is_not_shipped_to_the_user(self) -> None:
+        # is_non_answer only inspects the first _DECLINE_WINDOW characters, so a
+        # decline followed by ungrounded prose would otherwise go out verbatim
+        # with no citations, logged as a refusal.
+        raw = REFUSAL_PHRASE + " However, you can probably just run ark auth --force."
+        result = _parse_and_finalize(raw, self.CHUNKS)
+        self.assertEqual(result["answer"], REFUSAL_PHRASE)
+        self.assertNotIn("ark auth --force", result["answer"])
 
     def test_genuine_garbage_still_raises(self) -> None:
         # The guard must not become a catch-all that turns every broken payload
