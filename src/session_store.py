@@ -1,0 +1,375 @@
+"""Persist chat sessions (memory for local dev, Redis for prod)."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+_ARK_SESSION_ID_RE = re.compile(r"\bs-([a-z0-9]{8,})\b", re.IGNORECASE)
+
+SESSION_KEY_PREFIX = "ark-onboarding-bot:"
+TITLE_MAX_LEN = 80
+
+
+def max_stored_turns() -> int:
+    """0 means unlimited."""
+    raw = os.environ.get("SESSION_MAX_TURNS", "0").strip()
+    if not raw or raw == "0":
+        return 0
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 0
+
+
+def max_history_turns() -> int:
+    """Turns sent to the model; 0 means the full stored thread."""
+    raw = os.environ.get("MAX_HISTORY_TURNS", "0").strip()
+    if not raw or raw == "0":
+        return 0
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 0
+
+
+def session_ttl_seconds() -> int | None:
+    """Optional Redis TTL; unset means keep until explicit delete."""
+    raw = os.environ.get("SESSION_TTL_SECONDS", "").strip()
+    if not raw:
+        return None
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return None
+
+
+def session_store_backend() -> str:
+    return os.environ.get("SESSION_STORE", "memory").strip().lower() or "memory"
+
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _parse_iso(value: str) -> float:
+    if not value:
+        return 0.0
+    try:
+        return time.mktime(time.strptime(value[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return 0.0
+
+
+def title_from_question(question: str) -> str:
+    text = " ".join(question.split())
+    if len(text) <= TITLE_MAX_LEN:
+        return text
+    return text[: TITLE_MAX_LEN - 1] + "…"
+
+
+def extract_ark_session_id(text: str) -> str | None:
+    """Return the first Ark session id (e.g. s-1j4dq5biie) found in text."""
+    match = _ARK_SESSION_ID_RE.search(text)
+    if not match:
+        return None
+    return f"s-{match.group(1).lower()}"
+
+
+@dataclass
+class StoredTurn:
+    question: str
+    answer: str
+    citations: list[str]
+    retrieved_sources: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "question": self.question,
+            "answer": self.answer,
+            "citations": self.citations,
+            "retrieved_sources": self.retrieved_sources,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> StoredTurn:
+        return cls(
+            question=str(data.get("question", "")),
+            answer=str(data.get("answer", "")),
+            citations=[str(x) for x in data.get("citations", [])],
+            retrieved_sources=[str(x) for x in data.get("retrieved_sources", [])],
+        )
+
+
+@dataclass
+class StoredSession:
+    session_id: str
+    user_id: str = "anonymous"
+    title: str = ""
+    linked_ark_session_id: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+    turns: list[StoredTurn] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "session_id": self.session_id,
+            "user_id": self.user_id,
+            "title": self.title,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "turns": [turn.to_dict() for turn in self.turns],
+        }
+        if self.linked_ark_session_id:
+            payload["linked_ark_session_id"] = self.linked_ark_session_id
+        return payload
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> StoredSession | None:
+        if not isinstance(data, dict):
+            return None
+        session_id = str(data.get("session_id") or "")
+        if not session_id:
+            return None
+        turns_raw = data.get("turns")
+        if not isinstance(turns_raw, list):
+            return None
+        turns = [StoredTurn.from_dict(item) for item in turns_raw if isinstance(item, dict)]
+        linked = data.get("linked_ark_session_id")
+        return cls(
+            session_id=session_id,
+            user_id=str(data.get("user_id") or "anonymous"),
+            title=str(data.get("title") or ""),
+            linked_ark_session_id=str(linked).lower() if linked else None,
+            created_at=str(data.get("created_at") or ""),
+            updated_at=str(data.get("updated_at") or ""),
+            turns=turns,
+        )
+
+    @classmethod
+    def from_json(cls, raw: str) -> StoredSession | None:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return cls.from_dict(data)
+
+
+@dataclass
+class SessionSummary:
+    session_id: str
+    title: str
+    updated_at: str
+    turn_count: int
+    linked_ark_session_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "session_id": self.session_id,
+            "title": self.title,
+            "updated_at": self.updated_at,
+            "turn_count": self.turn_count,
+        }
+        if self.linked_ark_session_id:
+            payload["linked_ark_session_id"] = self.linked_ark_session_id
+        return payload
+
+
+def _cap_turns(turns: list[StoredTurn]) -> list[StoredTurn]:
+    cap = max_stored_turns()
+    if cap <= 0 or len(turns) <= cap:
+        return list(turns)
+    return turns[-cap:]
+
+
+class SessionStore(Protocol):
+    def load(self, session_id: str) -> StoredSession | None: ...
+
+    def save(self, session: StoredSession) -> None: ...
+
+    def delete(self, session_id: str) -> None: ...
+
+    def list_for_user(self, user_id: str) -> list[SessionSummary]: ...
+
+
+class MemorySessionStore:
+    def __init__(self) -> None:
+        self._sessions: dict[str, StoredSession] = {}
+        self._user_index: dict[str, dict[str, float]] = {}
+
+    def load(self, session_id: str) -> StoredSession | None:
+        return self._sessions.get(session_id)
+
+    def save(self, session: StoredSession) -> None:
+        session.turns = _cap_turns(session.turns)
+        if not session.created_at:
+            session.created_at = _now_iso()
+        session.updated_at = _now_iso()
+        self._sessions[session.session_id] = session
+        score = _parse_iso(session.updated_at) or time.time()
+        self._user_index.setdefault(session.user_id, {})[session.session_id] = score
+
+    def delete(self, session_id: str) -> None:
+        session = self._sessions.pop(session_id, None)
+        if session is None:
+            return
+        self._user_index.get(session.user_id, {}).pop(session_id, None)
+
+    def clear(self) -> None:
+        self._sessions.clear()
+        self._user_index.clear()
+
+    def list_for_user(self, user_id: str) -> list[SessionSummary]:
+        ordered = sorted(
+            self._user_index.get(user_id, {}).items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        summaries: list[SessionSummary] = []
+        for session_id, _score in ordered:
+            session = self._sessions.get(session_id)
+            if session is None:
+                continue
+            summaries.append(
+                SessionSummary(
+                    session_id=session.session_id,
+                    title=session.title or "Untitled chat",
+                    updated_at=session.updated_at,
+                    turn_count=len(session.turns),
+                    linked_ark_session_id=session.linked_ark_session_id,
+                )
+            )
+        return summaries
+
+
+class RedisSessionStore:
+    def __init__(self, url: str) -> None:
+        import redis
+
+        self._client = redis.Redis.from_url(url, decode_responses=True)
+
+    def _body_key(self, session_id: str) -> str:
+        return f"{SESSION_KEY_PREFIX}session:{session_id}"
+
+    def _meta_key(self, session_id: str) -> str:
+        return f"{SESSION_KEY_PREFIX}session:meta:{session_id}"
+
+    def _user_key(self, user_id: str) -> str:
+        return f"{SESSION_KEY_PREFIX}user:{user_id}:sessions"
+
+    def load(self, session_id: str) -> StoredSession | None:
+        raw = self._client.get(self._body_key(session_id))
+        if not raw:
+            return None
+        return StoredSession.from_json(raw)
+
+    def save(self, session: StoredSession) -> None:
+        session.turns = _cap_turns(session.turns)
+        if not session.created_at:
+            session.created_at = _now_iso()
+        session.updated_at = _now_iso()
+
+        body_key = self._body_key(session.session_id)
+        payload = session.to_json()
+        ttl = session_ttl_seconds()
+        if ttl is not None:
+            self._client.setex(body_key, ttl, payload)
+        else:
+            self._client.set(body_key, payload)
+
+        meta = {
+            "user_id": session.user_id,
+            "title": session.title,
+            "linked_ark_session_id": session.linked_ark_session_id or "",
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "turn_count": str(len(session.turns)),
+        }
+        self._client.hset(self._meta_key(session.session_id), mapping=meta)
+
+        score = _parse_iso(session.updated_at) or time.time()
+        self._client.zadd(self._user_key(session.user_id), {session.session_id: score})
+
+    def delete(self, session_id: str) -> None:
+        meta = self._client.hgetall(self._meta_key(session_id))
+        user_id = meta.get("user_id", "")
+        self._client.delete(self._body_key(session_id), self._meta_key(session_id))
+        if user_id:
+            self._client.zrem(self._user_key(user_id), session_id)
+
+    def list_for_user(self, user_id: str) -> list[SessionSummary]:
+        session_ids = self._client.zrevrange(self._user_key(user_id), 0, -1)
+        summaries: list[SessionSummary] = []
+        for session_id in session_ids:
+            meta = self._client.hgetall(self._meta_key(session_id))
+            if not meta:
+                session = self.load(session_id)
+                if session is None:
+                    continue
+                meta = {
+                    "title": session.title,
+                    "updated_at": session.updated_at,
+                    "turn_count": str(len(session.turns)),
+                    "linked_ark_session_id": session.linked_ark_session_id or "",
+                }
+            linked = meta.get("linked_ark_session_id") or ""
+            summaries.append(
+                SessionSummary(
+                    session_id=session_id,
+                    title=meta.get("title") or "Untitled chat",
+                    updated_at=meta.get("updated_at") or "",
+                    turn_count=int(meta.get("turn_count") or "0"),
+                    linked_ark_session_id=linked.lower() if linked else None,
+                )
+            )
+        return summaries
+
+
+_store: SessionStore | None = None
+
+
+def build_session_store() -> SessionStore:
+    backend = session_store_backend()
+    if backend == "memory":
+        return MemorySessionStore()
+    if backend == "redis":
+        url = os.environ.get("REDIS_URL", "").strip()
+        if not url:
+            raise RuntimeError("SESSION_STORE=redis requires REDIS_URL to be set.")
+        return RedisSessionStore(url)
+    raise RuntimeError(f"Unknown SESSION_STORE {backend!r}; use 'memory' or 'redis'.")
+
+
+def get_session_store() -> SessionStore:
+    global _store
+    if _store is None:
+        _store = build_session_store()
+    return _store
+
+
+def reset_session_store(for_tests: SessionStore | None = None) -> None:
+    global _store
+    _store = for_tests if for_tests is not None else build_session_store()
+
+
+def stored_to_payload(stored: StoredSession) -> dict[str, Any]:
+    payload = stored.to_dict()
+    payload.pop("user_id", None)
+    return payload
+
+
+def stored_to_summary(stored: StoredSession) -> SessionSummary:
+    return SessionSummary(
+        session_id=stored.session_id,
+        title=stored.title or "Untitled chat",
+        updated_at=stored.updated_at,
+        turn_count=len(stored.turns),
+        linked_ark_session_id=stored.linked_ark_session_id,
+    )
