@@ -876,6 +876,18 @@ def _parse_and_finalize(
     try:
         parsed = _parse_json_response(raw)
     except (json.JSONDecodeError, IndexError, KeyError) as exc:
+        # A bare decline is not a broken payload. Measured 2026-09-05:
+        # llama-3.3-70b -- the current default -- answers out-of-scope and
+        # prompt-injection questions with REFUSAL_PHRASE as plain text and no
+        # JSON envelope. That is the behaviour the prompt asks for, in the
+        # wrong shape, and neither fallback recovers it: the re-ask declines
+        # again identically, and the salvage needs an "answer" key that a bare
+        # string does not have. So the correct refusal raised, and the user got
+        # "The answer service is unavailable right now." instead -- a 502 on
+        # exactly the adversarial questions the refusal exists to handle.
+        # 10 of 634 llama rows in the 2026-09-05 sweep, 0 of 606 for gpt-oss.
+        if is_non_answer(raw):
+            return _finalize_parsed({"answer": raw.strip(), "chunks_used": []}, chunks)
         salvaged = _salvage_payload(raw) if allow_salvage else None
         if salvaged is None:
             raise ValueError(f"Could not parse model response as JSON: {raw!r}") from exc

@@ -10,6 +10,7 @@ import httpx
 from unittest.mock import MagicMock, patch
 
 from src.answer import (
+    _parse_and_finalize,
     REFUSAL_PHRASE,
     ROADMAP_PHRASE,
     SYSTEM_PROMPT,
@@ -926,6 +927,51 @@ class NonAnswerMatchingTests(unittest.TestCase):
             "",
         ):
             self.assertFalse(is_non_answer(text), text)
+class BareDeclineIsNotACrashTests(unittest.TestCase):
+    """llama-3.3-70b declines out-of-scope questions with no JSON envelope.
+
+    Measured 2026-09-05: 10 of 634 llama rows, 0 of 606 gpt-oss rows. Every one
+    was a guardrail question where declining is the correct answer, so the bug
+    fired precisely on the adversarial traffic the refusal exists to handle,
+    and only on the model that is currently the default.
+    """
+
+    CHUNKS = [{"text": "t", "source": "getting-started -- https://x/"}]
+
+    def test_a_bare_refusal_becomes_a_refusal_not_an_error(self) -> None:
+        result = _parse_and_finalize(REFUSAL_PHRASE, self.CHUNKS)
+        self.assertEqual(result["answer"], REFUSAL_PHRASE)
+        self.assertEqual(result["citations"], [])
+
+    def test_the_decorated_and_pronoun_swapped_forms_also_survive(self) -> None:
+        for raw in (
+            "You don't have an answer for that yet.",
+            "Sorry, I don't have an answer for that yet.",
+            "  I don’t have an answer for that yet.  ",
+        ):
+            self.assertEqual(_parse_and_finalize(raw, self.CHUNKS)["citations"], [])
+            self.assertTrue(is_non_answer(_parse_and_finalize(raw, self.CHUNKS)["answer"]), raw)
+
+    def test_a_bare_roadmap_promise_is_downgraded_not_kept(self) -> None:
+        # An unbacked roadmap promise is still a refusal, and must not carry
+        # citations it never used -- the existing rule, reached through the
+        # new path.
+        result = _parse_and_finalize(ROADMAP_PHRASE, self.CHUNKS)
+        self.assertEqual(result["answer"], REFUSAL_PHRASE)
+        self.assertEqual(result["citations"], [])
+
+    def test_genuine_garbage_still_raises(self) -> None:
+        # The guard must not become a catch-all that turns every broken payload
+        # into a silent refusal -- that would hide real backend failures.
+        for raw in ("<<<>>> not json at all", "", "   "):
+            with self.assertRaises(ValueError):
+                _parse_and_finalize(raw, self.CHUNKS)
+
+    def test_a_real_answer_is_untouched_by_the_guard(self) -> None:
+        raw = '{"answer": "Run ark host enroll.", "chunks_used": [1]}'
+        self.assertEqual(_parse_and_finalize(raw, self.CHUNKS)["answer"], "Run ark host enroll.")
+
+
 class ChunksAreDataTests(unittest.TestCase):
     def test_chunks_are_delimited_and_the_rule_is_in_the_prompt(self) -> None:
         from src.answer import _build_user_content
