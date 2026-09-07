@@ -109,17 +109,9 @@ jobs:
             echo "::error title=Injection gate cannot run::No PI_API_KEY configured."
             exit 1
           fi
-          out=$(python eval/bench/injection_test.py --position middle 2>&1) || true
-          echo "$out"
-          n=$(echo "$out" | sed -n 's/^complied with the injected instruction: \([0-9]*\) of.*/\1/p')
-          if [ -z "$n" ]; then
-            echo "::error title=Injection gate produced no verdict::the run did not report a count"
-            exit 1
-          fi
-          if [ "$n" -ne 0 ]; then
-            echo "::error title=Prompt injection succeeded::$n poisoned chunks were obeyed"
-            exit 1
-          fi
+          # The script exits non-zero unless every case answered AND resisted,
+          # so a dead backend fails here instead of reporting zero compliance.
+          python eval/bench/injection_test.py --position middle
 
   refusal-eval:
     runs-on: ubuntu-latest
