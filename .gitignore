@@ -10,3 +10,9 @@ eval/feedback.jsonl
 eval/query_log.jsonl
 eval/triage-reports/
 eval/results/
+
+# Benchmark output: large, timestamped, and not reproducible run-to-run
+# (no temperature pinned, +/-7/50 noise band). Committing it puts tens of
+# thousands of lines of unreviewable JSON in front of anyone reviewing a
+# deploy. Keep runs local; publish conclusions, not raw judge output.
+eval/bench/results/
