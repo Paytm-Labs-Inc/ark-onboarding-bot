@@ -267,8 +267,12 @@ class BackendCredentialReadinessTests(unittest.TestCase):
         os.environ["ANSWER_BACKEND"] = "groq"
         self.assertIn("not a backend", missing_backend_credential())
 
+    # unusable_backend_model is stubbed out: this test is about the credential
+    # branch, and the fake key below would otherwise send a real request to the
+    # gateway from a unit test. The gateway branch has its own tests.
+    @patch("src.web.unusable_backend_model", return_value=None)
     @patch("src.web.check_retrieval_ready", return_value=(True, {"status": "ready", "chunks": 3}))
-    def test_ready_is_503_without_the_credential_and_200_with_it(self, _r) -> None:
+    def test_ready_is_503_without_the_credential_and_200_with_it(self, _r, _g) -> None:
         response = self.client.get("/ready")
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["status"], "not_ready")
