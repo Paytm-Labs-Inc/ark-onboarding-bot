@@ -876,6 +876,28 @@ def _parse_and_finalize(
     try:
         parsed = _parse_json_response(raw)
     except (json.JSONDecodeError, IndexError, KeyError) as exc:
+        # A bare decline is not a broken payload. Measured 2026-09-05:
+        # llama-3.3-70b -- the current default -- answers some out-of-scope and
+        # prompt-injection questions with REFUSAL_PHRASE as plain text and no
+        # JSON envelope. That is the behaviour the prompt asks for, in the wrong
+        # shape, and neither fallback recovers it: the re-ask declines again
+        # identically, and the salvage needs an "answer" key a bare string does
+        # not have. So the correct refusal raised, ask() let the ValueError out,
+        # and web.py mapped it to 400 "That question could not be processed" --
+        # on exactly the adversarial questions the refusal exists to handle.
+        #
+        # 5 of the 38 guardrail rows in the 2026-09-05 sweep (5 of 634 llama
+        # rows overall; gpt-oss 0 of 606). The other 5 llama parse failures in
+        # that sweep were substantive answers, not declines, and are the
+        # separate salvage case -- do not fold them in here.
+        #
+        # Returns the canonical phrase rather than `raw`: is_non_answer matches
+        # within the first _DECLINE_WINDOW characters, so `raw` can carry
+        # ungrounded text after the decline, and llama also swaps the pronoun
+        # ("You don't have an answer for that yet."). Neither should reach a
+        # user verbatim.
+        if is_non_answer(raw):
+            return _finalize_parsed({"answer": REFUSAL_PHRASE, "chunks_used": []}, chunks)
         salvaged = _salvage_payload(raw) if allow_salvage else None
         if salvaged is None:
             raise ValueError(f"Could not parse model response as JSON: {raw!r}") from exc
