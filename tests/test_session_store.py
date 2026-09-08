@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 import unittest
 from unittest.mock import patch
 
@@ -77,12 +79,54 @@ class MemorySessionStoreTests(unittest.TestCase):
         )
         self.store.save(first)
         self.store.save(second)
-        listed = self.store.list_for_user("user-a")
+        listed = self.store.list_for_user("user-a", archived=False)
         self.assertEqual(len(listed), 2)
         self.assertEqual(
             {item.session_id for item in listed},
             {"sess-a", "sess-b"},
         )
+
+    def test_list_for_user_active_and_archived(self) -> None:
+        active = StoredSession(
+            session_id="active-1",
+            user_id="user-a",
+            title="Active chat",
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        archived = StoredSession(
+            session_id="arch-1",
+            user_id="user-a",
+            title="Old chat",
+            archived=True,
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        self.store.save(active)
+        self.store.save(archived)
+        active_list = self.store.list_for_user("user-a", archived=False)
+        archived_list = self.store.list_for_user("user-a", archived=True)
+        self.assertEqual([item.session_id for item in active_list], ["active-1"])
+        self.assertEqual([item.session_id for item in archived_list], ["arch-1"])
+
+    def test_archive_idle_sessions(self) -> None:
+        os.environ["SESSION_ARCHIVE_AFTER_DAYS"] = "7"
+        old_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 8 * 86400))
+        session = StoredSession(
+            session_id="idle-1",
+            user_id="user-a",
+            title="Idle",
+            created_at=old_time,
+            updated_at=old_time,
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        self.store._sessions[session.session_id] = session
+        self.store._user_active.setdefault("user-a", {})[session.session_id] = (
+            time.time() - 8 * 86400
+        )
+        active_list = self.store.list_for_user("user-a", archived=False)
+        archived_list = self.store.list_for_user("user-a", archived=True)
+        self.assertEqual(active_list, [])
+        self.assertEqual([item.session_id for item in archived_list], ["idle-1"])
+        os.environ.pop("SESSION_ARCHIVE_AFTER_DAYS", None)
 
 
 class ChatPersistenceTests(unittest.TestCase):

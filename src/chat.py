@@ -39,6 +39,8 @@ class ChatSession:
     linked_ark_session_id: str | None = None
     created_at: str = ""
     updated_at: str = ""
+    archived: bool = False
+    archived_at: str | None = None
     turns: list[ChatTurn] = field(default_factory=list)
 
     def history_for_prompt(self) -> list[dict[str, str]]:
@@ -94,6 +96,8 @@ def _session_from_stored(stored: StoredSession) -> ChatSession:
         linked_ark_session_id=stored.linked_ark_session_id,
         created_at=stored.created_at,
         updated_at=stored.updated_at,
+        archived=stored.archived,
+        archived_at=stored.archived_at,
     )
     session.turns = [_stored_to_turn(turn) for turn in stored.turns]
     return session
@@ -107,6 +111,8 @@ def _session_to_stored(session: ChatSession) -> StoredSession:
         linked_ark_session_id=session.linked_ark_session_id,
         created_at=session.created_at,
         updated_at=session.updated_at,
+        archived=session.archived,
+        archived_at=session.archived_at,
         turns=[_turn_to_stored(turn) for turn in session.turns],
     )
 
@@ -116,6 +122,10 @@ def get_session(session_id: str | None, user_id: str = ANONYMOUS_USER) -> tuple[
     if session_id:
         stored = store.load(session_id)
         if stored is not None and stored.user_id == user_id:
+            if stored.archived:
+                stored.archived = False
+                stored.archived_at = None
+                store.save(stored)
             return session_id, _session_from_stored(stored)
     new_id = str(uuid.uuid4())
     session = ChatSession(session_id=new_id, user_id=user_id)
@@ -142,8 +152,8 @@ def load_session_payload(session_id: str, user_id: str = ANONYMOUS_USER) -> dict
     return stored_to_payload(stored)
 
 
-def list_user_sessions(user_id: str) -> list[dict[str, Any]]:
-    summaries = get_session_store().list_for_user(user_id)
+def list_user_sessions(user_id: str, archived: bool = False) -> list[dict[str, Any]]:
+    summaries = get_session_store().list_for_user(user_id, archived=archived)
     return [summary.to_dict() for summary in summaries]
 
 
