@@ -22,7 +22,6 @@ default) — a plain OpenAI-compatible completion call, no agent harness.
 
 - Onboarding docs: https://foundry.mypaytm.com/onboarding/
 - Roadmap: https://foundry.mypaytm.com/roadmap/
-- FAQ doc: https://docs.google.com/document/d/1cFO96__cGuADEFvR_ahHcc0ILmYWvIrodjwMguihVbY/edit
 
 ## Layout
 
@@ -247,7 +246,7 @@ Rebuild the `data/` corpus from Foundry onboarding pages + the Google Docs FAQ:
 python ingest/ingest.py
 ```
 
-For the Google Doc FAQ, export plain text to `sources/faq-google-doc.txt` (or pass `--gdoc-file`). Optional: set `FOUNDRY_PLATFORM_PATH` to a local `foundry-platform` clone to read raw markdown from `doc-site/onboarding/`.
+Optional: set `FOUNDRY_PLATFORM_PATH` to a local `foundry-platform` clone to read raw markdown from `doc-site/onboarding/`.
 
 ## Access control (deployed UI)
 
