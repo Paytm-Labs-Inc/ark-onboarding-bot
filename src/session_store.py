@@ -12,6 +12,7 @@ from typing import Any, Protocol
 _ARK_SESSION_ID_RE = re.compile(r"\bs-([a-z0-9]{8,})\b", re.IGNORECASE)
 
 SESSION_KEY_PREFIX = "ark-onboarding-bot:"
+DEFAULT_ARCHIVE_AFTER_DAYS = 7
 TITLE_MAX_LEN = 80
 
 
@@ -46,6 +47,14 @@ def session_ttl_seconds() -> int | None:
         return max(60, int(raw))
     except ValueError:
         return None
+
+
+def archive_after_days() -> int:
+    raw = os.environ.get("SESSION_ARCHIVE_AFTER_DAYS", str(DEFAULT_ARCHIVE_AFTER_DAYS)).strip()
+    try:
+        return max(1, int(raw)) if raw else DEFAULT_ARCHIVE_AFTER_DAYS
+    except ValueError:
+        return DEFAULT_ARCHIVE_AFTER_DAYS
 
 
 def session_store_backend() -> str:
@@ -113,6 +122,8 @@ class StoredSession:
     linked_ark_session_id: str | None = None
     created_at: str = ""
     updated_at: str = ""
+    archived: bool = False
+    archived_at: str | None = None
     turns: list[StoredTurn] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -122,6 +133,8 @@ class StoredSession:
             "title": self.title,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "archived": self.archived,
+            "archived_at": self.archived_at,
             "turns": [turn.to_dict() for turn in self.turns],
         }
         if self.linked_ark_session_id:
@@ -142,6 +155,7 @@ class StoredSession:
         if not isinstance(turns_raw, list):
             return None
         turns = [StoredTurn.from_dict(item) for item in turns_raw if isinstance(item, dict)]
+        archived_at = data.get("archived_at")
         linked = data.get("linked_ark_session_id")
         return cls(
             session_id=session_id,
@@ -150,6 +164,8 @@ class StoredSession:
             linked_ark_session_id=str(linked).lower() if linked else None,
             created_at=str(data.get("created_at") or ""),
             updated_at=str(data.get("updated_at") or ""),
+            archived=bool(data.get("archived")),
+            archived_at=str(archived_at) if archived_at else None,
             turns=turns,
         )
 
@@ -168,6 +184,7 @@ class SessionSummary:
     title: str
     updated_at: str
     turn_count: int
+    archived: bool
     linked_ark_session_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -176,6 +193,7 @@ class SessionSummary:
             "title": self.title,
             "updated_at": self.updated_at,
             "turn_count": self.turn_count,
+            "archived": self.archived,
         }
         if self.linked_ark_session_id:
             payload["linked_ark_session_id"] = self.linked_ark_session_id
@@ -196,13 +214,29 @@ class SessionStore(Protocol):
 
     def delete(self, session_id: str) -> None: ...
 
-    def list_for_user(self, user_id: str) -> list[SessionSummary]: ...
+    def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]: ...
+
+
+def _should_archive(session: StoredSession, idle_days: int) -> bool:
+    if session.archived:
+        return False
+    updated = _parse_iso(session.updated_at)
+    if updated <= 0:
+        return False
+    return (time.time() - updated) >= idle_days * 86400
+
+
+def _archive_session(session: StoredSession) -> StoredSession:
+    session.archived = True
+    session.archived_at = _now_iso()
+    return session
 
 
 class MemorySessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, StoredSession] = {}
-        self._user_index: dict[str, dict[str, float]] = {}
+        self._user_active: dict[str, dict[str, float]] = {}
+        self._user_archived: dict[str, dict[str, float]] = {}
 
     def load(self, session_id: str) -> StoredSession | None:
         return self._sessions.get(session_id)
@@ -212,23 +246,48 @@ class MemorySessionStore:
         if not session.created_at:
             session.created_at = _now_iso()
         session.updated_at = _now_iso()
+        if session.archived:
+            session.archived_at = session.archived_at or _now_iso()
+        else:
+            session.archived_at = None
         self._sessions[session.session_id] = session
         score = _parse_iso(session.updated_at) or time.time()
-        self._user_index.setdefault(session.user_id, {})[session.session_id] = score
+        user = session.user_id
+        if session.archived:
+            self._user_active.setdefault(user, {}).pop(session.session_id, None)
+            self._user_archived.setdefault(user, {})[session.session_id] = (
+                _parse_iso(session.archived_at or session.updated_at) or score
+            )
+        else:
+            self._user_archived.setdefault(user, {}).pop(session.session_id, None)
+            self._user_active.setdefault(user, {})[session.session_id] = score
 
     def delete(self, session_id: str) -> None:
         session = self._sessions.pop(session_id, None)
         if session is None:
             return
-        self._user_index.get(session.user_id, {}).pop(session_id, None)
+        user = session.user_id
+        self._user_active.get(user, {}).pop(session_id, None)
+        self._user_archived.get(user, {}).pop(session_id, None)
 
     def clear(self) -> None:
         self._sessions.clear()
-        self._user_index.clear()
+        self._user_active.clear()
+        self._user_archived.clear()
 
-    def list_for_user(self, user_id: str) -> list[SessionSummary]:
+    def _apply_archive_rules(self, user_id: str) -> None:
+        idle_days = archive_after_days()
+        for session_id in list(self._user_active.get(user_id, {})):
+            session = self._sessions.get(session_id)
+            if session is None or not _should_archive(session, idle_days):
+                continue
+            self.save(_archive_session(session))
+
+    def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
+        self._apply_archive_rules(user_id)
+        index = self._user_archived if archived else self._user_active
         ordered = sorted(
-            self._user_index.get(user_id, {}).items(),
+            index.get(user_id, {}).items(),
             key=lambda item: item[1],
             reverse=True,
         )
@@ -243,6 +302,7 @@ class MemorySessionStore:
                     title=session.title or "Untitled chat",
                     updated_at=session.updated_at,
                     turn_count=len(session.turns),
+                    archived=session.archived,
                     linked_ark_session_id=session.linked_ark_session_id,
                 )
             )
@@ -261,8 +321,11 @@ class RedisSessionStore:
     def _meta_key(self, session_id: str) -> str:
         return f"{SESSION_KEY_PREFIX}session:meta:{session_id}"
 
-    def _user_key(self, user_id: str) -> str:
-        return f"{SESSION_KEY_PREFIX}user:{user_id}:sessions"
+    def _active_key(self, user_id: str) -> str:
+        return f"{SESSION_KEY_PREFIX}user:{user_id}:active"
+
+    def _archived_key(self, user_id: str) -> str:
+        return f"{SESSION_KEY_PREFIX}user:{user_id}:archived"
 
     def load(self, session_id: str) -> StoredSession | None:
         raw = self._client.get(self._body_key(session_id))
@@ -275,6 +338,10 @@ class RedisSessionStore:
         if not session.created_at:
             session.created_at = _now_iso()
         session.updated_at = _now_iso()
+        if session.archived:
+            session.archived_at = session.archived_at or _now_iso()
+        else:
+            session.archived_at = None
 
         body_key = self._body_key(session.session_id)
         payload = session.to_json()
@@ -290,22 +357,43 @@ class RedisSessionStore:
             "linked_ark_session_id": session.linked_ark_session_id or "",
             "created_at": session.created_at,
             "updated_at": session.updated_at,
+            "archived": "1" if session.archived else "0",
+            "archived_at": session.archived_at or "",
             "turn_count": str(len(session.turns)),
         }
         self._client.hset(self._meta_key(session.session_id), mapping=meta)
 
-        score = _parse_iso(session.updated_at) or time.time()
-        self._client.zadd(self._user_key(session.user_id), {session.session_id: score})
+        user = session.user_id
+        if session.archived:
+            score = _parse_iso(session.archived_at or session.updated_at) or time.time()
+            self._client.zrem(self._active_key(user), session.session_id)
+            self._client.zadd(self._archived_key(user), {session.session_id: score})
+        else:
+            score = _parse_iso(session.updated_at) or time.time()
+            self._client.zrem(self._archived_key(user), session.session_id)
+            self._client.zadd(self._active_key(user), {session.session_id: score})
 
     def delete(self, session_id: str) -> None:
         meta = self._client.hgetall(self._meta_key(session_id))
         user_id = meta.get("user_id", "")
         self._client.delete(self._body_key(session_id), self._meta_key(session_id))
         if user_id:
-            self._client.zrem(self._user_key(user_id), session_id)
+            self._client.zrem(self._active_key(user_id), session_id)
+            self._client.zrem(self._archived_key(user_id), session_id)
 
-    def list_for_user(self, user_id: str) -> list[SessionSummary]:
-        session_ids = self._client.zrevrange(self._user_key(user_id), 0, -1)
+    def _apply_archive_rules(self, user_id: str) -> None:
+        idle_days = archive_after_days()
+        active_ids = self._client.zrange(self._active_key(user_id), 0, -1)
+        for session_id in active_ids:
+            session = self.load(session_id)
+            if session is None or not _should_archive(session, idle_days):
+                continue
+            self.save(_archive_session(session))
+
+    def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
+        self._apply_archive_rules(user_id)
+        zkey = self._archived_key(user_id) if archived else self._active_key(user_id)
+        session_ids = self._client.zrevrange(zkey, 0, -1)
         summaries: list[SessionSummary] = []
         for session_id in session_ids:
             meta = self._client.hgetall(self._meta_key(session_id))
@@ -317,6 +405,7 @@ class RedisSessionStore:
                     "title": session.title,
                     "updated_at": session.updated_at,
                     "turn_count": str(len(session.turns)),
+                    "archived": "1" if session.archived else "0",
                     "linked_ark_session_id": session.linked_ark_session_id or "",
                 }
             linked = meta.get("linked_ark_session_id") or ""
@@ -326,6 +415,7 @@ class RedisSessionStore:
                     title=meta.get("title") or "Untitled chat",
                     updated_at=meta.get("updated_at") or "",
                     turn_count=int(meta.get("turn_count") or "0"),
+                    archived=meta.get("archived") == "1",
                     linked_ark_session_id=linked.lower() if linked else None,
                 )
             )
@@ -371,5 +461,6 @@ def stored_to_summary(stored: StoredSession) -> SessionSummary:
         title=stored.title or "Untitled chat",
         updated_at=stored.updated_at,
         turn_count=len(stored.turns),
+        archived=stored.archived,
         linked_ark_session_id=stored.linked_ark_session_id,
     )
