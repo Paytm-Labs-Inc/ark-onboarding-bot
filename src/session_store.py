@@ -1,4 +1,16 @@
-"""Persist chat sessions (memory for local dev, Redis for prod)."""
+"""Persist chat sessions.
+
+Three backends, one Protocol:
+
+- ``memory``   local dev only; dies with the process.
+- ``postgres`` the store of record. Durable, and the shape Sina asked for.
+- ``redis``    a cache in front of Postgres, or a standalone store for a
+  deployment that has accepted the durability trade-off in writing.
+
+Postgres is the default for anything that must survive a restart. Redis with
+no TTL is not durable: an eviction policy may drop no-TTL keys under memory
+pressure, and a restart without AOF or RDB loses the keyspace outright.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +27,21 @@ SESSION_KEY_PREFIX = "ark-onboarding-bot:"
 DEFAULT_ARCHIVE_AFTER_DAYS = 7
 TITLE_MAX_LEN = 80
 
+# The history budget, in question/answer pairs sent to the model per ask.
+#
+# The model is stateless, so every ask resends the system prompt, the retrieved
+# chunks and whatever history we choose. An uncapped thread therefore grows the
+# prompt without bound: a 40-turn conversation at ~250 tokens a turn adds ~10k
+# tokens to every subsequent ask, on top of the ~2.9k the retrieved chunks
+# already cost. 12 pairs holds the working context a follow-up question needs
+# while keeping the history contribution to roughly 3k tokens at worst.
+#
+# Older turns are dropped, not summarised. A rolling summary is the right next
+# step and is deliberately not in this change: it needs a model call of its own
+# and its own eval. Set MAX_HISTORY_TURNS=0 to restore the unbounded thread.
+DEFAULT_HISTORY_TURNS = 12
+SESSION_TABLE = "chat_sessions"
+
 
 def max_stored_turns() -> int:
     """0 means unlimited."""
@@ -28,14 +55,16 @@ def max_stored_turns() -> int:
 
 
 def max_history_turns() -> int:
-    """Turns sent to the model; 0 means the full stored thread."""
-    raw = os.environ.get("MAX_HISTORY_TURNS", "0").strip()
-    if not raw or raw == "0":
+    """Turns sent to the model. 0 means the full stored thread (unbounded)."""
+    raw = os.environ.get("MAX_HISTORY_TURNS", str(DEFAULT_HISTORY_TURNS)).strip()
+    if not raw:
+        return DEFAULT_HISTORY_TURNS
+    if raw == "0":
         return 0
     try:
         return max(1, int(raw))
     except ValueError:
-        return 0
+        return DEFAULT_HISTORY_TURNS
 
 
 def session_ttl_seconds() -> int | None:
@@ -422,6 +451,195 @@ class RedisSessionStore:
         return summaries
 
 
+SCHEMA_SQL = f"""
+CREATE TABLE IF NOT EXISTS {SESSION_TABLE} (
+  session_id            TEXT PRIMARY KEY,
+  user_id               TEXT NOT NULL DEFAULT 'anonymous',
+  title                 TEXT NOT NULL DEFAULT '',
+  linked_ark_session_id TEXT,
+  status                TEXT NOT NULL DEFAULT 'active',
+  messages              JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  archived_at           TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_{SESSION_TABLE}_user
+  ON {SESSION_TABLE} (user_id, status, updated_at DESC);
+"""
+
+
+class PostgresSessionStore:
+    """The store of record.
+
+    Schema is deliberately the shape of foundry-platform migration 051
+    (``assistant_sessions``): an id, the owning user, a status lifecycle and
+    the turns in a JSONB column. Sina pointed at that table and the decision
+    was to copy the pattern rather than write into Ark's control-plane
+    database, so our migrations stay ours.
+
+    One row per session. The turn list is a JSONB document because it is
+    always read and written whole, which is exactly the access pattern the
+    Scout table was built for.
+    """
+
+    def __init__(self, dsn: str, connect: Any | None = None) -> None:
+        self._dsn = dsn
+        if connect is None:
+            import psycopg
+
+            connect = psycopg.connect
+        self._connect = connect
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        with self._connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(SCHEMA_SQL)
+
+    def load(self, session_id: str) -> StoredSession | None:
+        with self._connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT session_id, user_id, title, linked_ark_session_id, status,"
+                    f" messages, created_at, updated_at, archived_at"
+                    f" FROM {SESSION_TABLE} WHERE session_id = %s",
+                    (session_id,),
+                )
+                row = cur.fetchone()
+        return _row_to_session(row)
+
+    def save(self, session: StoredSession) -> None:
+        session.turns = _cap_turns(session.turns)
+        if not session.created_at:
+            session.created_at = _now_iso()
+        session.updated_at = _now_iso()
+        if session.archived:
+            session.archived_at = session.archived_at or _now_iso()
+        else:
+            session.archived_at = None
+
+        messages = json.dumps([turn.to_dict() for turn in session.turns], ensure_ascii=False)
+        with self._connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"INSERT INTO {SESSION_TABLE}"
+                    f" (session_id, user_id, title, linked_ark_session_id, status,"
+                    f"  messages, created_at, updated_at, archived_at)"
+                    f" VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)"
+                    f" ON CONFLICT (session_id) DO UPDATE SET"
+                    f"  user_id = EXCLUDED.user_id,"
+                    f"  title = EXCLUDED.title,"
+                    f"  linked_ark_session_id = EXCLUDED.linked_ark_session_id,"
+                    f"  status = EXCLUDED.status,"
+                    f"  messages = EXCLUDED.messages,"
+                    f"  updated_at = EXCLUDED.updated_at,"
+                    f"  archived_at = EXCLUDED.archived_at",
+                    (
+                        session.session_id,
+                        session.user_id,
+                        session.title,
+                        session.linked_ark_session_id,
+                        "archived" if session.archived else "active",
+                        messages,
+                        session.created_at,
+                        session.updated_at,
+                        session.archived_at,
+                    ),
+                )
+
+    def delete(self, session_id: str) -> None:
+        with self._connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"DELETE FROM {SESSION_TABLE} WHERE session_id = %s",
+                    (session_id,),
+                )
+
+    def _apply_archive_rules(self, user_id: str) -> None:
+        """Lazy-on-read archive, in one statement.
+
+        Bhurva's question was sweeper job or lazy-on-read. This is lazy: the
+        transition happens in the same round trip as the list that would have
+        shown the stale row, so there is no cron to own and no window where a
+        listing and the archive state disagree.
+        """
+        with self._connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE {SESSION_TABLE}"
+                    f" SET status = 'archived', archived_at = now()"
+                    f" WHERE user_id = %s AND status = 'active'"
+                    f"   AND updated_at < now() - make_interval(days => %s)",
+                    (user_id, archive_after_days()),
+                )
+
+    def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
+        self._apply_archive_rules(user_id)
+        status = "archived" if archived else "active"
+        with self._connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT session_id, title, updated_at, status, linked_ark_session_id,"
+                    f" jsonb_array_length(messages)"
+                    f" FROM {SESSION_TABLE}"
+                    f" WHERE user_id = %s AND status = %s"
+                    f" ORDER BY updated_at DESC",
+                    (user_id, status),
+                )
+                rows = cur.fetchall() or []
+        summaries: list[SessionSummary] = []
+        for row in rows:
+            linked = row[4] or ""
+            summaries.append(
+                SessionSummary(
+                    session_id=str(row[0]),
+                    title=str(row[1] or "") or "Untitled chat",
+                    updated_at=_as_iso(row[2]),
+                    turn_count=int(row[5] or 0),
+                    archived=str(row[3]) == "archived",
+                    linked_ark_session_id=linked.lower() if linked else None,
+                )
+            )
+        return summaries
+
+
+def _as_iso(value: Any) -> str:
+    """Render a timestamp column as the ISO string the API contract uses."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    strftime = getattr(value, "strftime", None)
+    if strftime is None:
+        return str(value)
+    return strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _row_to_session(row: Any) -> StoredSession | None:
+    if not row:
+        return None
+    messages = row[5]
+    if isinstance(messages, str):
+        try:
+            messages = json.loads(messages)
+        except json.JSONDecodeError:
+            messages = []
+    if not isinstance(messages, list):
+        messages = []
+    linked = row[3] or ""
+    return StoredSession(
+        session_id=str(row[0]),
+        user_id=str(row[1] or "anonymous"),
+        title=str(row[2] or ""),
+        linked_ark_session_id=linked.lower() if linked else None,
+        created_at=_as_iso(row[6]),
+        updated_at=_as_iso(row[7]),
+        archived=str(row[4]) == "archived",
+        archived_at=_as_iso(row[8]) or None,
+        turns=[StoredTurn.from_dict(item) for item in messages if isinstance(item, dict)],
+    )
+
+
 _store: SessionStore | None = None
 
 
@@ -429,12 +647,19 @@ def build_session_store() -> SessionStore:
     backend = session_store_backend()
     if backend == "memory":
         return MemorySessionStore()
+    if backend == "postgres":
+        dsn = os.environ.get("DATABASE_URL", "").strip()
+        if not dsn:
+            raise RuntimeError("SESSION_STORE=postgres requires DATABASE_URL to be set.")
+        return PostgresSessionStore(dsn)
     if backend == "redis":
         url = os.environ.get("REDIS_URL", "").strip()
         if not url:
             raise RuntimeError("SESSION_STORE=redis requires REDIS_URL to be set.")
         return RedisSessionStore(url)
-    raise RuntimeError(f"Unknown SESSION_STORE {backend!r}; use 'memory' or 'redis'.")
+    raise RuntimeError(
+        f"Unknown SESSION_STORE {backend!r}; use 'memory', 'postgres' or 'redis'."
+    )
 
 
 def get_session_store() -> SessionStore:
