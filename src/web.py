@@ -337,7 +337,16 @@ async def ready() -> dict[str, object] | JSONResponse:
     # A present credential is not a working one. This is cached for 60s and only
     # fails on a rejected key or a model the gateway does not serve -- the two
     # conditions that previously hid a total outage behind a green probe.
-    unusable = unusable_backend_model()
+    #
+    # Off the event loop, through the same limiter as the retrieval probe: it is
+    # a blocking httpx.get of up to PI_TIMEOUT_SECONDS, and calling it inline
+    # would freeze the single replica's loop on every cache miss -- stalling
+    # /health, in-flight SSE and middleware for exactly as long as the gateway
+    # is slow. That is the case this check exists to detect, so the naive
+    # version made the outage worse the moment it started working.
+    unusable = await anyio.to_thread.run_sync(
+        unusable_backend_model, limiter=_PROBE_LIMITER
+    )
     if unusable:
         return JSONResponse(
             status_code=503, content={**body, "status": "not_ready", "reason": unusable}

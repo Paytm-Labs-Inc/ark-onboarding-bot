@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from src import feedback as feedback_module
+from src import web
 from src.web import app, missing_backend_credential
 
 
@@ -266,6 +267,20 @@ class BackendCredentialReadinessTests(unittest.TestCase):
         self.assertIsNone(missing_backend_credential())
         os.environ["ANSWER_BACKEND"] = "groq"
         self.assertIn("not a backend", missing_backend_credential())
+
+    def test_the_gateway_probe_does_not_run_on_the_event_loop(self) -> None:
+        # It is a blocking httpx call of up to PI_TIMEOUT_SECONDS. Called inline
+        # from the async handler it freezes the only replica's loop whenever the
+        # gateway is slow -- the exact condition it exists to detect. It must go
+        # through the same thread limiter as the retrieval probe.
+        import inspect
+
+        source = inspect.getsource(web.ready)
+        self.assertIn("unusable_backend_model", source)
+        probe = source[source.index("unusable_backend_model") - 200 :]
+        self.assertIn("run_sync", probe)
+        self.assertIn("_PROBE_LIMITER", probe)
+        self.assertNotIn("unusable = unusable_backend_model()", source)
 
     # unusable_backend_model is stubbed out: this test is about the credential
     # branch, and the fake key below would otherwise send a real request to the
