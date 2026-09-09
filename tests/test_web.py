@@ -85,11 +85,13 @@ class WebAppTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["answer"], "Use ~/.cursor/mcp.json")
         self.assertEqual(len(payload["sources"]), 1)
-        mock_ask.assert_called_once_with("sess-1", "how do I set up Cursor?")
+        mock_ask.assert_called_once_with(
+            "sess-1", "how do I set up Cursor?", user_id="anonymous"
+        )
 
     @patch("src.web.ask_in_session_stream")
     def test_api_ask_stream_emits_sse_events(self, mock_stream) -> None:
-        def fake_stream(_session_id, _question):
+        def fake_stream(_session_id, _question, user_id=None):
             yield {"type": "delta", "text": "Run "}
             yield {
                 "type": "done",
@@ -120,7 +122,9 @@ class WebAppTests(unittest.TestCase):
         self.assertIn('"type": "delta"', body)
         self.assertIn('"type": "done"', body)
         self.assertIn("Run ark host enroll.", body)
-        mock_stream.assert_called_once_with("sess-2", "how do I enroll a host?")
+        mock_stream.assert_called_once_with(
+            "sess-2", "how do I enroll a host?", user_id="anonymous"
+        )
 
     def test_api_ask_rejects_blank_question(self) -> None:
         response = self.client.post("/api/ask", json={"question": "   "})
@@ -143,6 +147,78 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertIn('"rating": "up"', lines[0])
 
+
+class SessionApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        os.environ.pop("ARK_ACCESS_TOKEN", None)
+        from src.session_store import MemorySessionStore, reset_session_store
+
+        reset_session_store(MemorySessionStore())
+        self.warm_patch = patch("src.web.warm_services")
+        self.warm_patch.start()
+        self.client = TestClient(app)
+
+    def tearDown(self) -> None:
+        from src.session_store import reset_session_store
+
+        self.warm_patch.stop()
+        reset_session_store(None)
+
+    @patch("src.web.ask_in_session")
+    def test_get_session_returns_saved_turns(self, mock_ask) -> None:
+        from src.session_store import (
+            MemorySessionStore,
+            StoredSession,
+            StoredTurn,
+            reset_session_store,
+            title_from_question,
+        )
+
+        mock_ask.return_value = {
+            "session_id": "sess-x",
+            "answer": "hello",
+            "citations": [],
+            "retrieved_sources": [],
+            "sources": [],
+            "handoff": False,
+        }
+        self.client.post("/api/ask", json={"question": "hi"})
+        sid = mock_ask.return_value["session_id"]
+        store = MemorySessionStore()
+        store.save(
+            StoredSession(
+                session_id=sid,
+                user_id="anonymous",
+                title=title_from_question("hi"),
+                turns=[StoredTurn("hi", "hello", [], [])],
+            )
+        )
+        reset_session_store(store)
+
+        response = self.client.get(f"/api/session/{sid}")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["session_id"], sid)
+        self.assertEqual(len(body["turns"]), 1)
+
+    def test_get_missing_session_404(self) -> None:
+        response = self.client.get("/api/session/does-not-exist")
+        self.assertEqual(response.status_code, 404)
+
+    def test_list_sessions_empty(self) -> None:
+        response = self.client.get("/api/sessions")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["sessions"], [])
+
+    def test_list_archived_sessions_empty(self) -> None:
+        response = self.client.get("/api/sessions?archived=true")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["sessions"], [])
+
+    @patch("src.web.ask_in_session")
+    def test_reset_missing_session_404(self, mock_ask) -> None:
+        response = self.client.post("/api/reset", json={"session_id": "missing"})
+        self.assertEqual(response.status_code, 404)
 
 
 class FeedbackWriteFailureTests(unittest.TestCase):
@@ -191,7 +267,7 @@ class AskRateLimitEdgeTests(unittest.TestCase):
 
     @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "1"})
     def test_the_stream_endpoint_is_limited_too(self) -> None:
-        def fake_stream(session_id, question):
+        def fake_stream(session_id, question, user_id=None):
             yield {"type": "done", "answer": "ok", "citations": [], "session_id": "s"}
         with patch("src.web.ask_in_session_stream", side_effect=fake_stream):
             self.assertEqual(self.client.post("/api/ask/stream", json={"question": "q"}).status_code, 200)
@@ -581,10 +657,10 @@ class DesignTokenConsistencyTests(unittest.TestCase):
         import src.answer as answer_mod
 
         answer_mod._gateway_check = (0.0, None)
-        os.environ["PI_API_KEY"] = "stale-key"
-        with patch("src.answer.httpx.get") as get:
-            get.return_value = MagicMock(status_code=401)
-            reason = answer_mod.unusable_backend_model()
+        with patch.dict(os.environ, {"PI_API_KEY": "stale-key", "ANSWER_BACKEND": "pi"}):
+            with patch("src.answer.httpx.get") as get:
+                get.return_value = MagicMock(status_code=401)
+                reason = answer_mod.unusable_backend_model()
         self.assertIsNotNone(reason)
         self.assertIn("credential", str(reason))
 
@@ -593,17 +669,13 @@ class DesignTokenConsistencyTests(unittest.TestCase):
         import src.answer as answer_mod
 
         answer_mod._gateway_check = (0.0, None)
-        os.environ["PI_API_KEY"] = "k"
-        os.environ["PI_MODEL"] = "qwen/qwen3-32b"
-        try:
+        with patch.dict(os.environ, {"PI_API_KEY": "k", "PI_MODEL": "qwen/qwen3-32b", "ANSWER_BACKEND": "pi"}):
             with patch("src.answer.httpx.get") as get:
                 get.return_value = MagicMock(
                     status_code=200,
                     json=lambda: {"data": [{"id": "llama-3.3-70b-versatile"}]},
                 )
                 reason = answer_mod.unusable_backend_model()
-        finally:
-            os.environ.pop("PI_MODEL", None)
         self.assertIsNotNone(reason)
         self.assertIn("not served", str(reason))
 
@@ -617,27 +689,27 @@ class DesignTokenConsistencyTests(unittest.TestCase):
         """
         import src.answer as answer_mod
 
-        os.environ["PI_API_KEY"] = "k"
-        for failure in (TimeoutError("read timeout"), None):
-            with self.subTest(failure=failure):
-                answer_mod._gateway_check = (0.0, None)
-                with patch("src.answer.httpx.get") as get:
-                    if failure is None:
-                        get.return_value = MagicMock(status_code=503)
-                    else:
-                        get.side_effect = failure
-                    self.assertIsNone(answer_mod.unusable_backend_model())
+        with patch.dict(os.environ, {"PI_API_KEY": "k", "ANSWER_BACKEND": "pi"}):
+            for failure in (TimeoutError("read timeout"), None):
+                with self.subTest(failure=failure):
+                    answer_mod._gateway_check = (0.0, None)
+                    with patch("src.answer.httpx.get") as get:
+                        if failure is None:
+                            get.return_value = MagicMock(status_code=503)
+                        else:
+                            get.side_effect = failure
+                        self.assertIsNone(answer_mod.unusable_backend_model())
 
     def test_the_gateway_check_is_cached(self) -> None:
         """kubelet polls /ready every few seconds; an uncached check is traffic."""
         import src.answer as answer_mod
 
         answer_mod._gateway_check = (0.0, None)
-        os.environ["PI_API_KEY"] = "k"
-        with patch("src.answer.httpx.get") as get:
-            get.return_value = MagicMock(status_code=200, json=lambda: {"data": []})
-            for _ in range(5):
-                answer_mod.unusable_backend_model(now=1000.0)
+        with patch.dict(os.environ, {"PI_API_KEY": "k", "ANSWER_BACKEND": "pi"}):
+            with patch("src.answer.httpx.get") as get:
+                get.return_value = MagicMock(status_code=200, json=lambda: {"data": []})
+                for _ in range(5):
+                    answer_mod.unusable_backend_model(now=1000.0)
         self.assertEqual(get.call_count, 1, "the probe must not call out every time")
 
     def test_new_chat_cannot_be_undone_by_an_in_flight_answer(self) -> None:
@@ -654,12 +726,13 @@ class DesignTokenConsistencyTests(unittest.TestCase):
         self.assertIn("let chatGeneration = 0;", body)
         self.assertIn("const generation = chatGeneration;", body)
         self.assertIn("chatGeneration += 1;", body, "New chat must bump the generation")
-        # The guard has to sit BEFORE the session id is adopted and the turn is
-        # persisted, or it does not prevent either.
-        guard = body.index("if (generation !== chatGeneration)")
-        self.assertLess(guard, body.index("sessionId = payload.session_id;"))
-        # the CALL site, not the function definition, which sits far earlier
-        self.assertLess(guard, body.index("persistCompletedTurn(question, payload.answer"))
+        # Scope to the ask submit handler: bootstrap/openSession also adopt
+        # session ids, and the guard must sit before those in the in-flight path.
+        submit = body[body.index('form.addEventListener("submit"'):]
+        guard = submit.index("if (generation !== chatGeneration)")
+        self.assertLess(guard, submit.index("sessionId = payload.session_id;"))
+        self.assertLess(guard, submit.index("persistCompletedTurn(question, payload.answer"))
+        guard += body.index('form.addEventListener("submit"')
 
         # The guard must ABORT, not merely exist. Presence-and-order assertions
         # survive neutralising the body -- ArkBot demonstrated exactly that

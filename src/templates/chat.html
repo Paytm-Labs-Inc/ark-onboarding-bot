@@ -19,8 +19,103 @@
       -webkit-font-smoothing: antialiased;
     }
 
+    .app-shell {
+      display: flex;
+      min-height: 100%;
+      height: 100%;
+    }
+    .sidebar {
+      width: 280px;
+      flex: none;
+      display: flex;
+      flex-direction: column;
+      gap: var(--ark-space-3);
+      padding: var(--ark-space-4) var(--ark-space-3);
+      border-right: 1px solid var(--ark-line);
+      background: var(--ark-panel);
+      min-height: 0;
+    }
+    .sidebar-header { flex: none; }
+    .sidebar-section {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--ark-space-2);
+    }
+    .sidebar-label {
+      font-size: var(--ark-text-xs);
+      font-weight: 600;
+      letter-spacing: var(--ark-tracking-caps);
+      text-transform: uppercase;
+      color: var(--ark-fg-muted);
+    }
+    .session-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      overflow-y: auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--ark-space-1);
+    }
+    .session-item {
+      border: 1px solid transparent;
+      border-radius: var(--ark-radius-sm);
+      padding: var(--ark-space-2) var(--ark-space-3);
+      cursor: pointer;
+      background: transparent;
+      text-align: left;
+    }
+    .session-item:hover { background: var(--ark-elevated); }
+    .session-item.active {
+      background: var(--ark-elevated);
+      border-color: var(--ark-violet-400);
+    }
+    .session-title {
+      font-size: var(--ark-text-sm);
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .session-meta {
+      margin-top: 2px;
+      font-size: var(--ark-text-xs);
+      color: var(--ark-fg-muted);
+    }
+    .session-empty {
+      font-size: var(--ark-text-sm);
+      color: var(--ark-fg-muted);
+      padding: var(--ark-space-2) var(--ark-space-1);
+    }
+    .session-skeleton {
+      height: 44px;
+      border-radius: var(--ark-radius-sm);
+      background: linear-gradient(
+        90deg,
+        var(--ark-elevated) 25%,
+        var(--ark-line) 50%,
+        var(--ark-elevated) 75%
+      );
+      background-size: 200% 100%;
+      animation: shimmer 1.2s infinite;
+    }
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .main-panel {
+      flex: 1;
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+    }
+
     .wrap {
       max-width: 860px;
+      width: 100%;
       margin: 0 auto;
       padding: var(--ark-space-5) var(--ark-space-4) var(--ark-space-4);
       height: 100%;
@@ -44,6 +139,22 @@
     }
     .subtitle {
       margin: 2px 0 0; color: var(--ark-fg-muted); font-size: var(--ark-text-sm);
+    }
+    .linked-ark-session {
+      display: none;
+      margin: var(--ark-space-2) 0 0;
+      font-size: var(--ark-text-xs);
+      color: var(--ark-fg-muted);
+    }
+    .linked-ark-session.visible { display: block; }
+    .linked-ark-session code {
+      font-family: var(--ark-font-mono);
+      font-size: var(--ark-text-xs);
+      color: var(--ark-accent-ink);
+      background: var(--ark-elevated);
+      border: 1px solid var(--ark-line);
+      border-radius: var(--ark-radius-sm);
+      padding: 1px var(--ark-space-1);
     }
     .header-actions { display: flex; align-items: center; gap: var(--ark-space-2); }
 
@@ -182,6 +293,9 @@
     }
     .status.error { color: var(--ark-danger); }
 
+    @media (max-width: 900px) {
+      .sidebar { display: none; }
+    }
     @media (max-width: 640px) {
       .wrap { padding: var(--ark-space-4) var(--ark-space-3); }
       .question { max-width: 90%; }
@@ -193,6 +307,21 @@
   </style>
 </head>
 <body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Chat history">
+      <div class="sidebar-header">
+        <button type="button" class="primary" id="sidebar-new-chat" style="width:100%">New chat</button>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Recent</div>
+        <ul class="session-list" id="active-sessions"></ul>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Archive</div>
+        <ul class="session-list" id="archived-sessions"></ul>
+      </div>
+    </aside>
+    <div class="main-panel">
   <div class="wrap">
     <header>
       <div class="lockup">
@@ -200,6 +329,7 @@
         <div>
           <h1>Ark Onboarding Bot</h1>
           <p class="subtitle">Ask anything about getting started with Ark</p>
+          <p class="linked-ark-session" id="linked-ark-session"></p>
         </div>
       </div>
       <div class="header-actions">
@@ -217,6 +347,8 @@
     </form>
     <div class="status" id="status"></div>
   </div>
+    </div>
+  </div>
 
   <script>
     let sessionId = null;
@@ -230,6 +362,10 @@
     const submitBtn = document.getElementById("submit-btn");
     const statusEl = document.getElementById("status");
     const newChatBtn = document.getElementById("new-chat");
+    const sidebarNewChatBtn = document.getElementById("sidebar-new-chat");
+    const activeSessionsEl = document.getElementById("active-sessions");
+    const archivedSessionsEl = document.getElementById("archived-sessions");
+    const linkedArkSessionEl = document.getElementById("linked-ark-session");
 
     const CHAT_STORAGE_VERSION = 1;
     const MAX_STORED_TURNS = 30;
@@ -453,31 +589,231 @@
       turn.scrollIntoView({ behavior: "smooth", block: "end" });
     }
 
-    function restoreChatFromStorage() {
-      const stored = readStoredChat();
-      if (!stored || !stored.turns.length) {
+    function updateLinkedArkSessionDisplay(linkedId) {
+      if (!linkedArkSessionEl) return;
+      if (linkedId) {
+        linkedArkSessionEl.innerHTML =
+          `Debugging Ark session <code>${escapeHtml(linkedId)}</code>`;
+        linkedArkSessionEl.classList.add("visible");
+      } else {
+        linkedArkSessionEl.textContent = "";
+        linkedArkSessionEl.classList.remove("visible");
+      }
+    }
+
+    function sidebarMetaText(session) {
+      const parts = [
+        formatSessionDate(session.updated_at),
+        `${session.turn_count || 0} turns`,
+      ];
+      if (session.linked_ark_session_id) {
+        parts.push(session.linked_ark_session_id);
+      }
+      return parts.filter(Boolean).join(" · ");
+    }
+
+    function formatSessionDate(iso) {
+      if (!iso) return "";
+      try {
+        return new Date(iso).toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+        });
+      } catch (_err) {
+        return "";
+      }
+    }
+
+    function showSidebarSkeletons() {
+      for (const list of [activeSessionsEl, archivedSessionsEl]) {
+        list.replaceChildren();
+        for (let i = 0; i < 3; i += 1) {
+          const item = document.createElement("li");
+          item.className = "session-skeleton";
+          list.appendChild(item);
+        }
+      }
+    }
+
+    function renderSessionList(container, sessions, { emptyLabel = "No chats yet" } = {}) {
+      container.replaceChildren();
+      if (!sessions.length) {
+        const empty = document.createElement("li");
+        empty.className = "session-empty";
+        empty.textContent = emptyLabel;
+        container.appendChild(empty);
+        return;
+      }
+      for (const session of sessions) {
+        const item = document.createElement("li");
+        item.className = "session-item";
+        if (session.session_id === sessionId) {
+          item.classList.add("active");
+        }
+        item.innerHTML = `
+          <div class="session-title">${escapeHtml(session.title || "Untitled chat")}</div>
+          <div class="session-meta">${escapeHtml(sidebarMetaText(session))}</div>
+        `;
+        item.addEventListener("click", () => openSession(session.session_id));
+        container.appendChild(item);
+      }
+    }
+
+    async function loadSidebarLists() {
+      showSidebarSkeletons();
+      try {
+        const [activeResp, archivedResp] = await Promise.all([
+          fetch("api/sessions?archived=false"),
+          fetch("api/sessions?archived=true"),
+        ]);
+        if (activeResp.status === 401 || archivedResp.status === 401) {
+          window.location = "login";
+          return;
+        }
+        const activePayload = activeResp.ok ? await activeResp.json() : { sessions: [] };
+        const archivedPayload = archivedResp.ok ? await archivedResp.json() : { sessions: [] };
+        renderSessionList(activeSessionsEl, activePayload.sessions || [], {
+          emptyLabel: "No chats yet",
+        });
+        renderSessionList(archivedSessionsEl, archivedPayload.sessions || [], {
+          emptyLabel: "No archived chats",
+        });
+      } catch (_err) {
+        renderSessionList(activeSessionsEl, [], { emptyLabel: "Could not load chats" });
+        renderSessionList(archivedSessionsEl, [], { emptyLabel: "Could not load archive" });
+      }
+    }
+
+    function sourcesFromTurn(turn) {
+      if (Array.isArray(turn.sources) && turn.sources.length) {
+        return turn.sources;
+      }
+      return (turn.citations || []).map((citation) => {
+        const label = String(citation);
+        const slug = label.split(" -- ")[0] || label;
+        return { slug, label, url: label.includes(" -- ") ? label.split(" -- ")[1] : "" };
+      });
+    }
+
+    function metaFromTurn(turn, sid) {
+      return {
+        question: turn.question,
+        answer: turn.answer,
+        sources: turn.citations || [],
+        retrieved_sources: turn.retrieved_sources || [],
+        session_id: sid,
+        degraded: null,
+        handoff: false,
+      };
+    }
+
+    function renderThreadFromPayload(payload, { scroll = true } = {}) {
+      chat.replaceChildren();
+      if (!payload.turns || !payload.turns.length) {
         showEmptyState();
         return;
       }
-      // Restoring the id keeps server-side context across an ordinary refresh,
-      // which is the common case and the point of this feature. The limitation,
-      // deliberately accepted rather than fixed here: sessions live in an
-      // in-process dict (src/chat.py get_session) and die on every deploy, so
-      // after a release the restored id is unknown, get_session silently mints a
-      // fresh one, and the screen shows a thread the server has no history for.
-      // A follow-up like "where does it go?" then loses its referent.
-      // Not fixed by dropping the id -- that would throw away context in the
-      // common case to avoid a rarer one. The real fix is server-side sessions
-      // (Postgres, on the backlog) or having the server report that the id was
-      // unknown so restored turns can be marked as history. Author's call.
-      sessionId = stored.sessionId || null;
-      chat.replaceChildren();
-      for (const turn of stored.turns) {
-        renderCompletedTurn(turn.question, turn.answer, turn.sources, turn.meta, {
-          scroll: false,
-        });
+      for (const turn of payload.turns) {
+        const sources = sourcesFromTurn(turn);
+        renderCompletedTurn(
+          turn.question,
+          turn.answer,
+          sources,
+          metaFromTurn(turn, payload.session_id),
+          { scroll: false },
+        );
       }
-      chat.lastElementChild?.scrollIntoView({ block: "end" });
+      if (scroll) {
+        chat.lastElementChild?.scrollIntoView({ block: "end" });
+      }
+    }
+
+    function persistThreadFromPayload(payload) {
+      clearStoredChat();
+      for (const turn of payload.turns || []) {
+        persistCompletedTurn(
+          turn.question,
+          turn.answer,
+          sourcesFromTurn(turn),
+          metaFromTurn(turn, payload.session_id),
+        );
+      }
+    }
+
+    async function openSession(sid) {
+      if (!sid || sid === sessionId) return;
+      setStatus("Loading chat…");
+      try {
+        const response = await fetch(`api/session/${encodeURIComponent(sid)}`);
+        if (response.status === 401) {
+          window.location = "login";
+          return;
+        }
+        if (!response.ok) {
+          throw new Error("Session not found.");
+        }
+        const payload = await response.json();
+        sessionId = payload.session_id;
+        chatGeneration += 1;
+        renderThreadFromPayload(payload);
+        updateLinkedArkSessionDisplay(payload.linked_ark_session_id || null);
+        persistThreadFromPayload(payload);
+        setStatus("");
+        loadSidebarLists();
+      } catch (error) {
+        setStatus(error.message || "Could not load chat.", true);
+      }
+    }
+
+    async function bootstrapChat() {
+      loadSidebarLists();
+      const stored = readStoredChat();
+      if (stored?.turns?.length) {
+        sessionId = stored.sessionId || null;
+        renderThreadFromPayload(
+          { session_id: sessionId, turns: stored.turns.map((turn) => ({
+            question: turn.question,
+            answer: turn.answer,
+            citations: (turn.meta && turn.meta.sources) || turn.sources || [],
+            retrieved_sources: (turn.meta && turn.meta.retrieved_sources) || [],
+          })) },
+          { scroll: false },
+        );
+      } else {
+        showEmptyState();
+      }
+
+      if (!sessionId) return;
+
+      try {
+        const response = await fetch(`api/session/${encodeURIComponent(sessionId)}`);
+        if (response.status === 401) {
+          window.location = "login";
+          return;
+        }
+        if (response.ok) {
+          const payload = await response.json();
+          sessionId = payload.session_id;
+          renderThreadFromPayload(payload, { scroll: false });
+          updateLinkedArkSessionDisplay(payload.linked_ark_session_id || null);
+          persistThreadFromPayload(payload);
+        }
+      } catch (_err) {
+        // Keep localStorage paint when the server is unreachable.
+      }
+    }
+
+    function startNewChat() {
+      sessionId = null;
+      updateLinkedArkSessionDisplay(null);
+      chatGeneration += 1;
+      clearStoredChat();
+      showEmptyState();
+      questionEl.value = "";
+      setStatus("");
+      submitBtn.disabled = false;
+      questionEl.focus();
+      loadSidebarLists();
     }
 
     async function consumeAskStream(response, question, answerEl, turn) {
@@ -575,6 +911,10 @@
         }
         finishStreamingTurn(liveTurn, answerEl, payload.sources, meta);
         persistCompletedTurn(question, payload.answer, payload.sources, meta);
+        if (payload.linked_ark_session_id) {
+          updateLinkedArkSessionDisplay(payload.linked_ark_session_id);
+        }
+        loadSidebarLists();
         questionEl.value = "";
         setStatus("");
       } catch (error) {
@@ -599,25 +939,10 @@
       form.requestSubmit();             // not form.submit(): that skips the handler
     });
 
-    newChatBtn.addEventListener("click", async () => {
-      if (sessionId) {
-        await fetch("api/reset", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId }),
-        });
-      }
-      sessionId = null;
-      chatGeneration += 1;
-      clearStoredChat();
-      showEmptyState();
-      questionEl.value = "";
-      setStatus("");
-      submitBtn.disabled = false;
-      questionEl.focus();
-    });
+    newChatBtn.addEventListener("click", startNewChat);
+    sidebarNewChatBtn.addEventListener("click", startNewChat);
 
-    restoreChatFromStorage();
+    bootstrapChat();
     questionEl.focus();
   </script>
 </body>
