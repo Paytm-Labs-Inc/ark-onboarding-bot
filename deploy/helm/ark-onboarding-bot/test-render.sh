@@ -88,7 +88,10 @@ render "${BASE[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=redis -
 # The probe must fail on a Redis ERROR REPLY, not only a non-zero exit: redis-cli
 # exits 0 when the server answers "OOM command not allowed", which is precisely
 # the write-refusing state readiness is here to catch.
-[ "$RC" -eq 0 ] && grep -q '= OK' <<<"$OUT" && pass "readiness matches the reply, not the exit code" || fail "readiness probe would pass on a redis error"
+# Grep the NESTED form: a `command:` at exec's own indent is a sibling, not a
+# child, so the probe renders with no command at all -- and a bare grep for the
+# script text passes anyway, which is how the mis-indent shipped in the first place.
+[ "$RC" -eq 0 ] && grep -q '^              command: \["sh", "-c", "\[ ..\$(redis-cli set' <<<"$OUT" && pass "readiness command is nested under exec" || fail "readiness probe command is not nested under exec"
 # Redis is the record here, so it must hold a volume. foundry-platform's Redis
 # is a bus and holds none; copying that shape would lose every chat on restart.
 [ "$RC" -eq 0 ] && grep -q 'volumeClaimTemplates' <<<"$OUT" && grep -q 'mountPath: /data' <<<"$OUT" && pass "AOF has a volume to live on" || fail "redis has no persistent volume"

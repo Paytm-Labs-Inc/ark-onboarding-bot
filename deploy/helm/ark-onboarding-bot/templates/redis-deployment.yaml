@@ -100,13 +100,13 @@ spec:
           # still answers PONG while refusing every write, so a PING-only probe
           # keeps a wedged instance in the Service.
           readinessProbe:
-            exec:
-              # Match on the reply, not the exit code: redis-cli exits 0 even when
+            # Match on the reply, not the exit code: redis-cli exits 0 even when
             # the server answers with an error, so `set` returning
             # "OOM command not allowed..." under maxmemory+noeviction would pass
             # a bare exit-status check and keep a write-refusing pod in the
-            # Service -- the exact state this probe exists to catch (Bugbot).
-            command: ["sh", "-c", "[ \"$(redis-cli set __ready__ 1 EX 10)\" = OK ] && redis-cli del __ready__ > /dev/null"]
+            # Service -- the exact state this probe exists to catch.
+            exec:
+              command: ["sh", "-c", "[ \"$(redis-cli set __ready__ 1 EX 10)\" = OK ] && redis-cli del __ready__ > /dev/null"]
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:
