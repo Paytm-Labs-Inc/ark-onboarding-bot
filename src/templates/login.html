@@ -97,6 +97,23 @@
         statusEl.textContent = "Sign in failed. Try again.";
       }
     });
+    // Clear any chat this browser kept from the previous session. The chat is
+    // persisted in localStorage under a key built only from the base path, so
+    // it is not scoped to whoever was signed in -- and /logout can only drop
+    // the cookie, being a server-side redirect. Without this, signing out and
+    // back in restores the previous person's conversation, which on a shared
+    // machine shows it to someone who was never in it.
+    //
+    // Done here rather than only on the sign-out link so that every route to
+    // an unauthenticated state is covered: the link, a typed /logout, an
+    // expired cookie, and the auth redirect.
+    try {
+      const base = document.querySelector("base")?.getAttribute("href") || "/";
+      localStorage.removeItem(`ark-onboarding-bot:chat:${base}`);
+    } catch (_err) {
+      // Private mode or blocked storage -- nothing was persisted either.
+    }
+
     tokenEl.focus();
   </script>
 </body>

@@ -296,6 +296,46 @@ class BackendCredentialReadinessTests(unittest.TestCase):
         self.assertEqual(self.client.get("/ready").status_code, 200)
 
 
+class SignOutClearsTheStoredChatTests(unittest.TestCase):
+    """Signing out must not leave the transcript in the browser.
+
+    The chat is persisted under `ark-onboarding-bot:chat:<base>` -- a key built
+    only from the base path, with no user in it -- and /logout is a server-side
+    redirect that can only drop the cookie. So signing out and back in restored
+    the previous conversation, and on a shared machine showed it to someone who
+    was never part of it.
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def _template(self, name: str) -> str:
+        return (self.ROOT / "src" / "templates" / name).read_text(encoding="utf-8")
+
+    def test_the_login_page_clears_the_stored_chat(self) -> None:
+        # The guarantee: every route to an unauthenticated state lands here --
+        # the sign-out link, a typed /logout, an expired cookie, the auth
+        # redirect -- so the clear belongs on this page, not only on the link.
+        login = self._template("login.html")
+        self.assertIn("localStorage.removeItem", login)
+        self.assertIn("ark-onboarding-bot:chat:", login)
+
+    def test_the_sign_out_link_clears_before_navigating(self) -> None:
+        chat = self._template("chat.html")
+        self.assertIn('id="sign-out"', chat)
+        start = chat.index('getElementById("sign-out")')
+        handler = chat[start : start + 240]
+        self.assertIn("clearStoredChat()", handler)
+
+    def test_the_storage_key_and_the_clear_agree(self) -> None:
+        # The two templates build the key independently; if one drifts the
+        # clear silently stops matching what was written.
+        chat = self._template("chat.html")
+        login = self._template("login.html")
+        key = "ark-onboarding-bot:chat:${base}"
+        self.assertIn(key, chat, "chat.html no longer builds the expected key")
+        self.assertIn(key, login, "login.html clears a different key than chat.html writes")
+
+
 class ErrorTextAndHeadersTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
