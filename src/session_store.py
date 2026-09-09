@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import re
@@ -13,12 +14,16 @@ _ARK_SESSION_ID_RE = re.compile(r"\bs-([a-z0-9]{8,})\b", re.IGNORECASE)
 
 SESSION_KEY_PREFIX = "ark-onboarding-bot:"
 DEFAULT_ARCHIVE_AFTER_DAYS = 7
-TITLE_MAX_LEN = 80
+DEFAULT_SESSION_MAX_TURNS = 100
+TITLE_MAX_LEN = 64
 
 
 def max_stored_turns() -> int:
-    """0 means unlimited."""
-    raw = os.environ.get("SESSION_MAX_TURNS", "0").strip()
+    """0 means unlimited; unset defaults to DEFAULT_SESSION_MAX_TURNS."""
+    raw = os.environ.get("SESSION_MAX_TURNS")
+    if raw is None:
+        return DEFAULT_SESSION_MAX_TURNS
+    raw = raw.strip()
     if not raw or raw == "0":
         return 0
     try:
@@ -69,7 +74,8 @@ def _parse_iso(value: str) -> float:
     if not value:
         return 0.0
     try:
-        return time.mktime(time.strptime(value[:19], "%Y-%m-%dT%H:%M:%S"))
+        parsed = time.strptime(value[:19], "%Y-%m-%dT%H:%M:%S")
+        return float(calendar.timegm(parsed))
     except ValueError:
         return 0.0
 

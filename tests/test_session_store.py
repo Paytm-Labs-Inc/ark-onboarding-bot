@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import os
 import time
 import unittest
@@ -9,11 +10,16 @@ from unittest.mock import patch
 
 from src.chat import ask_in_session, list_user_sessions, load_session_payload, reset_session
 from src.session_store import (
+    DEFAULT_SESSION_MAX_TURNS,
     MemorySessionStore,
     StoredSession,
     StoredTurn,
+    TITLE_MAX_LEN,
+    _parse_iso,
     extract_ark_session_id,
+    max_stored_turns,
     reset_session_store,
+    title_from_question,
 )
 
 
@@ -127,6 +133,46 @@ class MemorySessionStoreTests(unittest.TestCase):
         self.assertEqual(active_list, [])
         self.assertEqual([item.session_id for item in archived_list], ["idle-1"])
         os.environ.pop("SESSION_ARCHIVE_AFTER_DAYS", None)
+
+    def test_parse_iso_treats_timestamps_as_utc(self) -> None:
+        stamp = "2026-01-01T12:00:00Z"
+        expected = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
+        self.assertEqual(_parse_iso(stamp), expected)
+
+    def test_max_stored_turns_defaults_to_100(self) -> None:
+        os.environ.pop("SESSION_MAX_TURNS", None)
+        self.assertEqual(max_stored_turns(), DEFAULT_SESSION_MAX_TURNS)
+        self.assertEqual(DEFAULT_SESSION_MAX_TURNS, 100)
+
+    def test_save_caps_turns_at_default_max(self) -> None:
+        os.environ.pop("SESSION_MAX_TURNS", None)
+        turns = [StoredTurn(f"q{i}", f"a{i}", [], []) for i in range(101)]
+        session = StoredSession(session_id="cap-1", user_id="user-a", turns=turns)
+        self.store.save(session)
+        loaded = self.store.load("cap-1")
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertEqual(len(loaded.turns), 100)
+        self.assertEqual(loaded.turns[0].question, "q1")
+        self.assertEqual(loaded.turns[-1].question, "q100")
+
+    def test_save_keeps_all_turns_when_session_max_turns_zero(self) -> None:
+        os.environ["SESSION_MAX_TURNS"] = "0"
+        turns = [StoredTurn(f"q{i}", f"a{i}", [], []) for i in range(101)]
+        session = StoredSession(session_id="cap-2", user_id="user-a", turns=turns)
+        self.store.save(session)
+        loaded = self.store.load("cap-2")
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertEqual(len(loaded.turns), 101)
+        os.environ.pop("SESSION_MAX_TURNS", None)
+
+    def test_title_truncated_at_max_len(self) -> None:
+        self.assertEqual(TITLE_MAX_LEN, 64)
+        long_question = "word " * 40
+        title = title_from_question(long_question.strip())
+        self.assertLessEqual(len(title), TITLE_MAX_LEN)
+        self.assertTrue(title.endswith("…"))
 
 
 class ChatPersistenceTests(unittest.TestCase):
