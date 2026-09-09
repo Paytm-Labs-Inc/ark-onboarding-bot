@@ -1,0 +1,160 @@
+{{- if .Values.redis.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: ark-onboarding-bot-redis
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: ark-onboarding-bot
+    component: redis
+spec:
+  type: ClusterIP
+  selector:
+    app: ark-onboarding-bot
+    component: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      protocol: TCP
+{{- if .Values.redis.exporter.enabled }}
+    # Scrape target for the SigNoz prometheus receiver, same Service so there is
+    # one name to point at. Mirrors foundry-platform (PAI-44174).
+    - name: metrics
+      port: 9121
+      targetPort: metrics
+      protocol: TCP
+{{- end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ark-onboarding-bot-redis
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: ark-onboarding-bot
+    component: redis
+spec:
+  # StatefulSet where foundry-platform uses a Deployment, and the difference is
+  # the point: their Redis is a pub/sub + SSE bus with a TTL'd cache and
+  # Postgres behind it, so it holds no volume and losing it costs nothing. Here
+  # Redis is the store of record for chat threads, so it carries an AOF -- and a
+  # Deployment's rolling replace starts the new pod before the old releases the
+  # ReadWriteOnce volume, which hangs on attach. One identity, one volume.
+  serviceName: ark-onboarding-bot-redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ark-onboarding-bot
+      component: redis
+  template:
+    metadata:
+      labels:
+        app: ark-onboarding-bot
+        component: redis
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          args:
+            - "redis-server"
+            # The AOF is the durability argument. Without it a restart loses
+            # every chat since the last RDB snapshot; everysec bounds that at
+            # ~1s of writes without an fsync per command.
+            - "--appendonly"
+            - "yes"
+            - "--appendfsync"
+            - "everysec"
+            - "--dir"
+            - "/data"
+            {{- if .Values.redis.maxmemory }}
+            # Below the container limit, so Redis refuses writes before the
+            # kernel OOM-kills the pod and takes the AOF's last seconds with it.
+            - "--maxmemory"
+            - {{ .Values.redis.maxmemory | quote }}
+            {{- end }}
+            # noeviction, where foundry-platform can safely use volatile-lru:
+            # they evict a cache backed by Postgres. A session here is three
+            # keys (body STRING, meta HASH, per-user ZSET entry) written without
+            # MULTI, so evicting the body while the index entry survives leaves
+            # a thread that still lists and opens empty. Refusing writes at the
+            # ceiling is loud; half a session is quiet.
+            - "--maxmemory-policy"
+            - {{ .Values.redis.maxmemoryPolicy | default "noeviction" | quote }}
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          # A real write, not PING: at maxmemory with noeviction the server
+          # still answers PONG while refusing every write, so a PING-only probe
+          # keeps a wedged instance in the Service.
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli set __ready__ 1 EX 10 > /dev/null && redis-cli del __ready__ > /dev/null"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+{{- if .Values.redis.exporter.enabled }}
+        # A sidecar rather than its own Deployment: it reaches redis over
+        # localhost, so it cannot drift onto the wrong instance. No credentials
+        # -- this redis has no requirepass; wire REDIS_PASSWORD from the secret
+        # if auth is ever added. Same shape as foundry-platform's.
+        - name: redis-exporter
+          image: {{ .Values.redis.exporter.image | quote }}
+          args:
+            - "--redis.addr=redis://127.0.0.1:6379"
+            - "--web.listen-address=:9121"
+          ports:
+            - name: metrics
+              containerPort: 9121
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            # Its own uid: the pod runs as 999 for redis, and the exporter image
+            # does not expect to be that user.
+            runAsUser: 59000
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.redis.exporter.resources | nindent 12 }}
+{{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.redis.persistence.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.persistence.size }}
+{{- end }}

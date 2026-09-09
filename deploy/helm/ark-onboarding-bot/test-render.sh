@@ -84,10 +84,14 @@ render "${BASE[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=redis -
 # The durability argument, asserted rather than trusted: without an AOF a
 # restart loses every chat, and under allkeys-lru a body can be evicted while
 # its sidebar entry survives, leaving a thread that lists and opens empty.
-[ "$RC" -eq 0 ] && grep -q 'appendonly yes' <<<"$OUT" && grep -q 'maxmemory-policy noeviction' <<<"$OUT" && pass "persistence + noeviction in the config" || fail "redis durability config missing"
-# A config change must roll the pod: redis.conf is read once at start, so
-# without the checksum a persistence change renders green and never applies.
-[ "$RC" -eq 0 ] && grep -q 'checksum/config' <<<"$OUT" && pass "config change rolls the pod" || fail "no checksum/config annotation"
+[ "$RC" -eq 0 ] && grep -q -- '--appendonly' <<<"$OUT" && grep -q -- '--appendfsync' <<<"$OUT" && grep -q 'noeviction' <<<"$OUT" && pass "AOF + noeviction on the server args" || fail "redis durability config missing"
+# Redis is the record here, so it must hold a volume. foundry-platform's Redis
+# is a bus and holds none; copying that shape would lose every chat on restart.
+[ "$RC" -eq 0 ] && grep -q 'volumeClaimTemplates' <<<"$OUT" && grep -q 'mountPath: /data' <<<"$OUT" && pass "AOF has a volume to live on" || fail "redis has no persistent volume"
+# The exporter mirrors foundry-platform and stays off unless asked for.
+[ "$RC" -eq 0 ] && ! grep -q 'redis-exporter' <<<"$OUT" && pass "exporter off by default" || fail "exporter should be opt-in"
+render "${BASE[@]}" --set redis.enabled=true --set redis.exporter.enabled=true --set web.env.SESSION_STORE=redis
+[ "$RC" -eq 0 ] && grep -q 'redis-exporter' <<<"$OUT" && grep -q 'name: metrics' <<<"$OUT" && pass "exporter adds a sidecar and a metrics port" || fail "exporter render wrong"
 # Fail closed: a Redis the app never connects to looks healthy while chats
 # still vanish on restart.
 render "${BASE[@]}" --set redis.enabled=true; [ "$RC" -ne 0 ] && pass "redis without SESSION_STORE rejected" || fail "should reject redis.enabled with no SESSION_STORE"
