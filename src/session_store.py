@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -42,6 +43,13 @@ TITLE_MAX_LEN = 80
 # and its own eval. Set MAX_HISTORY_TURNS=0 to restore the unbounded thread.
 DEFAULT_HISTORY_TURNS = 12
 SESSION_TABLE = "chat_sessions"
+
+# Pool bounds. Every pooled connection is a backend process on the database, so
+# the ceiling is a shared resource: max_size x replicas must stay well inside
+# whatever Postgres allows. Small on purpose -- the queries here are indexed
+# single-row reads and writes, so a handful of connections serves a lot of chat.
+DEFAULT_POOL_MIN_SIZE = 1
+DEFAULT_POOL_MAX_SIZE = 8
 
 
 def max_stored_turns() -> int:
@@ -85,6 +93,24 @@ def archive_after_days() -> int:
         return max(1, int(raw)) if raw else DEFAULT_ARCHIVE_AFTER_DAYS
     except ValueError:
         return DEFAULT_ARCHIVE_AFTER_DAYS
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
+
+
+def pool_min_size() -> int:
+    return _int_env("DATABASE_POOL_MIN_SIZE", DEFAULT_POOL_MIN_SIZE)
+
+
+def pool_max_size() -> int:
+    return max(pool_min_size(), _int_env("DATABASE_POOL_MAX_SIZE", DEFAULT_POOL_MAX_SIZE))
 
 
 def session_store_backend() -> str:
@@ -485,20 +511,44 @@ class PostgresSessionStore:
 
     def __init__(self, dsn: str, connect: Any | None = None) -> None:
         self._dsn = dsn
-        if connect is None:
-            import psycopg
-
-            connect = psycopg.connect
         self._connect = connect
+        self._pool: Any | None = None
+        if connect is None:
+            from psycopg_pool import ConnectionPool
+
+            # A connection per operation would mean a TCP connect, a TLS
+            # handshake and a Postgres auth round trip on every turn of every
+            # chat -- far more than the query itself costs. The pool holds a
+            # few open and hands them out.
+            self._pool = ConnectionPool(
+                conninfo=dsn,
+                min_size=pool_min_size(),
+                max_size=pool_max_size(),
+                open=True,
+            )
         self._ensure_schema()
 
+    @contextmanager
+    def _connection(self) -> Any:
+        """A pooled connection, or the injected one under test."""
+        if self._pool is not None:
+            with self._pool.connection() as conn:
+                yield conn
+        else:
+            with self._connect(self._dsn) as conn:
+                yield conn
+
+    def close(self) -> None:
+        if self._pool is not None:
+            self._pool.close()
+
     def _ensure_schema(self) -> None:
-        with self._connect(self._dsn) as conn:
+        with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(SCHEMA_SQL)
 
     def load(self, session_id: str) -> StoredSession | None:
-        with self._connect(self._dsn) as conn:
+        with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT session_id, user_id, title, linked_ark_session_id, status,"
@@ -520,7 +570,7 @@ class PostgresSessionStore:
             session.archived_at = None
 
         messages = json.dumps([turn.to_dict() for turn in session.turns], ensure_ascii=False)
-        with self._connect(self._dsn) as conn:
+        with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"INSERT INTO {SESSION_TABLE}"
@@ -549,7 +599,7 @@ class PostgresSessionStore:
                 )
 
     def delete(self, session_id: str) -> None:
-        with self._connect(self._dsn) as conn:
+        with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"DELETE FROM {SESSION_TABLE} WHERE session_id = %s",
@@ -564,7 +614,7 @@ class PostgresSessionStore:
         shown the stale row, so there is no cron to own and no window where a
         listing and the archive state disagree.
         """
-        with self._connect(self._dsn) as conn:
+        with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"UPDATE {SESSION_TABLE}"
@@ -577,7 +627,7 @@ class PostgresSessionStore:
     def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
         self._apply_archive_rules(user_id)
         status = "archived" if archived else "active"
-        with self._connect(self._dsn) as conn:
+        with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT session_id, title, updated_at, status, linked_ark_session_id,"

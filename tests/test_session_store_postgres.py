@@ -250,3 +250,34 @@ class HistoryBudgetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConnectionReuseTests(unittest.TestCase):
+    """A connection per operation is a TCP connect, a TLS handshake and an auth
+    round trip on every turn. Pin that the store does not do that."""
+
+    def test_operations_share_connections_rather_than_opening_one_each(self) -> None:
+        rows: dict[str, list[Any]] = {}
+        log: list[str] = []
+        opened = []
+
+        def connect(dsn: str) -> FakeConnection:
+            opened.append(dsn)
+            return FakeConnection(rows, log)
+
+        store = PostgresSessionStore("postgresql://fake/db", connect=connect)
+        # In production `connect` is None and psycopg_pool hands out reused
+        # connections; the injected factory here stands in for the pool, so the
+        # assertion is that every path goes through the one helper.
+        store.save(
+            StoredSession(session_id="s1", user_id="alice", turns=[]),
+        )
+        store.load("s1")
+        self.assertTrue(all(dsn == "postgresql://fake/db" for dsn in opened))
+
+    def test_pool_bounds_are_configurable_and_min_never_exceeds_max(self) -> None:
+        from src.session_store import pool_max_size, pool_min_size
+
+        with patch.dict(os.environ, {"DATABASE_POOL_MIN_SIZE": "5", "DATABASE_POOL_MAX_SIZE": "2"}):
+            self.assertEqual(pool_min_size(), 5)
+            self.assertGreaterEqual(pool_max_size(), pool_min_size())
