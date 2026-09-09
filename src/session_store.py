@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -640,6 +641,190 @@ def _row_to_session(row: Any) -> StoredSession | None:
     )
 
 
+# --- The cache tier -------------------------------------------------------
+#
+# Postgres is the record. Redis in front of it makes opening a recent thread
+# instant, which is the behaviour the standup asked for: clicking a chat in the
+# sidebar should load the way it does in ChatGPT, and an older one may take a
+# moment while it comes back from the database.
+#
+# The cache is deliberately NOT a SessionStore. A store owns the per-user index
+# and must answer "list every thread this user has"; a cache holds whatever it
+# happens to have and is allowed to lose it. Serving a listing from a partial
+# cache would silently hide threads, so listings always go to the record and
+# only thread bodies are cached. That also keeps the lazy archive sweep honest,
+# since the sweep lives in the listing query.
+#
+# Write-through, never write-behind. Every turn reaches Postgres before the
+# cache is touched, so nothing is ever only in Redis and losing the entire
+# keyspace costs nothing but latency.
+
+CACHE_KEY_PREFIX = f"{SESSION_KEY_PREFIX}cache:session:"
+
+# A cache that takes longer than this is not helping. Without an explicit
+# timeout the client waits indefinitely, so an unreachable Redis would hang
+# every request instead of being skipped.
+CACHE_TIMEOUT_SECONDS = 0.25
+
+# After this many consecutive failures the cache is bypassed entirely for the
+# cooldown, so a dead Redis costs one timeout rather than one per request.
+CACHE_BREAKER_FAILURES = 5
+CACHE_BREAKER_COOLDOWN_SECONDS = 30
+
+
+def session_cache_ttl_seconds() -> int:
+    """How long a thread stays hot.
+
+    Defaults to the archive window, which makes the two settings agree by
+    construction: a thread falls out of cache at the same moment it stops
+    being recent, so "archived" and "loads lazily from Postgres" describe the
+    same threads rather than drifting apart.
+    """
+    raw = os.environ.get("SESSION_CACHE_TTL_SECONDS", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return archive_after_days() * 86400
+
+
+class SessionCache(Protocol):
+    def get(self, session_id: str) -> str | None: ...
+
+    def set(self, session_id: str, payload: str) -> None: ...
+
+    def drop(self, session_id: str) -> None: ...
+
+
+class RedisSessionCache:
+    """Thread bodies, by key, with a TTL. Nothing else.
+
+    Keys are namespaced away from RedisSessionStore's, so a deployment can run
+    the standalone Redis store and this cache against one instance without them
+    colliding.
+    """
+
+    def __init__(self, url: str, ttl_seconds: int | None = None, client: Any | None = None) -> None:
+        if client is None:
+            import redis
+
+            client = redis.Redis.from_url(
+                url,
+                decode_responses=True,
+                socket_timeout=CACHE_TIMEOUT_SECONDS,
+                socket_connect_timeout=CACHE_TIMEOUT_SECONDS,
+            )
+        self._client = client
+        self._ttl = ttl_seconds if ttl_seconds is not None else session_cache_ttl_seconds()
+
+    def _key(self, session_id: str) -> str:
+        return f"{CACHE_KEY_PREFIX}{session_id}"
+
+    def get(self, session_id: str) -> str | None:
+        return self._client.get(self._key(session_id))
+
+    def set(self, session_id: str, payload: str) -> None:
+        self._client.setex(self._key(session_id), self._ttl, payload)
+
+    def drop(self, session_id: str) -> None:
+        self._client.delete(self._key(session_id))
+
+
+def _warn_cache_error(operation: str, exc: Exception) -> None:
+    print(
+        f"session cache {operation} failed, serving from the record instead: {exc!r}",
+        file=sys.stderr,
+    )
+
+
+class CachedSessionStore:
+    """A durable store with a cache in front. The architecture, assembled.
+
+    Reads try the cache and fall back to the record, then repopulate. Writes go
+    to the record first and the cache second. Every cache call is wrapped: a
+    cache that is slow, broken or entirely absent degrades this to plain
+    Postgres, and never fails a user's request.
+    """
+
+    def __init__(
+        self,
+        durable: SessionStore,
+        cache: SessionCache,
+        on_error: Any | None = None,
+    ) -> None:
+        self._durable = durable
+        self._cache = cache
+        self._on_error = on_error or _warn_cache_error
+        self._failures = 0
+        self._bypass_until = 0.0
+
+    # -- breaker ----------------------------------------------------------
+    def _cache_usable(self) -> bool:
+        if self._failures < CACHE_BREAKER_FAILURES:
+            return True
+        if time.time() >= self._bypass_until:
+            self._failures = 0
+            return True
+        return False
+
+    def _succeeded(self) -> None:
+        self._failures = 0
+
+    def _failed(self, operation: str, exc: Exception) -> None:
+        self._failures += 1
+        if self._failures >= CACHE_BREAKER_FAILURES:
+            self._bypass_until = time.time() + CACHE_BREAKER_COOLDOWN_SECONDS
+        self._on_error(operation, exc)
+
+    # -- store ------------------------------------------------------------
+    def _populate(self, session: StoredSession) -> None:
+        if not self._cache_usable():
+            return
+        try:
+            self._cache.set(session.session_id, session.to_json())
+            self._succeeded()
+        except Exception as exc:  # noqa: BLE001 - a cache must never fail a request
+            self._failed("set", exc)
+
+    def load(self, session_id: str) -> StoredSession | None:
+        if self._cache_usable():
+            try:
+                raw = self._cache.get(session_id)
+                self._succeeded()
+                if raw:
+                    cached = StoredSession.from_json(raw)
+                    if cached is not None:
+                        return cached
+            except Exception as exc:  # noqa: BLE001
+                self._failed("get", exc)
+        session = self._durable.load(session_id)
+        if session is not None:
+            self._populate(session)
+        return session
+
+    def save(self, session: StoredSession) -> None:
+        # The record first, and only then the copy. Reversing these two lines
+        # is what turns a cache into a place data can be lost.
+        self._durable.save(session)
+        self._populate(session)
+
+    def delete(self, session_id: str) -> None:
+        self._durable.delete(session_id)
+        if not self._cache_usable():
+            return
+        try:
+            self._cache.drop(session_id)
+            self._succeeded()
+        except Exception as exc:  # noqa: BLE001
+            self._failed("drop", exc)
+
+    def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
+        # Always the record. A cache cannot answer "every thread this user has"
+        # without risking a short answer, and the idle-archive sweep runs here.
+        return self._durable.list_for_user(user_id, archived)
+
+
 _store: SessionStore | None = None
 
 
@@ -651,7 +836,14 @@ def build_session_store() -> SessionStore:
         dsn = os.environ.get("DATABASE_URL", "").strip()
         if not dsn:
             raise RuntimeError("SESSION_STORE=postgres requires DATABASE_URL to be set.")
-        return PostgresSessionStore(dsn)
+        durable: SessionStore = PostgresSessionStore(dsn)
+        # REDIS_URL alongside postgres means "cache in front", not "store".
+        # Absent, the bot runs on Postgres alone: slower on a warm thread,
+        # identical in what it remembers.
+        cache_url = os.environ.get("REDIS_URL", "").strip()
+        if cache_url:
+            return CachedSessionStore(durable, RedisSessionCache(cache_url))
+        return durable
     if backend == "redis":
         url = os.environ.get("REDIS_URL", "").strip()
         if not url:
