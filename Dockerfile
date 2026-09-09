@@ -28,12 +28,19 @@ WORKDIR /home/app/app
 # Cursor agent CLI — the answer layer shells out to `agent` (found via PATH).
 RUN curl https://cursor.com/install -fsS | bash
 
-# App code (includes the committed data/ corpus).
-COPY --chown=app:app . /home/app/app
-
 # Pre-cache the embedding model so /ready and the first answer don't stall on a
 # download at runtime.
+#
+# BEFORE the COPY, deliberately. This layer depends on nothing in the repo, but
+# Docker invalidates every layer after a changed one -- so with the COPY first,
+# editing a single word of a doc re-downloaded ~90MB of model weights on every
+# build. Nothing above this line changes unless requirements.txt does, so the
+# cache now survives ordinary code and corpus edits.
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
+# App code (includes the committed data/ corpus). Last, because it changes on
+# every commit and everything after it would be rebuilt.
+COPY --chown=app:app . /home/app/app
 
 # Runtime defaults. CURSOR_WORKSPACE points at an empty dir so the agent does not
 # scan the app tree on every answer (keeps latency down). HF_HUB_OFFLINE /
