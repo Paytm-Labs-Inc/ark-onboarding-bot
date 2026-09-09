@@ -311,13 +311,21 @@ class SignOutClearsTheStoredChatTests(unittest.TestCase):
     def _template(self, name: str) -> str:
         return (self.ROOT / "src" / "templates" / name).read_text(encoding="utf-8")
 
-    def test_the_login_page_clears_the_stored_chat(self) -> None:
-        # The guarantee: every route to an unauthenticated state lands here --
-        # the sign-out link, a typed /logout, an expired cookie, the auth
-        # redirect -- so the clear belongs on this page, not only on the link.
+    def test_logout_signals_the_sign_out_to_the_login_page(self) -> None:
+        client = TestClient(app)
+        response = client.get("/logout", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("signed_out=1", response.headers["location"])
+
+    def test_the_login_page_clears_only_on_a_real_sign_out(self) -> None:
+        # /login is public and reachable with a valid cookie -- Back after
+        # signing in, a bookmark, a second tab. Clearing on every load would
+        # wipe a conversation the user never left.
         login = self._template("login.html")
         self.assertIn("localStorage.removeItem", login)
-        self.assertIn("ark-onboarding-bot:chat:", login)
+        clear_at = login.index("localStorage.removeItem")
+        guard = login[max(0, clear_at - 400) : clear_at]
+        self.assertIn("signed_out", guard, "the clear is not gated on the sign-out signal")
 
     def test_the_sign_out_link_clears_before_navigating(self) -> None:
         chat = self._template("chat.html")
