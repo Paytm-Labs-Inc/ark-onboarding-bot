@@ -204,7 +204,7 @@
       </div>
       <div class="header-actions">
         <a href="reviews">Reviews</a>
-        <a href="logout">Sign out</a>
+        <a href="logout" id="sign-out">Sign out</a>
         <button type="button" class="secondary" id="new-chat">New chat</button>
       </div>
     </header>
@@ -241,6 +241,13 @@
       const base = document.querySelector("base")?.getAttribute("href") || "/";
       return `ark-onboarding-bot:chat:${base}`;
     }
+
+    // Drop the stored chat at click time as well as on the login page. The
+    // login-page clear is the guarantee; this one means the transcript is gone
+    // before the redirect, not a moment after it.
+    document.getElementById("sign-out")?.addEventListener("click", () => {
+      clearStoredChat();
+    });
 
     function readStoredChat() {
       try {

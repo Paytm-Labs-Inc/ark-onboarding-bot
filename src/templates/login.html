@@ -97,6 +97,35 @@
         statusEl.textContent = "Sign in failed. Try again.";
       }
     });
+    // Drop the browser's cached chat, but only on a real sign-out. /login is
+    // public and reachable while still signed in, so clearing on every load
+    // would wipe a live conversation (Bugbot, on the first cut of this fix).
+    //
+    // This removes the BROWSER COPY ONLY and must stay that way. Once chats are
+    // stored server-side under a Paytm SSO identity, signing out must not
+    // delete anyone's history -- the server record is the source of truth and
+    // this is a cache. At that point the key below should also carry the user
+    // id, so two people sharing a browser cannot inherit each other's chat even
+    // without signing out.
+    if (new URLSearchParams(location.search).has("signed_out")) {
+      try {
+        const base = document.querySelector("base")?.getAttribute("href") || "/";
+        localStorage.removeItem(`ark-onboarding-bot:chat:${base}`);
+      } catch (_err) {
+        // Private mode or blocked storage -- nothing was persisted either.
+      }
+      // Drop the flag once it has been acted on. Left in the URL it survives a
+      // refresh, a Back, and a bookmark, so a page the user reaches long after
+      // signing out would clear a chat they started since (Bugbot). replaceState
+      // rather than pushState: this is not a navigation the user should be able
+      // to step back into.
+      try {
+        const url = new URL(location.href);
+        url.searchParams.delete("signed_out");
+        history.replaceState(null, "", url.pathname + url.search + url.hash);
+      } catch (_err) {}
+    }
+
     tokenEl.focus();
   </script>
 </body>

@@ -296,6 +296,61 @@ class BackendCredentialReadinessTests(unittest.TestCase):
         self.assertEqual(self.client.get("/ready").status_code, 200)
 
 
+class SignOutClearsTheStoredChatTests(unittest.TestCase):
+    """Signing out must not leave the transcript in the browser.
+
+    The chat is persisted under `ark-onboarding-bot:chat:<base>` -- a key built
+    only from the base path, with no user in it -- and /logout is a server-side
+    redirect that can only drop the cookie. So signing out and back in restored
+    the previous conversation, and on a shared machine showed it to someone who
+    was never part of it.
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def _template(self, name: str) -> str:
+        return (self.ROOT / "src" / "templates" / name).read_text(encoding="utf-8")
+
+    def test_logout_signals_the_sign_out_to_the_login_page(self) -> None:
+        client = TestClient(app)
+        response = client.get("/logout", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("signed_out=1", response.headers["location"])
+
+    def test_the_login_page_clears_only_on_a_real_sign_out(self) -> None:
+        # /login is public and reachable with a valid cookie -- Back after
+        # signing in, a bookmark, a second tab. Clearing on every load would
+        # wipe a conversation the user never left.
+        login = self._template("login.html")
+        self.assertIn("localStorage.removeItem", login)
+        clear_at = login.index("localStorage.removeItem")
+        guard = login[max(0, clear_at - 400) : clear_at]
+        self.assertIn("signed_out", guard, "the clear is not gated on the sign-out signal")
+
+    def test_the_sign_out_link_clears_before_navigating(self) -> None:
+        chat = self._template("chat.html")
+        self.assertIn('id="sign-out"', chat)
+        start = chat.index('getElementById("sign-out")')
+        handler = chat[start : start + 240]
+        self.assertIn("clearStoredChat()", handler)
+
+    def test_the_sign_out_flag_does_not_survive_the_page(self) -> None:
+        # Left in the URL the flag outlives the sign-out: a refresh, a Back, or a
+        # bookmark would re-run the clear and wipe a chat started since.
+        login = self._template("login.html")
+        self.assertIn("searchParams.delete", login)
+        self.assertIn("replaceState", login)
+
+    def test_the_storage_key_and_the_clear_agree(self) -> None:
+        # The two templates build the key independently; if one drifts the
+        # clear silently stops matching what was written.
+        chat = self._template("chat.html")
+        login = self._template("login.html")
+        key = "ark-onboarding-bot:chat:${base}"
+        self.assertIn(key, chat, "chat.html no longer builds the expected key")
+        self.assertIn(key, login, "login.html clears a different key than chat.html writes")
+
+
 class ErrorTextAndHeadersTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)

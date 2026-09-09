@@ -276,7 +276,11 @@ def login_submit(request: Request, body: LoginRequest) -> Response:
 
 @app.get("/logout")
 def logout() -> Response:
-    response = RedirectResponse(url=f"{base_path()}/login", status_code=303)
+    # ?signed_out=1 tells the login page to drop the browser's cached chat.
+    # The page cannot infer it: /login is public and reachable with a valid
+    # cookie (Back after signing in, a bookmark, a second tab), so clearing on
+    # every load would wipe a conversation the user never left.
+    response = RedirectResponse(url=f"{base_path()}/login?signed_out=1", status_code=303)
     response.delete_cookie(COOKIE_NAME, path=base_path() or "/")
     return response
 
