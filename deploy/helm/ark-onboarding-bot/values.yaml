@@ -98,6 +98,35 @@ logs:
     size: 1Gi
     storageClassName: ""
 
+# Redis for chat threads. Off by default: the chart must render for anyone who
+# has not provisioned a volume, and the bot falls back to the in-process store.
+# Enable it in the environment overlay alongside SESSION_STORE=redis.
+#
+# In-cluster rather than ElastiCache, deliberately: at measured traffic
+# (~6 questions/day) this holds ~29k sessions in 200mb and costs nothing beyond
+# the EBS volume, where ElastiCache would be new metered spend for no gain.
+redis:
+  enabled: false
+  image:
+    repository: redis
+    tag: "7.4-alpine"
+    pullPolicy: IfNotPresent
+  # Below the container limit, so Redis refuses writes before the kernel
+  # OOM-kills the pod and takes the AOF's last seconds with it.
+  maxmemory: 200mb
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+      cpu: 250m
+  persistence:
+    # The AOF lives here. 1Gi is ~5x the maxmemory ceiling, which leaves room
+    # for the file to grow between rewrites.
+    size: 1Gi
+    storageClassName: ""
+
 slack:
   # The Slack worker is the same image with the command overridden. Socket Mode
   # means outbound only: no Service, no Ingress. Needs SLACK_BOT_TOKEN and

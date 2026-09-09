@@ -74,4 +74,22 @@ render "${BASE[@]}"; [ "$RC" -eq 0 ] && grep -q 'kind: PersistentVolumeClaim' <<
 # an assertion that can never fail. RC is checked for exactly that reason.
 render --set image.tag=90000000000001-abcdef0-arm64 --set ingress.enabled=false --set externalSecret.awsSecretPath=example/path; [ "$RC" -eq 0 ] && ! grep -q 'PersistentVolumeClaim' <<<"$OUT" && pass "chart default is emptyDir (documented as ephemeral)" || fail "chart default should render, and stay emptyDir"
 
+echo "== I: redis for chat sessions =="
+# Off by default: a chart consumer who has provisioned no volume must still render.
+render "${BASE[@]}"; [ "$RC" -eq 0 ] && ! grep -q 'component: redis' <<<"$OUT" && pass "redis absent unless enabled" || fail "redis should be opt-in"
+# Enabled: the three objects, and a StatefulSet rather than a Deployment -- the
+# AOF is the record, and a rolling Deployment fights its own RWO volume.
+render "${BASE[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=redis --set web.env.REDIS_URL=redis://ark-onboarding-bot-redis:6379/0
+[ "$RC" -eq 0 ] && grep -q 'kind: StatefulSet' <<<"$OUT" && grep -q 'name: ark-onboarding-bot-redis' <<<"$OUT" && grep -q 'kind: ConfigMap' <<<"$OUT" && pass "statefulset + service + config render" || fail "redis render wrong (rc=$RC)"
+# The durability argument, asserted rather than trusted: without an AOF a
+# restart loses every chat, and under allkeys-lru a body can be evicted while
+# its sidebar entry survives, leaving a thread that lists and opens empty.
+[ "$RC" -eq 0 ] && grep -q 'appendonly yes' <<<"$OUT" && grep -q 'maxmemory-policy noeviction' <<<"$OUT" && pass "persistence + noeviction in the config" || fail "redis durability config missing"
+# A config change must roll the pod: redis.conf is read once at start, so
+# without the checksum a persistence change renders green and never applies.
+[ "$RC" -eq 0 ] && grep -q 'checksum/config' <<<"$OUT" && pass "config change rolls the pod" || fail "no checksum/config annotation"
+# Fail closed: a Redis the app never connects to looks healthy while chats
+# still vanish on restart.
+render "${BASE[@]}" --set redis.enabled=true; [ "$RC" -ne 0 ] && pass "redis without SESSION_STORE rejected" || fail "should reject redis.enabled with no SESSION_STORE"
+
 echo; [ "$FAILED" -eq 0 ] && echo "All ark-onboarding-bot render assertions passed." || echo "Render assertions FAILED."; exit "$FAILED"
