@@ -13,8 +13,10 @@ from src.citations import parse_citation
 from src.session_store import (
     StoredSession,
     StoredTurn,
+    compile_history_summary,
     extract_ark_session_id,
     get_session_store,
+    history_summary_max_chars,
     max_history_turns,
     stored_to_payload,
     title_from_question,
@@ -41,12 +43,28 @@ class ChatSession:
     updated_at: str = ""
     archived: bool = False
     archived_at: str | None = None
+    history_summary: str = ""
     turns: list[ChatTurn] = field(default_factory=list)
 
     def history_for_prompt(self) -> list[dict[str, str]]:
         cap = max_history_turns()
-        recent = self.turns if cap <= 0 else self.turns[-cap:]
-        return [{"question": turn.question, "answer": turn.answer} for turn in recent]
+        if cap <= 0:
+            recent = self.turns
+        else:
+            recent = self.turns[-cap:]
+            if self.turns and self.turns[0] not in recent:
+                recent = [self.turns[0], *recent]
+        history = [{"question": turn.question, "answer": turn.answer} for turn in recent]
+        summary = self.history_summary.strip()
+        if summary:
+            history = [
+                {
+                    "question": "(Earlier conversation summary)",
+                    "answer": summary,
+                },
+                *history,
+            ]
+        return history
 
     def add_turn(
         self,
@@ -68,6 +86,18 @@ class ChatSession:
                 retrieved_sources=retrieved_sources,
             )
         )
+
+
+def refresh_history_summary(session: ChatSession) -> None:
+    cap = max_history_turns()
+    if cap <= 0:
+        session.history_summary = ""
+        return
+    session.history_summary = compile_history_summary(
+        session.turns,
+        verbatim_cap=cap,
+        max_chars=history_summary_max_chars(),
+    )
 
 
 def _turn_to_stored(turn: ChatTurn) -> StoredTurn:
@@ -98,6 +128,7 @@ def _session_from_stored(stored: StoredSession) -> ChatSession:
         updated_at=stored.updated_at,
         archived=stored.archived,
         archived_at=stored.archived_at,
+        history_summary=stored.history_summary,
     )
     session.turns = [_stored_to_turn(turn) for turn in stored.turns]
     return session
@@ -113,6 +144,7 @@ def _session_to_stored(session: ChatSession) -> StoredSession:
         updated_at=session.updated_at,
         archived=session.archived,
         archived_at=session.archived_at,
+        history_summary=session.history_summary,
         turns=[_turn_to_stored(turn) for turn in session.turns],
     )
 
@@ -133,6 +165,7 @@ def get_session(session_id: str | None, user_id: str = ANONYMOUS_USER) -> tuple[
 
 
 def save_session(session: ChatSession) -> None:
+    refresh_history_summary(session)
     get_session_store().save(_session_to_stored(session))
 
 
