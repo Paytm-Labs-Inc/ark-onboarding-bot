@@ -74,4 +74,33 @@ render "${BASE[@]}"; [ "$RC" -eq 0 ] && grep -q 'kind: PersistentVolumeClaim' <<
 # an assertion that can never fail. RC is checked for exactly that reason.
 render --set image.tag=90000000000001-abcdef0-arm64 --set ingress.enabled=false --set externalSecret.awsSecretPath=example/path; [ "$RC" -eq 0 ] && ! grep -q 'PersistentVolumeClaim' <<<"$OUT" && pass "chart default is emptyDir (documented as ephemeral)" || fail "chart default should render, and stay emptyDir"
 
+echo "== I: redis for chat sessions =="
+# Off by default: a chart consumer who has provisioned no volume must still render.
+render "${BASE[@]}"; [ "$RC" -eq 0 ] && ! grep -q 'component: redis' <<<"$OUT" && pass "redis absent unless enabled" || fail "redis should be opt-in"
+# Enabled: the three objects, and a StatefulSet rather than a Deployment -- the
+# AOF is the record, and a rolling Deployment fights its own RWO volume.
+render "${BASE[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=redis --set web.env.REDIS_URL=redis://ark-onboarding-bot-redis:6379/0
+[ "$RC" -eq 0 ] && grep -q 'kind: StatefulSet' <<<"$OUT" && grep -q 'name: ark-onboarding-bot-redis' <<<"$OUT" && grep -q 'targetPort: redis' <<<"$OUT" && pass "statefulset + service render" || fail "redis render wrong (rc=$RC)"
+# The durability argument, asserted rather than trusted: without an AOF a
+# restart loses every chat, and under allkeys-lru a body can be evicted while
+# its sidebar entry survives, leaving a thread that lists and opens empty.
+[ "$RC" -eq 0 ] && grep -q -- '--appendonly' <<<"$OUT" && grep -q -- '--appendfsync' <<<"$OUT" && grep -q 'noeviction' <<<"$OUT" && pass "AOF + noeviction on the server args" || fail "redis durability config missing"
+# The probe must fail on a Redis ERROR REPLY, not only a non-zero exit: redis-cli
+# exits 0 when the server answers "OOM command not allowed", which is precisely
+# the write-refusing state readiness is here to catch.
+# Grep the NESTED form: a `command:` at exec's own indent is a sibling, not a
+# child, so the probe renders with no command at all -- and a bare grep for the
+# script text passes anyway, which is how the mis-indent shipped in the first place.
+[ "$RC" -eq 0 ] && grep -q '^              command: \["sh", "-c", "\[ ..\$(redis-cli set' <<<"$OUT" && pass "readiness command is nested under exec" || fail "readiness probe command is not nested under exec"
+# Redis is the record here, so it must hold a volume. foundry-platform's Redis
+# is a bus and holds none; copying that shape would lose every chat on restart.
+[ "$RC" -eq 0 ] && grep -q 'volumeClaimTemplates' <<<"$OUT" && grep -q 'mountPath: /data' <<<"$OUT" && pass "AOF has a volume to live on" || fail "redis has no persistent volume"
+# The exporter mirrors foundry-platform and stays off unless asked for.
+[ "$RC" -eq 0 ] && ! grep -q 'redis-exporter' <<<"$OUT" && pass "exporter off by default" || fail "exporter should be opt-in"
+render "${BASE[@]}" --set redis.enabled=true --set redis.exporter.enabled=true --set web.env.SESSION_STORE=redis
+[ "$RC" -eq 0 ] && grep -q 'redis-exporter' <<<"$OUT" && grep -q 'name: metrics' <<<"$OUT" && pass "exporter adds a sidecar and a metrics port" || fail "exporter render wrong"
+# Fail closed: a Redis the app never connects to looks healthy while chats
+# still vanish on restart.
+render "${BASE[@]}" --set redis.enabled=true; [ "$RC" -ne 0 ] && pass "redis without SESSION_STORE rejected" || fail "should reject redis.enabled with no SESSION_STORE"
+
 echo; [ "$FAILED" -eq 0 ] && echo "All ark-onboarding-bot render assertions passed." || echo "Render assertions FAILED."; exit "$FAILED"

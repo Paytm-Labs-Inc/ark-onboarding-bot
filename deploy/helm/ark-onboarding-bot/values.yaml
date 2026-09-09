@@ -98,6 +98,63 @@ logs:
     size: 1Gi
     storageClassName: ""
 
+# Redis for chat threads. Values shaped to match foundry-platform's redis block
+# (enabled / image / maxmemory / maxmemoryPolicy / exporter) so the two charts
+# read the same way, with one deliberate difference: their Redis is a pub/sub
+# bus backed by Postgres and holds no volume, ours is the store of record for
+# chat threads and carries an AOF. That is why persistence exists here and why
+# maxmemoryPolicy defaults to noeviction rather than volatile-lru.
+#
+# Off by default: the chart must render for anyone who has not provisioned a
+# volume, and the bot falls back to the in-process store. Enable it in the
+# environment overlay alongside SESSION_STORE=redis.
+#
+# In-cluster rather than ElastiCache: measured ~6.8 KB per 4-turn session, so
+# 200mb holds roughly 29k sessions, and at ~6 questions/day ElastiCache would be
+# new metered spend for nothing measurable.
+redis:
+  enabled: false
+  image: redis:7-alpine
+  # Caps the DATASET, not the pod. Keep it below the container memory limit so
+  # Redis refuses writes before the kernel OOM-kills the pod. Empty = unbounded.
+  maxmemory: 200mb
+  # noeviction on purpose -- see redis-deployment.yaml. Overridable, but a
+  # policy that evicts will silently corrupt sessions here.
+  maxmemoryPolicy: noeviction
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  persistence:
+    # Holds the AOF. ~5x the maxmemory ceiling, leaving room for the file to
+    # grow between rewrites.
+    size: 1Gi
+    storageClassName: ""
+  # External Redis (when redis.enabled=false). Foundry already runs one
+  # in-cluster; if the platform would rather we share theirs than run a second,
+  # point REDIS_URL at it and leave enabled=false -- no pod, no volume, no new
+  # resource at all. Recorded here so that stays a config change, not a rewrite.
+  external:
+    host: ""
+    port: 6379
+    existingSecret: ""
+
+  # redis_exporter sidecar, mirroring foundry-platform (PAI-44174). OFF by
+  # default so any other consumer of this chart is unaffected.
+  exporter:
+    enabled: false
+    image: oliver006/redis_exporter:v1.62.0
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
 slack:
   # The Slack worker is the same image with the command overridden. Socket Mode
   # means outbound only: no Service, no Ingress. Needs SLACK_BOT_TOKEN and
