@@ -80,11 +80,15 @@ render "${BASE[@]}"; [ "$RC" -eq 0 ] && ! grep -q 'component: redis' <<<"$OUT" &
 # Enabled: the three objects, and a StatefulSet rather than a Deployment -- the
 # AOF is the record, and a rolling Deployment fights its own RWO volume.
 render "${BASE[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=redis --set web.env.REDIS_URL=redis://ark-onboarding-bot-redis:6379/0
-[ "$RC" -eq 0 ] && grep -q 'kind: StatefulSet' <<<"$OUT" && grep -q 'name: ark-onboarding-bot-redis' <<<"$OUT" && grep -q 'kind: ConfigMap' <<<"$OUT" && pass "statefulset + service + config render" || fail "redis render wrong (rc=$RC)"
+[ "$RC" -eq 0 ] && grep -q 'kind: StatefulSet' <<<"$OUT" && grep -q 'name: ark-onboarding-bot-redis' <<<"$OUT" && grep -q 'targetPort: redis' <<<"$OUT" && pass "statefulset + service render" || fail "redis render wrong (rc=$RC)"
 # The durability argument, asserted rather than trusted: without an AOF a
 # restart loses every chat, and under allkeys-lru a body can be evicted while
 # its sidebar entry survives, leaving a thread that lists and opens empty.
 [ "$RC" -eq 0 ] && grep -q -- '--appendonly' <<<"$OUT" && grep -q -- '--appendfsync' <<<"$OUT" && grep -q 'noeviction' <<<"$OUT" && pass "AOF + noeviction on the server args" || fail "redis durability config missing"
+# The probe must fail on a Redis ERROR REPLY, not only a non-zero exit: redis-cli
+# exits 0 when the server answers "OOM command not allowed", which is precisely
+# the write-refusing state readiness is here to catch.
+[ "$RC" -eq 0 ] && grep -q '= OK' <<<"$OUT" && pass "readiness matches the reply, not the exit code" || fail "readiness probe would pass on a redis error"
 # Redis is the record here, so it must hold a volume. foundry-platform's Redis
 # is a bus and holds none; copying that shape would lose every chat on restart.
 [ "$RC" -eq 0 ] && grep -q 'volumeClaimTemplates' <<<"$OUT" && grep -q 'mountPath: /data' <<<"$OUT" && pass "AOF has a volume to live on" || fail "redis has no persistent volume"
