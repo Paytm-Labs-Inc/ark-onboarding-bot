@@ -114,6 +114,16 @@
       } catch (_err) {
         // Private mode or blocked storage -- nothing was persisted either.
       }
+      // Drop the flag once it has been acted on. Left in the URL it survives a
+      // refresh, a Back, and a bookmark, so a page the user reaches long after
+      // signing out would clear a chat they started since (Bugbot). replaceState
+      // rather than pushState: this is not a navigation the user should be able
+      // to step back into.
+      try {
+        const url = new URL(location.href);
+        url.searchParams.delete("signed_out");
+        history.replaceState(null, "", url.pathname + url.search + url.hash);
+      } catch (_err) {}
     }
 
     tokenEl.focus();

@@ -334,6 +334,13 @@ class SignOutClearsTheStoredChatTests(unittest.TestCase):
         handler = chat[start : start + 240]
         self.assertIn("clearStoredChat()", handler)
 
+    def test_the_sign_out_flag_does_not_survive_the_page(self) -> None:
+        # Left in the URL the flag outlives the sign-out: a refresh, a Back, or a
+        # bookmark would re-run the clear and wipe a chat started since.
+        login = self._template("login.html")
+        self.assertIn("searchParams.delete", login)
+        self.assertIn("replaceState", login)
+
     def test_the_storage_key_and_the_clear_agree(self) -> None:
         # The two templates build the key independently; if one drifts the
         # clear silently stops matching what was written.
