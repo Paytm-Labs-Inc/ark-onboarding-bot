@@ -1,5 +1,6 @@
-Drop a manual Google Docs export here when automated fetch is blocked by auth:
+Drop a manual export here when an automated fetch is blocked by auth.
 
-- `faq-google-doc.txt` or `faq-google-doc.md`
+Nothing is expected here today: the Google Docs FAQ that needed a manual export
+was a duplicate of the scraped `faq` page and was removed from the corpus.
 
-See README.md for export steps.
+See README.md for export steps if a future source needs one.

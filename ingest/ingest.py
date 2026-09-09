@@ -21,9 +21,6 @@ DATA_DIR = ROOT / "data"
 SOURCES_DIR = ROOT / "sources"
 FOUNDRY_SITE = "https://foundry.mypaytm.com"
 
-GDOCS_FAQ_ID = "1cFO96__cGuADEFvR_ahHcc0ILmYWvIrodjwMguihVbY"
-GDOCS_FAQ_URL = f"https://docs.google.com/document/d/{GDOCS_FAQ_ID}/edit"
-GDOCS_FAQ_EXPORT = f"https://docs.google.com/document/d/{GDOCS_FAQ_ID}/export?format=txt"
 
 
 @dataclass(frozen=True)
@@ -132,14 +129,6 @@ SOURCES: tuple[Source, ...] = (
         local_relpath="doc-site/faq.md",
     ),
 )
-
-GDOCS_SOURCE = Source(
-    slug="faq-google-doc",
-    url=GDOCS_FAQ_URL,
-    markdown_name="",
-    local_relpath="",
-)
-
 
 def _header(source_url: str) -> str:
     return f"Source: {source_url}\n\n"
@@ -562,53 +551,6 @@ def ingest_foundry_page(
     return fetch_vitepress_markdown(source, hash_map)
 
 
-def fetch_gdocs_faq() -> str | None:
-    try:
-        body = fetch_url(GDOCS_FAQ_EXPORT)
-    except urllib.error.HTTPError as exc:
-        if exc.code in {401, 403, 404}:
-            return None
-        raise
-    except urllib.error.URLError:
-        return None
-    if body.lstrip().startswith("<!DOCTYPE") or "Sign in to your Google Account" in body:
-        return None
-    text = body.replace("\r\n", "\n").strip()
-    return text + "\n" if text else None
-
-
-def ingest_gdocs_faq(*, manual_path: Path | None) -> str:
-    exported = fetch_gdocs_faq()
-    if exported:
-        print("  web:   Google Docs export")
-        return exported
-
-    candidates = [
-        manual_path,
-        SOURCES_DIR / "faq-google-doc.txt",
-        SOURCES_DIR / "faq-google-doc.md",
-    ]
-    for path in candidates:
-        if path and path.is_file():
-            print(f"  file:  {path}")
-            return path.read_text(encoding="utf-8").strip() + "\n"
-
-    msg = textwrap.dedent(
-        f"""
-        Google Docs FAQ could not be fetched automatically (auth required).
-
-        Export the doc manually and save it to one of:
-          - sources/faq-google-doc.txt
-          - sources/faq-google-doc.md
-
-        Or re-run with: --gdoc-file /path/to/export.txt
-
-        Doc URL: {GDOCS_FAQ_URL}
-        """
-    ).strip()
-    raise RuntimeError(msg)
-
-
 def write_corpus(slug: str, source_url: str, body: str, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{slug}.md"
@@ -629,12 +571,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Path to foundry-platform clone (or set FOUNDRY_PLATFORM_PATH)",
-    )
-    parser.add_argument(
-        "--gdoc-file",
-        type=Path,
-        default=None,
-        help="Manual Google Docs FAQ export (.txt or .md)",
     )
     parser.add_argument(
         "--site",
@@ -697,16 +633,6 @@ def main(argv: list[str] | None = None) -> int:
         path = write_corpus(source.slug, source.url, body, args.out)
         written.append(path)
         print(f"  -> {path} ({path.stat().st_size} bytes)")
-
-    print(f"[{GDOCS_SOURCE.slug}]")
-    try:
-        gdoc_body = ingest_gdocs_faq(manual_path=args.gdoc_file)
-        path = write_corpus(GDOCS_SOURCE.slug, GDOCS_SOURCE.url, gdoc_body, args.out)
-        written.append(path)
-        print(f"  -> {path} ({path.stat().st_size} bytes)")
-    except RuntimeError as exc:
-        print(f"  skipped: {exc}", file=sys.stderr)
-        return 1
 
     print("\nSources ingested:")
     for path in written:

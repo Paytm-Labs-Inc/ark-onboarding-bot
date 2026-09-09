@@ -10,7 +10,6 @@ __pycache__/
 eval/results/
 # Runtime logs (feedback.jsonl, query_log.jsonl, etc.) — never bake local traffic into the image.
 eval/*.jsonl
-sources/faq-google-doc.*
 *.log
 .DS_Store
 .pytest_cache/
