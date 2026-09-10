@@ -218,6 +218,30 @@ Reports land in `eval/triage-reports/weekly-YYYY-MM-DD.{txt,json}` on the host.
 Until the bot has real traffic on the deployed host, the log (and report) will be
 empty — that is expected. The timer is safe to install early.
 
+## Foundry site overlay (embed widget)
+
+The bot serves a compact chat at `/embed` (or `{BASE_PATH}/embed`) for use inside
+an iframe, plus static assets for the floating launcher:
+
+- `/static/overlay.css` — purple bubble + slide-up panel (Ark tokens)
+- `/static/overlay.js` — toggles the panel and lazy-loads the iframe
+
+**foundry-platform** adds these to every doc page (Anubhav's side), before `</body>`:
+
+```html
+<link rel="stylesheet" href="/onboarding-bot/static/overlay.css" />
+<script>
+  window.__ARK_OVERLAY_CONFIG__ = { embedUrl: "/onboarding-bot/embed" };
+</script>
+<script src="/onboarding-bot/static/overlay.js"></script>
+```
+
+Set `EMBED_FRAME_ANCESTORS=https://foundry.mypaytm.com` in prod so `/embed` may be
+framed by the doc site. The full-page UI still sets `frame-ancestors 'none'`.
+
+**Local smoke:** open `/embed` directly, or drop the three tags above into any HTML
+page pointing at `http://127.0.0.1:8765`.
+
 ## Notes
 
 - **Sessions are in-memory.** Multi-turn chat history lives in the process, so a
