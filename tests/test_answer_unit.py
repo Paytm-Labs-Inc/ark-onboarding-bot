@@ -916,6 +916,69 @@ class CursorCliStreamTests(unittest.TestCase):
 
 
 
+class RoadmapPromiseCarriesNoDateTests(unittest.TestCase):
+    """The USER must not be told a date the corpus never stated.
+
+    decline_states_a_date started as an eval-only guard, which made it no guard
+    at all: a promise carrying a roadmap citation is BACKED, so
+    roadmap_promise_unbacked falls straight through and the fabricated date
+    reached the answer -- attributed to the roadmap page the citation names.
+    Only one eval row would ever have noticed.
+
+    This is the pattern roadmap_promise_unbacked already follows: one
+    definition shared by runtime and gate, so they cannot disagree.
+    """
+
+    CHUNKS = [{"source": "roadmap -- https://x", "text": "x"}]
+
+    def test_a_date_appended_to_the_promise_is_stripped(self) -> None:
+        from src.answer import ROADMAP_PHRASE, _finalize_parsed
+
+        out = _finalize_parsed(
+            {"answer": ROADMAP_PHRASE + " It is slated for the week of Sep 7, 2026.",
+             "chunks_used": [1]},
+            self.CHUNKS,
+        )
+        self.assertEqual(out["answer"], ROADMAP_PHRASE)
+        self.assertEqual(out["citations"], ["roadmap -- https://x"])
+
+    def test_the_bare_promise_is_untouched(self) -> None:
+        from src.answer import ROADMAP_PHRASE, _finalize_parsed
+
+        out = _finalize_parsed({"answer": ROADMAP_PHRASE, "chunks_used": [1]}, self.CHUNKS)
+        self.assertEqual(out["answer"], ROADMAP_PHRASE)
+        self.assertEqual(out["citations"], ["roadmap -- https://x"])
+
+    def test_a_real_answer_that_happens_to_carry_a_date_survives(self) -> None:
+        # The guard applies to the PROMISE, not to dated facts in a real answer.
+        from src.answer import _finalize_parsed
+
+        answer = "The Week of Sep 7, 2026 section lists Jira-to-PR."
+        out = _finalize_parsed({"answer": answer, "chunks_used": [1]}, self.CHUNKS)
+        self.assertEqual(out["answer"], answer)
+
+    def test_the_date_shapes_the_regex_must_catch(self) -> None:
+        from src.answer import ROADMAP_PHRASE, decline_states_a_date
+
+        for token in (
+            "the week of Sep 7, 2026", "September 7th", "7th of September",
+            "Sept 1st", "mid-September", "end of September", "in two weeks",
+            "Q3", "next month", "2026",
+        ):
+            with self.subTest(token=token):
+                self.assertTrue(
+                    decline_states_a_date(f"{ROADMAP_PHRASE} It ships {token}.")
+                )
+
+    def test_wording_that_is_not_a_date_passes(self) -> None:
+        from src.answer import ROADMAP_PHRASE, decline_states_a_date
+
+        for tail in ("", " No date is published yet.", " Ask in #foundry-users.",
+                     " We may ship it soon."):
+            with self.subTest(tail=tail):
+                self.assertFalse(decline_states_a_date(ROADMAP_PHRASE + tail))
+
+
 class RoadmapPromiseTests(unittest.TestCase):
     """The roadmap phrase is only allowed when the roadmap page backed it."""
 
