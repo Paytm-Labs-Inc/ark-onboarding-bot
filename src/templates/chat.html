@@ -74,6 +74,7 @@
       cursor: pointer;
       background: transparent;
       text-align: left;
+      transition: background var(--ark-duration-1) var(--ark-ease);
     }
     .session-item:hover { background: var(--ark-elevated); }
     /* The row and its delete control share the <li>. */
@@ -85,9 +86,15 @@
       color: var(--ark-fg-muted);
       cursor: pointer;
       border-radius: var(--ark-radius-sm);
-      padding: 0 var(--ark-space-2);
+      /* >= 24x24: the WCAG 2.2 AA target-size floor. Padding alone left it
+         a couple of pixels short. */
+      min-width: 24px;
+      min-height: 24px;
+      padding: 0 var(--ark-space-1);
       font-size: var(--ark-text-base);
-      line-height: 1.6;
+      line-height: 1;
+      transition: opacity var(--ark-duration-1) var(--ark-ease),
+                  background var(--ark-duration-1) var(--ark-ease);
       /* Hidden until the row is touched, but NEVER display:none -- that would
          take it out of the tab order and off a screen reader, which is the
          mouse-only trap the row itself just came out of. */
@@ -97,15 +104,21 @@
     .session-delete:focus-visible { opacity: 1; }
     .session-delete:hover { color: var(--ark-fg); background: var(--ark-elevated); }
     .session-delete:focus-visible {
-      outline: 2px solid var(--ark-violet-400);
-      outline-offset: 2px;
+      outline: none;
+      box-shadow: var(--ark-focus-ring);
     }
+    .session-delete:active { color: var(--ark-fg); background: var(--ark-line); }
     /* Keyboard users get a visible target. :focus-visible only, so a mouse
        click does not leave a ring behind. */
     .session-item:focus-visible {
-      outline: 2px solid var(--ark-violet-400);
-      outline-offset: 2px;
+      /* The system's ring, not a hand-rolled outline: an inner knock-out plus
+         the accent, so it reads on any ground the row sits on. */
+      outline: none;
+      box-shadow: var(--ark-focus-ring);
     }
+    /* "A control with hover but no :active feels dead on click" -- every
+       interactive element owes hover, active, focus-visible and disabled. */
+    .session-item:active { background: var(--ark-line); }
     .session-item.active {
       /* Selected is a GROUND, not a border. The focus ring is also violet, so
          an accent border here made "this is the open thread" and "this is where
