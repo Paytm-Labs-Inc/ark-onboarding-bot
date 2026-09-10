@@ -103,4 +103,34 @@ render "${BASE[@]}" --set redis.enabled=true --set redis.exporter.enabled=true -
 # still vanish on restart.
 render "${BASE[@]}" --set redis.enabled=true; [ "$RC" -ne 0 ] && pass "redis without SESSION_STORE rejected" || fail "should reject redis.enabled with no SESSION_STORE"
 
+echo "== J: the retrieval corpus =="
+# Default is unchanged behaviour: the pod chunks and embeds data/ at boot.
+render "${BASE[@]}"
+[ "$RC" -eq 0 ] && grep -q 'CORPUS_STORE: "files"' <<<"$OUT" && ! grep -q 'corpus-ingest' <<<"$OUT" && pass "files by default, no ingest Job" || fail "corpus default drift"
+# The trap this guards: the pod finds no corpus, silently embeds data/ every
+# boot, and reports ready the whole time.
+render "${BASE[@]}" --set corpus.store=postgres
+{ [ "$RC" -ne 0 ] && grep -q 'without DATABASE_URL' <<<"$OUT"; } && pass "corpus.store=postgres without DATABASE_URL rejected" || fail "should reject a stored corpus with nowhere to read it from"
+# An ingest that writes a corpus nothing reads is a minute of embedding for nothing.
+render "${BASE[@]}" --set corpus.ingest.enabled=true
+{ [ "$RC" -ne 0 ] && grep -q 'corpus.store not postgres' <<<"$OUT"; } && pass "ingest without the store rejected" || fail "should reject an ingest nothing reads"
+# Both places would render a ConfigMap with a duplicate key.
+render "${BASE[@]}" --set web.env.CORPUS_STORE=redis
+{ [ "$RC" -ne 0 ] && grep -q 'belongs in corpus.store' <<<"$OUT"; } && pass "CORPUS_STORE in web.env rejected" || fail "duplicate ConfigMap key not caught"
+# The working combination.
+CORPUS=(--set corpus.store=postgres --set corpus.ingest.enabled=true --set web.env.DATABASE_URL=postgresql://bot:pw@db:5432/ark)
+render "${BASE[@]}" "${CORPUS[@]}"
+[ "$RC" -eq 0 ] && grep -q 'CORPUS_STORE: "postgres"' <<<"$OUT" && grep -q 'name: ark-onboarding-bot-corpus-ingest' <<<"$OUT" && pass "corpus on: env set and the ingest Job renders" || fail "corpus render wrong"
+# post-upgrade would let the pods roll first, read the previous corpus and
+# build their index before the ingest ever ran -- so a doc edit could not reach
+# users on the deploy that fetched it.
+grep -q '"helm.sh/hook": post-install,pre-upgrade' <<<"$OUT" && pass "ingest runs BEFORE the pods roll" || fail "hook must be pre-upgrade, or every deploy serves the previous corpus"
+grep -q 'hook-delete-policy": before-hook-creation' <<<"$OUT" && pass "replaces its previous run" || fail "a second upgrade would fail on the existing Job"
+# A different image would embed with a different encoder, which the reader
+# rejects rather than serves.
+[ "$(grep -c 'image: "880170353725.dkr.ecr.ap-south-1.amazonaws.com/pai-mlops-platform/ark-chatbot:90000000000001-abcdef0-arm64"' <<<"$OUT")" -ge 2 ] && pass "ingest uses the same image as the pods" || fail "ingest image differs from the web image"
+# The refresh writes fetched markdown into data/, so it needs a writable root.
+render "${BASE[@]}" "${CORPUS[@]}" --set corpus.ingest.refreshDocs=true
+[ "$RC" -eq 0 ] && grep -q 'python -m src.ingest' <<<"$OUT" && pass "refreshDocs re-pulls the docs before ingesting" || fail "refreshDocs did not add the doc refresh"
+
 echo; [ "$FAILED" -eq 0 ] && echo "All ark-onboarding-bot render assertions passed." || echo "Render assertions FAILED."; exit "$FAILED"
