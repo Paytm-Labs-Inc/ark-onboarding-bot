@@ -126,9 +126,11 @@
  {
   "id": "gr-adj-roadmap-date",
   "question": "when exactly will slack session control ship",
-  "expected_source": "roadmap",
+  "expected_source": null,
+  "expect_refusal": true,
+  "accepts_roadmap": true,
   "category": "adjacent",
-  "notes": "asks for a ship date. roadmap.md:233,241,248 are dated week sections, so this is answerable from the corpus -- relabelled like gr-sec-token and gr-adj-pricing rather than left as a refusal the router had to force."
+  "notes": "asks a ship date for slack session control. The dated week sections cover Slack alert delivery and Slack notifications, but nothing named session control -- roadmap.md:80 has session handoff with no date -- so a decline is correct and this stays a refusal row. accepts_roadmap because a roadmap decline cites the roadmap page by design; see the scoring note in run_eval.py."
  },
  {
   "id": "gr-adj-other-team",
