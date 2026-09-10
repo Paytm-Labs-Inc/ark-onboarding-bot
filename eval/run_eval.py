@@ -182,7 +182,7 @@ def evaluate_question(
     run_answer: bool,
     use_pins: bool = True,
 ) -> QuestionResult:
-    from src.answer import REFUSAL_PHRASE, is_non_answer
+    from src.answer import is_non_answer, is_plain_refusal
     from src.ask import ask
     from src.retrieve import retrieve
 
@@ -229,7 +229,7 @@ def evaluate_question(
                     if item.get("accepts_roadmap"):
                         declined = is_non_answer(answer_text)
                     else:
-                        declined = REFUSAL_PHRASE.lower() in answer_text.lower()
+                        declined = is_plain_refusal(answer_text)
                     citation_hit = declined and not citations
                     answer_hit = citation_hit
                 elif accepted:
