@@ -61,7 +61,8 @@ class HistoryBudgetTests(unittest.TestCase):
         ]
         summary = compile_history_summary(turns, verbatim_cap=5, max_chars=500)
         self.assertLessEqual(len(summary), 500)
-        self.assertTrue(summary.endswith("…"))
+        # Truncates from front to preserve recent turns (coreference).
+        self.assertTrue(summary.startswith("…"))
 
     def test_summary_max_chars_default(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

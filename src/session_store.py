@@ -104,7 +104,10 @@ def compile_history_summary(
     text = "\n\n".join(parts)
     if len(text) <= max_chars:
         return text
-    return text[: max_chars - 1] + "…"
+    # Truncate from the front to preserve the turns adjacent to the live window.
+    # Recent context carries coreference and disambiguation; older turns matter less.
+    # text[-(max_chars - 1):] keeps turns 20–32 instead of 1–5.
+    return "…" + text[-(max_chars - 1) :]
 
 
 def session_ttl_seconds() -> int | None:
