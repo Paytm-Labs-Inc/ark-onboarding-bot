@@ -58,6 +58,8 @@ _OOS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"\b(postgres|postgresql|sql) query is slow\b",
         r"\binstall .+\bvpn\b",
         r"\bcreate a new jira board\b(?! link)",
+        r"\bdeploy (my )?(application|app|service) to production\b",
+        r"\bproduction on aws\b",
     )
 )
 

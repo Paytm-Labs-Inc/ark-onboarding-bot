@@ -93,6 +93,14 @@ class ScopeRouterHoldoutTests(unittest.TestCase):
             with self.subTest(item=item["id"]):
                 self.assertTrue(should_refuse(question), msg=question)
 
+    def test_own_app_production_deploy_is_refused(self) -> None:
+        self.assertTrue(
+            should_refuse("how do I deploy my application to production on AWS?")
+        )
+        self.assertFalse(
+            should_refuse("how do I register compute in my AWS account for Ark")
+        )
+
     def test_canaries_near_guardrail_misses_pass(self) -> None:
         for question in (
             "my postgres query is slow inside a flow, is that an Ark limit",
