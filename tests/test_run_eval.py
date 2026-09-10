@@ -237,10 +237,25 @@ class RoadmapDeclineCitationTests(unittest.TestCase):
 
     @patch("src.retrieve.retrieve", return_value=ROADMAP)
     @patch("src.ask.ask")
-    def test_citing_another_page_is_still_a_miss(self, mock_ask, _r) -> None:
+    def test_extra_sources_alongside_the_roadmap_are_noise(self, mock_ask, _r) -> None:
+        # The real CI failure: the model reported roadmap AND faq. The text is
+        # still nothing but the promise, so the extra source is which chunks it
+        # named, not an answer it gave.
         from src.answer import ROADMAP_PHRASE
 
-        # Citing a real doc means it answered from that doc, not declined.
+        mock_ask.return_value = {
+            "answer": ROADMAP_PHRASE,
+            "citations": ["roadmap -- https://x", "faq -- https://y"],
+        }
+        item = {"id": "r", "question": "when does x ship?", "expect_refusal": True, "accepts_roadmap": True}
+        self.assertTrue(evaluate_question(item, top_k=8, run_answer=True).citation_hit)
+
+    @patch("src.retrieve.retrieve", return_value=ROADMAP)
+    @patch("src.ask.ask")
+    def test_a_promise_no_roadmap_backs_is_still_a_miss(self, mock_ask, _r) -> None:
+        from src.answer import ROADMAP_PHRASE
+
+        # No roadmap page among the citations: the promise is unbacked.
         mock_ask.return_value = {"answer": ROADMAP_PHRASE, "citations": ["faq -- https://y"]}
         item = {"id": "r", "question": "when does x ship?", "expect_refusal": True, "accepts_roadmap": True}
         self.assertFalse(evaluate_question(item, top_k=8, run_answer=True).citation_hit)
