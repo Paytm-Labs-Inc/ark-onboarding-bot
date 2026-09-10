@@ -827,14 +827,45 @@ class CachedSessionStore:
             self._bypass_until = time.time() + CACHE_BREAKER_COOLDOWN_SECONDS
         self._on_error(operation, exc)
 
+    def _trip_breaker(self) -> None:
+        """Bypass the cache now, without waiting for a run of failures.
+
+        Used where we know the cache may be holding something wrong rather than
+        merely being unreachable.
+        """
+        self._failures = max(self._failures, CACHE_BREAKER_FAILURES)
+        self._bypass_until = time.time() + CACHE_BREAKER_COOLDOWN_SECONDS
+
     # -- store ------------------------------------------------------------
     def _populate(self, session: StoredSession) -> None:
+        """Invalidate, then write.
+
+        Writing straight over the key looks equivalent and is not. If the write
+        fails, the previous copy of the thread is still sitting in the cache,
+        and it is now short a turn. The next read serves it, the next save
+        writes that short thread back, and the missing turn is gone from the
+        record as well -- a cache failure turned into permanent data loss.
+
+        Dropping first means a failed write leaves nothing behind, so the read
+        falls through to the record. A miss is always safe; a stale hit is not.
+        """
         if not self._cache_usable():
+            return
+        try:
+            self._cache.drop(session.session_id)
+            self._succeeded()
+        except Exception as exc:  # noqa: BLE001 - a cache must never fail a request
+            # The old copy may still be there and is now wrong, so stop reading
+            # from the cache at once rather than after the usual run of
+            # failures. Anything else serves a thread we know is stale.
+            self._failed("drop", exc)
+            self._trip_breaker()
             return
         try:
             self._cache.set(session.session_id, session.to_json())
             self._succeeded()
-        except Exception as exc:  # noqa: BLE001 - a cache must never fail a request
+        except Exception as exc:  # noqa: BLE001
+            # Safe: the key is already gone, so reads fall through.
             self._failed("set", exc)
 
     def load(self, session_id: str) -> StoredSession | None:
@@ -867,7 +898,10 @@ class CachedSessionStore:
             self._cache.drop(session_id)
             self._succeeded()
         except Exception as exc:  # noqa: BLE001
+            # The record is gone but the copy may not be, so the cache could
+            # still serve a deleted thread. Stop reading from it immediately.
             self._failed("drop", exc)
+            self._trip_breaker()
 
     def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
         # Always the record. A cache cannot answer "every thread this user has"

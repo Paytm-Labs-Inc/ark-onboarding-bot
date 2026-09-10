@@ -237,3 +237,70 @@ class CacheConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StaleCacheAfterFailedWriteTests(unittest.TestCase):
+    """The failure mode reported in review: a cache write fails, the previous
+    copy stays, and the turn it is missing is then lost from the record too."""
+
+    def setUp(self) -> None:
+        self.durable = CountingStore()
+        self.cache = FakeCache()
+        self.store = CachedSessionStore(self.durable, self.cache, on_error=lambda *_: None)
+
+    def _turn(self, n: int) -> StoredTurn:
+        return StoredTurn(question=f"q{n}", answer=f"a{n}", citations=[], retrieved_sources=[])
+
+    def test_a_failed_write_never_leaves_a_stale_thread_behind(self) -> None:
+        session = StoredSession(session_id="s1", user_id="alice", turns=[self._turn(1)])
+        self.store.save(session)
+        self.assertIn("s1", self.cache.data)
+
+        session.turns.append(self._turn(2))
+        self.cache.fail_on = {"set"}
+        self.store.save(session)
+
+        # The one-turn copy must not still be sitting there.
+        self.assertNotIn("s1", self.cache.data)
+
+    def test_the_reported_scenario_no_longer_loses_a_turn(self) -> None:
+        session = StoredSession(session_id="s1", user_id="alice", turns=[self._turn(1)])
+        self.store.save(session)
+
+        # Turn 2 is written; the cache write fails.
+        session.turns.append(self._turn(2))
+        self.cache.fail_on = {"set"}
+        self.store.save(session)
+        self.cache.fail_on = set()
+
+        # A later read must see two turns, not the cached one.
+        reloaded = self.store.load("s1")
+        assert reloaded is not None
+        self.assertEqual([t.question for t in reloaded.turns], ["q1", "q2"])
+
+        # And a save built on that read keeps every turn.
+        reloaded.turns.append(self._turn(3))
+        self.store.save(reloaded)
+        final = self.durable.load("s1")
+        assert final is not None
+        self.assertEqual([t.question for t in final.turns], ["q1", "q2", "q3"])
+
+    def test_a_failed_invalidate_stops_reads_at_once(self) -> None:
+        self.store.save(StoredSession(session_id="s1", user_id="alice", turns=[self._turn(1)]))
+        self.cache.fail_on = {"drop"}
+        self.store.save(StoredSession(session_id="s1", user_id="alice", turns=[self._turn(2)]))
+
+        # The copy may be wrong and undeletable, so the cache is bypassed now
+        # rather than after the usual run of failures.
+        calls_before = len(self.cache.calls)
+        self.store.load("s1")
+        self.assertEqual(len(self.cache.calls), calls_before)
+
+    def test_a_failed_delete_stops_reads_at_once(self) -> None:
+        self.store.save(StoredSession(session_id="s1", user_id="alice", turns=[self._turn(1)]))
+        self.cache.fail_on = {"drop"}
+        self.store.delete("s1")
+
+        calls_before = len(self.cache.calls)
+        self.assertIsNone(self.store.load("s1"))
+        self.assertEqual(len(self.cache.calls), calls_before)
