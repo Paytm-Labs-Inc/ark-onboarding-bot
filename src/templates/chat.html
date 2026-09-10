@@ -107,8 +107,13 @@
       outline-offset: 2px;
     }
     .session-item.active {
+      /* Selected is a GROUND, not a border. The focus ring is also violet, so
+         an accent border here made "this is the open thread" and "this is where
+         the keyboard is" read as the same thing. ark-ui settles it the same way
+         (askRailItemVariants): selected = bg-ark-elevated + aria-current, and
+         the ring belongs to focus alone. aria-current carries it for anyone who
+         cannot see the tint. */
       background: var(--ark-elevated);
-      border-color: var(--ark-violet-400);
     }
     .session-title {
       font-size: var(--ark-text-sm);
