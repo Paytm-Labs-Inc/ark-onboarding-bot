@@ -182,7 +182,12 @@ def evaluate_question(
     run_answer: bool,
     use_pins: bool = True,
 ) -> QuestionResult:
-    from src.answer import is_bare_decline, is_plain_refusal, is_roadmap_source
+    from src.answer import (
+        decline_states_a_date,
+        is_non_answer,
+        is_plain_refusal,
+        is_roadmap_source,
+    )
     from src.ask import ask
     from src.retrieve import retrieve
 
@@ -227,11 +232,17 @@ def evaluate_question(
                     # with accepts_roadmap when a roadmap answer is genuinely
                     # right (a date question about an unshipped feature).
                     if item.get("accepts_roadmap"):
-                        # Bare, not merely leading: is_non_answer reads only the
-                        # first 120 characters, so "<promise>. It is slated for
-                        # the week of Sep 7" matched it -- passing the row on the
-                        # exact fabrication the row exists to catch.
-                        declined = is_bare_decline(answer_text)
+                        # is_non_answer reads only the first 120 characters, so
+                        # "<promise>. It is slated for the week of Sep 7" matched
+                        # it -- passing the row on the exact fabrication it
+                        # exists to catch. Requiring the decline to be the WHOLE
+                        # answer fixed that and broke something else: models
+                        # reword ("Sorry, ..." / a trailing hand-off), and this
+                        # job gates publishing, so failing on wording would hold
+                        # the image over a paraphrase. Judge the residue instead.
+                        declined = is_non_answer(answer_text) and not decline_states_a_date(
+                            answer_text
+                        )
                         # A roadmap decline cites the roadmap page BY DESIGN:
                         # answer.py _finalize_parsed returns the promise with
                         # the roadmap source attached when it retrieved that
