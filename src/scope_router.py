@@ -1,4 +1,4 @@
-"""Pre-retrieval jailbreak gate — structural patterns only, not scope/enumeration."""
+"""Pre-retrieval refusal gate — jailbreak shape plus structural out-of-scope."""
 
 from __future__ import annotations
 
@@ -7,8 +7,21 @@ from typing import Any
 
 from src.answer import REFUSAL_PHRASE
 
+# Documented Ark topics. Present on a question, OOS patterns do not fire, so
+# "postgres inside a flow" still retrieves. Omit "tenant": inventory asks like
+# "list keys at tenant level" must still refuse.
+_ARK_NOUN = re.compile(
+    r"\b(ark|flow|session|workspace|workspaces|cursor|onboarding|compute|mcp)\b",
+    re.IGNORECASE,
+)
+
+_HOW_TO = re.compile(
+    r"\b(how do i|how can i|how to|where do i|where can i)\b",
+    re.IGNORECASE,
+)
+
 # Match jailbreak *shape* (override-verb near instruction-noun, etc.), not
-# full eval sentences. Scope and enumeration stay with retrieval + the model.
+# full eval sentences.
 _JAILBREAK_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
@@ -31,6 +44,53 @@ _JAILBREAK_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     )
 )
 
+# Generic programming / HR / adjacent-IT. Skipped when an Ark noun is present.
+_OOS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bwhat is the weather\b",
+        r"\bsalary band\b",
+        r"\b(sick|casual) leaves?\b",
+        r"\breset my .+\bpassword\b",
+        r"\bwrite (me )?(a )?(python |javascript |js |sql )?"
+        r"(decorator|function|script|query)\b",
+        r"\badd an index\b",
+        r"\b(postgres|postgresql|sql) query is slow\b",
+        r"\binstall .+\bvpn\b",
+        r"\bcreate a new jira board\b(?! link)",
+    )
+)
+
+# Inventory of secrets/keys, not "how do I list…".
+_INVENTORY_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\b(list|enumerate) (all )?(the )?(api keys|secrets|credentials)\b",
+        r"\benumerate the credentials\b",
+        r"\bwhich teams other than mine\b",
+    )
+)
+
+_BYPASS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\b(push|merge)\b.{0,48}\bwithout\b.{0,32}\b(pr review|review gate|approval gate)\b",
+        r"\bcop(?:y|ies) .+\b(secret|credential)s?\b.{0,32}\b(external|server)\b",
+        r"\bgive me (a |an )?.{0,32}\b(token|secret|password)\b",
+    )
+)
+
+# "what workspaces does the lending team have" — refuse after retrieve if the
+# captured name is not in the chunks. First-person ("my team") is ignored.
+_NAMED_TEAM_INVENTORY = re.compile(
+    r"(?:what )?(?:workspaces|secrets|api keys|credentials) does the ([a-z0-9-]+) team"
+    r"|the ([a-z0-9-]+) team (?:have|has) (?:configured )?"
+    r"(?:workspaces|secrets|api keys|credentials)",
+    re.IGNORECASE,
+)
+
+_FIRST_PERSON_TEAMS = frozenset({"my", "our", "your"})
+
 
 def _normalise(question: str) -> str:
     text = question.lower().strip()
@@ -39,11 +99,36 @@ def _normalise(question: str) -> str:
 
 
 def should_refuse(question: str) -> bool:
-    """True when the question matches a jailbreak shape before retrieval."""
+    """True when the question matches a jailbreak or structural OOS shape."""
     text = _normalise(question)
     if not text:
         return False
-    return any(pattern.search(text) for pattern in _JAILBREAK_PATTERNS)
+    if any(pattern.search(text) for pattern in _JAILBREAK_PATTERNS):
+        return True
+    if any(pattern.search(text) for pattern in _BYPASS_PATTERNS):
+        return True
+    if any(pattern.search(text) for pattern in _INVENTORY_PATTERNS) and not _HOW_TO.search(
+        text
+    ):
+        return True
+    if _ARK_NOUN.search(text):
+        return False
+    return any(pattern.search(text) for pattern in _OOS_PATTERNS)
+
+
+def named_team_missing_from_chunks(question: str, chunks: list[dict[str, Any]]) -> bool:
+    """True when the question asks about a named team's inventory not in the chunks."""
+    text = _normalise(question)
+    match = _NAMED_TEAM_INVENTORY.search(text)
+    if not match:
+        return False
+    team = next((group for group in match.groups() if group), "")
+    if not team or team in _FIRST_PERSON_TEAMS:
+        return False
+    haystack = " ".join(
+        f"{chunk.get('text', '')} {chunk.get('source', '')}" for chunk in chunks
+    ).lower()
+    return team not in haystack
 
 
 def refusal_result() -> dict[str, Any]:
