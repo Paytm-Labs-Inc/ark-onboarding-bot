@@ -5,6 +5,22 @@ on:
   push:
     branches: [main]
 
+# One eval run at a time, repo-wide. Five of the jobs below call the Pi
+# Inference gateway, which rate-limits: a single run is already five concurrent
+# callers, and re-running a handful of PRs turns that into twenty-five. On
+# 2026-09-09 that produced three consecutive HTTP 429 failures on #88 and #90 --
+# on one row each, with no content regression -- and each passed first try once
+# run alone. A red gate that means "the gateway was busy" is worse than a slow
+# one: it trains people to re-run without reading, which is how a real failure
+# gets waved through.
+#
+# cancel-in-progress: false because these are gates, not previews. Cancelling a
+# queued run would leave a PR with no verdict at all, which reads as "not run"
+# rather than "not passed".
+concurrency:
+  group: eval-gateway
+  cancel-in-progress: false
+
 jobs:
   workflow-lint:
     # publish-image.yml only ever runs on main, so a broken expression in it
