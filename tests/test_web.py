@@ -407,13 +407,28 @@ class BrowserIdentityTests(unittest.TestCase):
         os.environ["ARK_ACCESS_TOKEN"] = "secret-token"
         try:
             client = TestClient(app)
-            response = client.get(
-                "/api/sessions",
+            # /reviews, not /api/sessions: that route does not exist on main yet,
+            # so ANY request to it 404s and this test would pass whether or not
+            # the gate held -- proving nothing while reading as though it did
+            # (Bugbot). Assert against a route that exists and is gated, so the
+            # only way to reach 200 is to have been let through.
+            with_id = client.get(
+                "/reviews",
                 cookies={auth.BROWSER_ID_COOKIE: "browser0000000000"},
                 follow_redirects=False,
             )
-            self.assertIn(response.status_code, (401, 303, 404))
-            self.assertNotEqual(response.status_code, 200)
+            self.assertEqual(with_id.status_code, 303, "a browser id must not be a way in")
+            self.assertIn("/login", with_id.headers.get("location", ""))
+
+            # And the control: the same route DOES serve when the real token is
+            # presented, so the assertion above is about the browser id and not
+            # about the route being broken for everyone.
+            with_token = client.get(
+                "/reviews",
+                cookies={auth.COOKIE_NAME: "secret-token"},
+                follow_redirects=False,
+            )
+            self.assertEqual(with_token.status_code, 200)
         finally:
             os.environ.pop("ARK_ACCESS_TOKEN", None)
 
