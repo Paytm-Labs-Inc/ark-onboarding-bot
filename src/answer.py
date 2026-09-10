@@ -41,6 +41,26 @@ def is_non_answer(text: str) -> bool:
     return any(key in head for key in _DECLINE_KEYS)
 
 
+def is_bare_decline(text: str) -> bool:
+    """True when the answer is a decline and NOTHING else.
+
+    is_non_answer only inspects the first _DECLINE_WINDOW characters, so a
+    decline with content appended still matches it. On a ship-date row that
+    appended content is exactly the fabricated date the row exists to catch,
+    and _finalize_parsed cannot strip it: a promise backed by a roadmap
+    citation skips the trimming branch entirely, so "<promise>. It is slated
+    for the week of Sep 7." reaches the eval intact.
+
+    Exact-match after normalisation still passes the runtime's own correct
+    output, which is the phrase alone.
+    """
+    normalised = _normalise_decline(text)
+    return any(
+        normalised == _normalise_decline(phrase)
+        for phrase in (ROADMAP_PHRASE, REFUSAL_PHRASE)
+    )
+
+
 def is_plain_refusal(text: str) -> bool:
     """True for the refusal decline specifically, not the roadmap one.
 

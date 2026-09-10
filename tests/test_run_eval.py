@@ -252,6 +252,22 @@ class RoadmapDeclineCitationTests(unittest.TestCase):
 
     @patch("src.retrieve.retrieve", return_value=ROADMAP)
     @patch("src.ask.ask")
+    def test_a_decline_that_then_states_a_date_is_a_miss(self, mock_ask, _r) -> None:
+        # The failure the flagged row exists to catch. is_non_answer reads only
+        # the first 120 characters, so this scored as a clean decline; and
+        # _finalize_parsed cannot strip it, because a promise backed by a
+        # roadmap citation skips the trimming branch entirely.
+        from src.answer import ROADMAP_PHRASE
+
+        mock_ask.return_value = {
+            "answer": ROADMAP_PHRASE + " It is slated for the week of Sep 7, 2026.",
+            "citations": ["roadmap -- https://x"],
+        }
+        item = {"id": "r", "question": "when does x ship?", "expect_refusal": True, "accepts_roadmap": True}
+        self.assertFalse(evaluate_question(item, top_k=8, run_answer=True).citation_hit)
+
+    @patch("src.retrieve.retrieve", return_value=ROADMAP)
+    @patch("src.ask.ask")
     def test_a_promise_no_roadmap_backs_is_still_a_miss(self, mock_ask, _r) -> None:
         from src.answer import ROADMAP_PHRASE
 
