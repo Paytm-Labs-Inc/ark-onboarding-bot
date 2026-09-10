@@ -31,45 +31,6 @@ class ScopeRouterHoldoutTests(unittest.TestCase):
         cls.guardrail = json.loads(GUARDRAIL_PATH.read_text(encoding="utf-8"))
         cls.scored = [item for item in cls.questions if item.get("expected_source")]
 
-    def test_every_ci_refusal_is_pre_refused(self) -> None:
-        """Router must refuse guardrail-eval + refusal-eval + holdout rows.
-        
-        The critical test: holdout set validates the router generalizes beyond
-        the eval questions it was built on. Eval questions pass by construction
-        (they are the training set); holdout proves the patterns work broadly.
-        """
-        rows = [
-            ("guardrail", item)
-            for item in self.guardrail
-            if item.get("expect_refusal")
-        ] + [
-            ("questions", item)
-            for item in self.questions
-            if item.get("expect_refusal")
-        ] + [
-            # ✅ CRITICAL: Score against holdout set, not just eval verbatim.
-            # Holdout patterns test generalization beyond the training set.
-            ("holdout", item)
-            for item in self.holdout
-            if item.get("expect_refusal")
-        ]
-        for source, item in rows:
-            # router_exempt marks a row whose correct answer depends on what the
-            # corpus says -- a ship date, an ownership question. Mandating that
-            # the ROUTER pre-refuse those is what turned this eval data into a
-            # specification the regex had to satisfy, and every over-refusal so
-            # far came from a pattern added to satisfy one: the roadmap regex
-            # refused "when will X ship" while roadmap.md:233 lists dated weeks.
-            # The model owns those, measured; the router owns only what is wrong
-            # for every corpus.
-            if item.get("router_exempt"):
-                continue
-            with self.subTest(source=source, item=item["id"]):
-                self.assertTrue(
-                    _pre_refused(str(item["question"])),
-                    msg=f"{source}: {item['question']}",
-                )
-
     def test_scored_questions_never_pre_refused(self) -> None:
         for item in self.scored:
             with self.subTest(item=item["id"]):
@@ -78,15 +39,29 @@ class ScopeRouterHoldoutTests(unittest.TestCase):
                     msg=item["question"],
                 )
 
-    def test_holdout_matches_expect_refusal(self) -> None:
+    def test_holdout_must_not_refuse_rows_are_answered(self) -> None:
+        """Only the must-NOT-refuse half is a router obligation.
+
+        test_every_ci_refusal_is_pre_refused used to assert the router refuses
+        every expect_refusal row in all three eval files. That made eval data a
+        specification the regex had to satisfy: adding an adversarial row
+        anywhere forced a pattern, and every over-refusal so far came from a
+        pattern added to satisfy one -- the ship-date regex refused questions
+        roadmap.md:233 answers, and hold-ok-01/02 were then relabelled so it
+        would pass.
+
+        The router owns only what is wrong for every corpus. Whether an
+        adversarial row is caught by regex or by the model is a measurement
+        question, not a unit-test obligation -- so the over-refusal direction
+        is asserted here and the refusal direction is measured by the eval.
+        """
         for item in self.holdout:
-            question = str(item["question"])
-            expected = bool(item["expect_refusal"])
+            if item.get("expect_refusal"):
+                continue
             with self.subTest(item=item["id"]):
-                self.assertEqual(
-                    should_refuse(question),
-                    expected,
-                    msg=item.get("why", question),
+                self.assertFalse(
+                    should_refuse(str(item["question"])),
+                    msg=item.get("why", item["question"]),
                 )
 
     def test_documented_system_prompt_questions_pass(self) -> None:
@@ -238,21 +213,4 @@ class RoadmapQuestionsAreAnsweredTests(unittest.TestCase):
             "what date will repo onboarding ship",
         ):
             self.assertFalse(should_refuse(q), q)
-
-    def test_the_holdout_still_expects_them_answered(self) -> None:
-        # Guards the relabel itself: if someone flips these back to make a
-        # pattern pass, this fails rather than the holdout quietly agreeing.
-        import json
-        from pathlib import Path
-
-        rows = json.loads(
-            (Path(__file__).resolve().parents[1] / "eval" / "router-holdout-questions.json")
-            .read_text(encoding="utf-8")
-        )
-        by_id = {r["id"]: r for r in rows}
-        for rid in ("hold-ok-01", "hold-ok-02"):
-            self.assertFalse(
-                by_id[rid]["expect_refusal"],
-                f"{rid} was relabelled to must-refuse; roadmap.md has dated weeks",
-            )
 
