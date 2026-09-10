@@ -182,7 +182,7 @@ def evaluate_question(
     run_answer: bool,
     use_pins: bool = True,
 ) -> QuestionResult:
-    from src.answer import is_non_answer, is_plain_refusal
+    from src.answer import is_non_answer, is_plain_refusal, is_roadmap_source
     from src.ask import ask
     from src.retrieve import retrieve
 
@@ -228,9 +228,21 @@ def evaluate_question(
                     # right (a date question about an unshipped feature).
                     if item.get("accepts_roadmap"):
                         declined = is_non_answer(answer_text)
+                        # A roadmap decline cites the roadmap page BY DESIGN:
+                        # answer.py _finalize_parsed returns
+                        # {"answer": ROADMAP_PHRASE, "citations": [roadmap]}
+                        # when it retrieved that page. Demanding zero citations
+                        # here made the runtime's own correct output ungradeable,
+                        # so these rows went red on nothing but whether the model
+                        # reported the chunk it read. Any OTHER source still
+                        # fails: that is the model answering, not declining.
+                        cited_beyond_roadmap = [
+                            c for c in citations if not is_roadmap_source(c)
+                        ]
+                        citation_hit = declined and not cited_beyond_roadmap
                     else:
                         declined = is_plain_refusal(answer_text)
-                    citation_hit = declined and not citations
+                        citation_hit = declined and not citations
                     answer_hit = citation_hit
                 elif accepted:
                     citation_hit = any(any_source_matches(e, citations) for e in accepted)

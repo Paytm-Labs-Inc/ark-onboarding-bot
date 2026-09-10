@@ -963,17 +963,23 @@ def roadmap_promise_unbacked(answer: str, citations: list[str]) -> bool:
     """
     if _normalise_decline(ROADMAP_PHRASE) not in _normalise_decline(answer):
         return False
-    return not any(_is_roadmap_source(c) for c in citations)
+    return not any(is_roadmap_source(c) for c in citations)
 
 
-def _is_roadmap_source(label: str) -> bool:
+def is_roadmap_source(label: str) -> bool:
+    """True when a citation label points at the roadmap page.
+
+    Public for the same reason as roadmap_promise_unbacked: the eval has to
+    recognise a roadmap citation exactly as the runtime does, or the gate and
+    the code disagree about what the model just did.
+    """
     return label.split(" -- ", 1)[0].strip().lower() == "roadmap"
 
 
 def _first_roadmap_source(chunks: list[dict[str, Any]]) -> str:
     for chunk in chunks:
         source = str(chunk.get("source", ""))
-        if _is_roadmap_source(source):
+        if is_roadmap_source(source):
             return source
     return ""
 
