@@ -33,8 +33,9 @@ _JAILBREAK_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"bypass (ark )?auth",
         r"(show|print|reveal|display|repeat|translate)\s+(me\s+)?your\s+"
         r"(system prompt|instructions|prompt)",
-        r"(show|print|reveal|display)\s+(me\s+)?(the\s+)?instructions you were given",
-        r"(show|print|reveal|display)\s+(me\s+)?the\s+system prompt"
+        r"(show|print|reveal|display|repeat|translate)\s+(me\s+)?(the\s+)?"
+        r"instructions you were given",
+        r"(show|print|reveal|display|repeat|translate)\s+(me\s+)?the\s+system prompt"
         r"(?! (field|key|parameter|option|yaml))",
         r"repeat the text above",
         r"(you are now|act as|pretend you)\s+(an?\s+)?"
@@ -101,11 +102,11 @@ _BYPASS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     )
 )
 
-# "what workspaces does the lending team have" — refuse after retrieve if the
-# captured name is not in the chunks. First-person ("my team") is ignored.
+# After _normalise, hyphens are spaces, so "data-eng" is "data eng".
 _NAMED_TEAM_INVENTORY = re.compile(
-    r"(?:what )?(?:workspaces|secrets|api keys|credentials) does the ([a-z0-9-]+) team"
-    r"|the ([a-z0-9-]+) team (?:have|has) (?:configured )?"
+    r"(?:what )?(?:workspaces|secrets|api keys|credentials) does the "
+    r"([a-z0-9]+(?: [a-z0-9]+)?) team"
+    r"|the ([a-z0-9]+(?: [a-z0-9]+)?) team (?:have|has) (?:configured )?"
     r"(?:workspaces|secrets|api keys|credentials)",
     re.IGNORECASE,
 )
@@ -149,10 +150,13 @@ def named_team_missing_from_chunks(question: str, chunks: list[dict[str, Any]]) 
     team = next((group for group in match.groups() if group), "")
     if not team or team in _KNOWN_TEAMS:
         return False
-    haystack = " ".join(
-        f"{chunk.get('text', '')} {chunk.get('source', '')}" for chunk in chunks
-    ).lower()
-    return team not in haystack
+    # Word-bounded "X team" in page text only. Source labels like admin.md
+    # must not count as the admin team.
+    mentioned = re.compile(rf"\b{re.escape(team)} team\b")
+    for chunk in chunks:
+        if mentioned.search(_normalise(str(chunk.get("text", "")))):
+            return False
+    return True
 
 
 def refusal_result() -> dict[str, Any]:

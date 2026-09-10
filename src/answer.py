@@ -891,7 +891,12 @@ def _generate_answer(
         # unavailable" for a question that was actually answered.
         result = _parse_and_finalize(raw, chunks, allow_salvage=True)
 
-    if _needs_synthesized_answer(question) and is_non_answer(str(result.get("answer", ""))):
+    # Retry only a 4(a) decline. A 4(b) roadmap line is the prescribed answer
+    # when chunks are silent; do not fight that with a second call.
+    if (
+        _needs_synthesized_answer(question)
+        and str(result.get("answer", "")).strip() == REFUSAL_PHRASE
+    ):
         nudged = (
             f"{user_content}\n\nYour last reply used only a decline phrase. "
             "Write a grounded answer from the chunks. Do not use those phrases."
@@ -913,9 +918,8 @@ def _finalize_parsed(
         # Rule 4(b) has the model promise a roadmap whenever the chunks are
         # silent, which turns every gap in the docs into a commitment. Keep the
         # promise only when the roadmap page itself backed it. If we retrieved
-        # that page and the whole answer is the promise, attach it — do not
-        # rewrite a ship-date question into 4(a). A promise tacked onto a real
-        # answer is stripped and the answer kept.
+        # that page and the whole answer is the promise, attach it. A promise
+        # tacked onto a real answer is stripped and the answer kept.
         roadmap_source = _first_roadmap_source(chunks)
         if answer_text == ROADMAP_PHRASE and roadmap_source:
             return {"answer": ROADMAP_PHRASE, "citations": [roadmap_source]}

@@ -165,6 +165,21 @@ class AnswerLayerTests(unittest.TestCase):
         self.assertIn("platform team", result["answer"])
         self.assertFalse(is_non_answer(result["answer"]))
 
+    @patch("src.answer._call_model")
+    def test_synthesis_retry_does_not_fight_a_backed_roadmap_phrase(
+        self, mock_model: MagicMock
+    ) -> None:
+        from src.answer import _generate_answer
+
+        mock_model.return_value = json.dumps({"answer": ROADMAP_PHRASE, "chunks_used": [1]})
+        chunks = [{"source": "roadmap -- u", "text": "Notifications are planned."}]
+        result = _generate_answer(
+            "how do I create a new jira board link in my flow?",
+            chunks,
+        )
+        self.assertEqual(mock_model.call_count, 1)
+        self.assertEqual(result["answer"], ROADMAP_PHRASE)
+
     @patch("src.answer._call_cursor_agent")
     def test_workspace_ownership_answer_from_chunks(self, mock_cursor: MagicMock) -> None:
         mock_cursor.return_value = json.dumps(
