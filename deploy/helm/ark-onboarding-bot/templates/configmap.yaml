@@ -10,6 +10,7 @@ data:
   WEB_PORT: {{ .Values.web.port | quote }}
   BASE_PATH: {{ .Values.web.basePath | quote }}
   FORWARDED_ALLOW_IPS: {{ .Values.web.forwardedAllowIps | quote }}
+  CORPUS_STORE: {{ .Values.corpus.store | quote }}
   {{- range $k, $v := .Values.web.env }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}
