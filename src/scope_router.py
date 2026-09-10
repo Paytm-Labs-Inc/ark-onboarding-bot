@@ -89,7 +89,8 @@ _NAMED_TEAM_INVENTORY = re.compile(
     re.IGNORECASE,
 )
 
-_FIRST_PERSON_TEAMS = frozenset({"my", "our", "your"})
+# "my team" is the asker; "platform" is a documented actor in the corpus.
+_KNOWN_TEAMS = frozenset({"my", "our", "your", "platform"})
 
 
 def _normalise(question: str) -> str:
@@ -123,7 +124,7 @@ def named_team_missing_from_chunks(question: str, chunks: list[dict[str, Any]]) 
     if not match:
         return False
     team = next((group for group in match.groups() if group), "")
-    if not team or team in _FIRST_PERSON_TEAMS:
+    if not team or team in _KNOWN_TEAMS:
         return False
     haystack = " ".join(
         f"{chunk.get('text', '')} {chunk.get('source', '')}" for chunk in chunks

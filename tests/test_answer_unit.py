@@ -129,6 +129,41 @@ class AnswerLayerTests(unittest.TestCase):
     def test_system_prompt_covers_workspace_ownership(self) -> None:
         self.assertIn("workspace ownership or sharing", SYSTEM_PROMPT)
 
+    def test_documented_canaries_get_a_synthesis_hint(self) -> None:
+        from src.answer import _build_user_content, _needs_synthesized_answer
+
+        chunks = [{"source": "roadmap -- u", "text": "Session recovery is planned."}]
+        self.assertTrue(_needs_synthesized_answer("when exactly will the session debugger ship?"))
+        prompt = _build_user_content(
+            "when exactly will the session debugger ship?", chunks
+        )
+        self.assertIn("This question is in scope", prompt)
+        self.assertFalse(_needs_synthesized_answer("how do I enroll a host?"))
+        self.assertNotIn(
+            "This question is in scope",
+            _build_user_content("how do I enroll a host?", chunks),
+        )
+
+    @patch("src.answer._call_model")
+    def test_synthesized_canary_retries_after_a_bare_decline(self, mock_model: MagicMock) -> None:
+        from src.answer import _generate_answer
+
+        mock_model.side_effect = [
+            json.dumps({"answer": ROADMAP_PHRASE, "chunks_used": []}),
+            json.dumps({
+                "answer": "Workspaces are team-scoped; the platform team creates accounts.",
+                "chunks_used": [1],
+            }),
+        ]
+        chunks = [{"source": "getting-started -- u", "text": "the platform team creates accounts"}]
+        result = _generate_answer(
+            "what workspaces does the platform team have access to?",
+            chunks,
+        )
+        self.assertEqual(mock_model.call_count, 2)
+        self.assertIn("platform team", result["answer"])
+        self.assertFalse(is_non_answer(result["answer"]))
+
     @patch("src.answer._call_cursor_agent")
     def test_workspace_ownership_answer_from_chunks(self, mock_cursor: MagicMock) -> None:
         mock_cursor.return_value = json.dumps(
@@ -874,9 +909,16 @@ class RoadmapPromiseTests(unittest.TestCase):
 
     def test_unbacked_roadmap_promise_becomes_a_refusal_with_no_citations(self) -> None:
         from src.answer import _finalize_parsed
-        result = _finalize_parsed({"answer": ROADMAP_PHRASE, "chunks_used": [1]}, self.CHUNKS)
+        faq_only = [self.CHUNKS[0]]
+        result = _finalize_parsed({"answer": ROADMAP_PHRASE, "chunks_used": [1]}, faq_only)
         self.assertEqual(result["answer"], REFUSAL_PHRASE)
         self.assertEqual(result["citations"], [])  # a refusal must not print Sources
+
+    def test_retrieved_roadmap_backs_a_bare_promise_even_without_chunks_used(self) -> None:
+        from src.answer import _finalize_parsed
+        result = _finalize_parsed({"answer": ROADMAP_PHRASE, "chunks_used": [1]}, self.CHUNKS)
+        self.assertEqual(result["answer"], ROADMAP_PHRASE)
+        self.assertEqual(result["citations"], ["roadmap -- https://x/roadmap"])
 
     def test_unbacked_promise_appended_to_a_real_answer_is_stripped_not_refused(self) -> None:
         from src.answer import _finalize_parsed
@@ -965,6 +1007,12 @@ class BareDeclineIsNotACrashTests(unittest.TestCase):
         result = _parse_and_finalize(ROADMAP_PHRASE, self.CHUNKS)
         self.assertEqual(result["answer"], REFUSAL_PHRASE)
         self.assertEqual(result["citations"], [])
+
+    def test_a_bare_roadmap_promise_is_kept_when_the_page_was_retrieved(self) -> None:
+        chunks = [{"text": "bets", "source": "roadmap -- https://x/roadmap"}]
+        result = _parse_and_finalize(ROADMAP_PHRASE, chunks)
+        self.assertEqual(result["answer"], ROADMAP_PHRASE)
+        self.assertEqual(result["citations"], ["roadmap -- https://x/roadmap"])
 
     def test_text_trailing_a_decline_is_not_shipped_to_the_user(self) -> None:
         # is_non_answer only inspects the first _DECLINE_WINDOW characters, so a

@@ -118,11 +118,11 @@ class ScopeRouterHoldoutTests(unittest.TestCase):
             )
         )
 
-    def test_platform_team_present_in_chunks_is_not_missing(self) -> None:
+    def test_platform_team_is_a_known_actor_even_without_the_name_in_chunks(self) -> None:
         self.assertFalse(
             named_team_missing_from_chunks(
-                "what workspaces does the platform team have",
-                [{"text": "the platform team creates the accounts", "source": "getting-started"}],
+                "what workspaces does the platform team have access to?",
+                [{"text": "use ark workspace list", "source": "first-run"}],
             )
         )
 
