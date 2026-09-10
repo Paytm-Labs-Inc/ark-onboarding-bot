@@ -43,6 +43,22 @@ web:
   # serve on measured citation behaviour, which is what this bot is judged on.
   env:
     PI_MODEL: llama-3.3-70b-versatile
+    # Chat threads live in Redis, not in the pod. MemorySessionStore is a plain
+    # dict, `strategy: Recreate` destroys the pod on every release, and there
+    # were three releases today -- so on the default store the sidebar this
+    # image ships would be emptied by its own deploy. The chart refuses
+    # redis.enabled without these two (see _helpers.tpl), because a healthy
+    # Redis nobody connects to is worse than no Redis.
+    SESSION_STORE: redis
+    REDIS_URL: redis://ark-onboarding-bot-redis:6379/0
+
+redis:
+  # The store of record for chat sessions. AOF with appendfsync everysec and
+  # maxmemory-policy noeviction come from the chart: without the AOF a restart
+  # loses every thread, and under an eviction policy a session body can be
+  # dropped while its sidebar entry survives, leaving a thread that lists and
+  # then opens empty.
+  enabled: true
 
 externalSecret:
   awsSecretPath: pai-risk-mlops/platform/ark-onboarding-bot
