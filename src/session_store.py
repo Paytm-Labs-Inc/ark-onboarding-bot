@@ -379,32 +379,62 @@ class RedisSessionStore:
             "turn_count": str(len(session.turns)),
         }
 
-        user = session.user_id
-        if session.archived:
-            score = _parse_iso(session.archived_at or session.updated_at) or time.time()
-            active_key = self._active_key(user)
-            archived_key = self._archived_key(user)
-        else:
-            score = _parse_iso(session.updated_at) or time.time()
-            active_key = self._active_key(user)
-            archived_key = self._archived_key(user)
-
+        score = _parse_iso(
+            session.archived_at if session.archived else session.updated_at
+        ) or time.time()
         ttl = session_ttl_seconds()
-        pipe = self._client.pipeline(transaction=True)
-        if ttl is not None:
-            pipe.setex(body_key, ttl, payload)
-            pipe.hset(meta_key, mapping=meta)
-            pipe.expire(meta_key, ttl)
-        else:
-            pipe.set(body_key, payload)
-            pipe.hset(meta_key, mapping=meta)
-        if session.archived:
-            pipe.zrem(active_key, session.session_id)
-            pipe.zadd(archived_key, {session.session_id: score})
-        else:
-            pipe.zrem(archived_key, session.session_id)
-            pipe.zadd(active_key, {session.session_id: score})
-        pipe.execute()
+
+        # ✅ Use WATCH/MULTI/EXEC to ensure atomicity across user indices.
+        # If another thread changes the session's user_id between our read and
+        # execute, WatchError is raised and we retry with the new user_id.
+        # This prevents one session appearing in multiple users' indices.
+        while True:
+            try:
+                # ✅ Read current metadata AFTER watch to detect user changes.
+                self._client.watch(meta_key)
+                existing_meta = self._client.hgetall(meta_key)
+                existing_user = existing_meta.get("user_id", "")
+
+                # Start transaction AFTER reading current state.
+                pipe = self._client.pipeline(transaction=True)
+
+                # ✅ If user_id changed, clean up old indices.
+                if existing_user and existing_user != session.user_id:
+                    old_active = self._active_key(existing_user)
+                    old_archived = self._archived_key(existing_user)
+                    pipe.zrem(old_active, session.session_id)
+                    pipe.zrem(old_archived, session.session_id)
+
+                # Write body and metadata atomically.
+                if ttl is not None:
+                    pipe.setex(body_key, ttl, payload)
+                    pipe.hset(meta_key, mapping=meta)
+                    pipe.expire(meta_key, ttl)
+                else:
+                    pipe.set(body_key, payload)
+                    pipe.hset(meta_key, mapping=meta)
+
+                # Update indices atomically (now with the correct user_id).
+                user = session.user_id
+                active_key = self._active_key(user)
+                archived_key = self._archived_key(user)
+                if session.archived:
+                    pipe.zrem(active_key, session.session_id)
+                    pipe.zadd(archived_key, {session.session_id: score})
+                else:
+                    pipe.zrem(archived_key, session.session_id)
+                    pipe.zadd(active_key, {session.session_id: score})
+
+                # Execute atomically.
+                pipe.execute()
+                break  # ✅ Success, exit retry loop.
+
+            except Exception as e:
+                # ✅ WatchError (redis.exceptions.WatchError) means meta_key changed.
+                # Retry the entire operation with the new state.
+                if e.__class__.__name__ == "WatchError":
+                    continue
+                raise
 
     def delete(self, session_id: str) -> None:
         meta = self._client.hgetall(self._meta_key(session_id))
