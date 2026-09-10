@@ -32,7 +32,12 @@ class ScopeRouterHoldoutTests(unittest.TestCase):
         cls.scored = [item for item in cls.questions if item.get("expected_source")]
 
     def test_every_ci_refusal_is_pre_refused(self) -> None:
-        """guardrail-eval + refusal-eval rows must not reach the model."""
+        """Router must refuse guardrail-eval + refusal-eval + holdout rows.
+        
+        The critical test: holdout set validates the router generalizes beyond
+        the eval questions it was built on. Eval questions pass by construction
+        (they are the training set); holdout proves the patterns work broadly.
+        """
         rows = [
             ("guardrail", item)
             for item in self.guardrail
@@ -41,12 +46,18 @@ class ScopeRouterHoldoutTests(unittest.TestCase):
             ("questions", item)
             for item in self.questions
             if item.get("expect_refusal")
+        ] + [
+            # ✅ CRITICAL: Score against holdout set, not just eval verbatim.
+            # Holdout patterns test generalization beyond the training set.
+            ("holdout", item)
+            for item in self.holdout
+            if item.get("expect_refusal")
         ]
         for source, item in rows:
             with self.subTest(source=source, item=item["id"]):
                 self.assertTrue(
                     _pre_refused(str(item["question"])),
-                    msg=item["question"],
+                    msg=f"{source}: {item['question']}",
                 )
 
     def test_scored_questions_never_pre_refused(self) -> None:
