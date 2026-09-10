@@ -52,7 +52,12 @@ class ChatSession:
             recent = self.turns
         else:
             recent = self.turns[-cap:]
-            if self.turns and self.turns[0] not in recent:
+            # Length, not membership: `self.turns[0] not in recent` is a value
+            # comparison on a dataclass, so a user who repeats their opening
+            # question verbatim matches a later turn and silently loses the pin.
+            # It also deep-compares every turn in the window to ask a question
+            # the length already answers.
+            if len(self.turns) > cap:
                 recent = [self.turns[0], *recent]
         history = [{"question": turn.question, "answer": turn.answer} for turn in recent]
         summary = self.history_summary.strip()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import calendar
+from datetime import UTC, datetime
 import os
 import time
 import unittest
@@ -17,6 +18,7 @@ from src.session_store import (
     StoredTurn,
     TITLE_MAX_LEN,
     _parse_iso,
+    archive_after_days,
     extract_ark_session_id,
     max_stored_turns,
     reset_session_store,
@@ -347,3 +349,80 @@ class ChatPersistenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(fakeredis is not None, "fakeredis not installed")
+class ListingDoesNotReadSessionBodiesTests(unittest.TestCase):
+    """Drawing the sidebar must not GET every thread in full.
+
+    _apply_archive_rules used to load each active session purely to read
+    updated_at, and the page lists twice per refresh (active + archived), on
+    load, after every answer and on New chat. The zset score already IS
+    _parse_iso(updated_at) and everything in the active index is unarchived by
+    construction, so the scan can answer from scores alone.
+    """
+
+    def setUp(self) -> None:
+        self.server = fakeredis.FakeStrictRedis(decode_responses=True)
+        self.store = RedisSessionStore.__new__(RedisSessionStore)
+        self.store._client = self.server
+        reset_session_store(self.store)
+
+    def tearDown(self) -> None:
+        reset_session_store(None)
+
+    def _seed(self, count: int) -> None:
+        for i in range(count):
+            self.store.save(
+                StoredSession(
+                    session_id=f"redis-{i}",
+                    user_id="user-z",
+                    title=f"Thread {i}",
+                    turns=[StoredTurn(f"q{i}", "a" * 200, [], [])],
+                )
+            )
+
+    def test_listing_fresh_threads_reads_no_bodies(self) -> None:
+        self._seed(20)
+
+        gets: list[str] = []
+        real_get = self.server.get
+
+        def counting_get(key, *args, **kwargs):
+            gets.append(key)
+            return real_get(key, *args, **kwargs)
+
+        self.server.get = counting_get  # type: ignore[method-assign]
+        try:
+            listed = self.store.list_for_user("user-z", archived=False)
+        finally:
+            self.server.get = real_get  # type: ignore[method-assign]
+
+        self.assertEqual(len(listed), 20)
+        # The whole point: none of the 20 bodies was fetched to draw the list.
+        self.assertEqual(gets, [], f"listing read {len(gets)} session bodies")
+
+    def test_a_stale_thread_is_still_archived(self) -> None:
+        # The optimisation must not cost the behaviour it optimises.
+        #
+        # Both the score AND the stored updated_at have to be stale: the score
+        # only narrows which rows get loaded, and _should_archive still decides
+        # against the real row. touch_activity=False keeps save() from stamping
+        # updated_at to now.
+        idle = archive_after_days() * 86400
+        stale_iso = datetime.fromtimestamp(time.time() - idle - 60, UTC).isoformat()
+        self.store.save(
+            StoredSession(
+                session_id="redis-0",
+                user_id="user-z",
+                title="Old thread",
+                updated_at=stale_iso,
+                turns=[StoredTurn("q", "a", [], [])],
+            ),
+            touch_activity=False,
+        )
+
+        active = self.store.list_for_user("user-z", archived=False)
+        archived = self.store.list_for_user("user-z", archived=True)
+        self.assertEqual([s.session_id for s in active], [])
+        self.assertEqual([s.session_id for s in archived], ["redis-0"])

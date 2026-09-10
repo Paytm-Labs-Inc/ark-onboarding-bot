@@ -61,6 +61,13 @@
       gap: var(--ark-space-1);
     }
     .session-item {
+      /* A <button>: it needs width, font and colour said explicitly, since a
+         button inherits none of them, and it must fill the <li> to stay the
+         same target it was as a div. */
+      display: block;
+      width: 100%;
+      font: inherit;
+      color: inherit;
       border: 1px solid transparent;
       border-radius: var(--ark-radius-sm);
       padding: var(--ark-space-2) var(--ark-space-3);
@@ -69,6 +76,36 @@
       text-align: left;
     }
     .session-item:hover { background: var(--ark-elevated); }
+    /* The row and its delete control share the <li>. */
+    .session-list li { display: flex; align-items: center; gap: var(--ark-space-1); }
+    .session-delete {
+      flex: none;
+      border: 0;
+      background: transparent;
+      color: var(--ark-fg-muted);
+      cursor: pointer;
+      border-radius: var(--ark-radius-sm);
+      padding: 0 var(--ark-space-2);
+      font-size: var(--ark-text-base);
+      line-height: 1.6;
+      /* Hidden until the row is touched, but NEVER display:none -- that would
+         take it out of the tab order and off a screen reader, which is the
+         mouse-only trap the row itself just came out of. */
+      opacity: 0;
+    }
+    .session-list li:hover .session-delete,
+    .session-delete:focus-visible { opacity: 1; }
+    .session-delete:hover { color: var(--ark-fg); background: var(--ark-elevated); }
+    .session-delete:focus-visible {
+      outline: 2px solid var(--ark-violet-400);
+      outline-offset: 2px;
+    }
+    /* Keyboard users get a visible target. :focus-visible only, so a mouse
+       click does not leave a ring behind. */
+    .session-item:focus-visible {
+      outline: 2px solid var(--ark-violet-400);
+      outline-offset: 2px;
+    }
     .session-item.active {
       background: var(--ark-elevated);
       border-color: var(--ark-violet-400);
@@ -645,16 +682,52 @@
         return;
       }
       for (const session of sessions) {
+        // The row is a real <button>, not a clickable <li>. A div/li with a
+        // click listener is unreachable by Tab, ignores Enter and Space, and
+        // is announced by a screen reader as text with no way to open it --
+        // which made the sidebar's only navigation mouse-only. The <li> is
+        // now just the list semantics the <ul> needs.
         const item = document.createElement("li");
-        item.className = "session-item";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "session-item";
         if (session.session_id === sessionId) {
-          item.classList.add("active");
+          button.classList.add("active");
+          // Ground plus the word, never colour alone.
+          button.setAttribute("aria-current", "true");
         }
-        item.innerHTML = `
+        button.innerHTML = `
           <div class="session-title">${escapeHtml(session.title || "Untitled chat")}</div>
           <div class="session-meta">${escapeHtml(sidebarMetaText(session))}</div>
         `;
-        item.addEventListener("click", () => openSession(session.session_id));
+        button.addEventListener("click", () => openSession(session.session_id));
+        item.appendChild(button);
+
+        // Before the sidebar, "New chat" POSTed /api/reset, so starting a new
+        // conversation was also how a thread left the server. Keeping that
+        // would now delete the thread the sidebar exists to preserve -- but
+        // dropping it left users with no way to remove anything at all, and
+        // with no TTL set by default the threads would accumulate for the life
+        // of the browser id. So the delete moves here, per thread, explicit.
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "session-delete";
+        remove.setAttribute(
+          "aria-label",
+          `Delete chat: ${session.title || "Untitled chat"}`
+        );
+        remove.textContent = "\u00d7";
+        remove.addEventListener("click", async (event) => {
+          // The row behind it is a button too; without this the click opens
+          // the thread on its way to deleting it.
+          event.stopPropagation();
+          if (!window.confirm(`Delete "${session.title || "Untitled chat"}"?`)) {
+            return;
+          }
+          await deleteSession(session.session_id);
+        });
+        item.appendChild(remove);
+
         container.appendChild(item);
       }
     }
@@ -765,9 +838,13 @@
         }
         sessionId = payload.session_id;
         chatGeneration += 1;
+        // Capture AFTER the bump and pass the captured value, the way
+        // bootstrapChat does. Passing `chatGeneration` itself compared the
+        // variable to itself, so the staleness guard inside could never fire.
+        const opened = chatGeneration;
         renderThreadFromPayload(payload);
         updateLinkedArkSessionDisplay(payload.linked_ark_session_id || null);
-        persistThreadFromPayload(payload, chatGeneration);
+        persistThreadFromPayload(payload, opened);
         setStatus("");
         loadSidebarLists();
       } catch (error) {
@@ -815,6 +892,31 @@
         }
       } catch (_err) {
         // Keep localStorage paint when the server is unreachable.
+      }
+    }
+
+    async function deleteSession(sid) {
+      try {
+        const response = await fetch("api/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sid }),
+        });
+        // A 404 is the same answer as success from here: the thread is not
+        // there any more. It also covers a thread belonging to someone else,
+        // which the server deliberately does not distinguish.
+        if (!response.ok && response.status !== 404) {
+          setStatus("Could not delete that chat.");
+          return;
+        }
+        if (sid === sessionId) {
+          // The open conversation just went away; do not leave it on screen.
+          startNewChat();
+          return;
+        }
+        loadSidebarLists();
+      } catch (error) {
+        setStatus("Could not delete that chat.");
       }
     }
 

@@ -643,6 +643,71 @@ class BrowserScopedSessionTests(unittest.TestCase):
         # Same status as a thread that was never created at all.
         self.assertEqual(theirs.get("/api/session/s-nope").status_code, 404)
 
+    def test_the_sso_cutover_does_not_re_key_existing_threads(self) -> None:
+        """Documents the cutover cost, because the code comment once denied it.
+
+        Threads carry the browser id in stored user_id. Flipping the ingress
+        gate changes which identity current_user_id() PREFERS, not what is
+        already on disk -- so on that day every existing sidebar empties and
+        every existing thread 404s. New threads key to the person correctly.
+
+        This is a real product decision (backfill, or tell people history
+        restarts) and it belongs to the SSO rollout. The test exists so the
+        decision is made rather than discovered in production.
+        """
+        self._seed(self.MINE, "s-mine-1")
+        client = self._client_for(self.MINE)
+        self.assertEqual(
+            [s["session_id"] for s in client.get("/api/sessions").json()["sessions"]],
+            ["s-mine-1"],
+        )
+
+        # The gate goes on; same browser, same cookie, now with an identity.
+        os.environ["SSO_IDENTITY_HEADER"] = "X-SSO-User"
+        try:
+            headers = {"X-SSO-User": "someone@paytm.com"}
+            self.assertEqual(
+                client.get("/api/sessions", headers=headers).json()["sessions"], []
+            )
+            self.assertEqual(
+                client.get("/api/session/s-mine-1", headers=headers).status_code, 404
+            )
+        finally:
+            os.environ.pop("SSO_IDENTITY_HEADER", None)
+
+        # The thread is not lost, only unreachable under the new identity.
+        self.assertIsNotNone(self.store.load("s-mine-1"))
+
+    def test_another_browser_cannot_delete_your_thread(self) -> None:
+        """The delete path deserves the same proof as the read paths.
+
+        /api/reset is the only endpoint that destroys data, and its owner check
+        was the one nothing pinned: removing `or stored.user_id != user_id`
+        from reset_session left the whole suite green, while the same deletion
+        in load_session_payload went red immediately.
+
+        The status code is the lesser assertion here. What matters is that the
+        thread is still in the store afterwards.
+        """
+        self._seed(self.MINE, "s-mine-1")
+
+        theirs = self._client_for(self.THEIRS)
+        response = theirs.post("/api/reset", json={"session_id": "s-mine-1"})
+        self.assertEqual(response.status_code, 404)
+
+        # The point of the test: the refusal actually protected the data.
+        self.assertIsNotNone(self.store.load("s-mine-1"))
+
+    def test_the_owner_can_delete_their_own_thread(self) -> None:
+        # Without this, the refusal above would pass just as well if reset
+        # were broken for everyone.
+        self._seed(self.MINE, "s-mine-1")
+        response = self._client_for(self.MINE).post(
+            "/api/reset", json={"session_id": "s-mine-1"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(self.store.load("s-mine-1"))
+
     def test_the_owner_can_read_their_own_thread(self) -> None:
         # Without this the 404s above would also pass if reads were simply broken.
         self._seed(self.MINE, "s-mine-1")

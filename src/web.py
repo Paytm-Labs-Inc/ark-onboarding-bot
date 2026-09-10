@@ -510,9 +510,22 @@ def api_list_sessions(request: Request, archived: bool = False) -> dict[str, obj
     # chats behind one id.
     #
     # Residual risk, accepted knowingly: two people sharing one browser, where
-    # the first does not sign out. #90 clears the cached chat on sign-out, and
-    # sso_identity() wins the moment the ingress gate is on -- no code change
-    # here, threads simply re-key to the person.
+    # the first does not sign out. #90 clears the cached chat on sign-out.
+    #
+    # sso_identity() wins the moment the ingress gate is on, so NEW threads key
+    # to the person with no code change here. Existing ones do NOT re-key: the
+    # stored user_id keeps the browser id forever. Verified against the running
+    # app -- same browser, same cookie, then send the SSO header, and this
+    # endpoint returns [] while the thread that listed a second earlier 404s.
+    # (An earlier version of this comment claimed the opposite. It was wrong.)
+    #
+    # So the cutover day empties every sidebar unless it carries a backfill
+    # keyed on the old cookie. That is a decision for the SSO rollout with
+    # Bhurva, not something to slip in here: adoption would let anyone holding
+    # a browser id bind those threads to their own account, which is the same
+    # capability the id already grants but a different and more durable claim.
+    # test_the_sso_cutover_does_not_re_key_existing_threads pins today's
+    # behaviour so the choice is made deliberately rather than discovered.
     user_id = current_user_id(request)
     return {"sessions": list_user_sessions(user_id, archived=archived)}
 

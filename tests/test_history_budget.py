@@ -72,3 +72,67 @@ class HistoryBudgetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HistoryBudgetIsWiredToTheSavePathTests(unittest.TestCase):
+    """The budget has to be reachable from the app, not just from its helpers.
+
+    Every other test here calls compile_history_summary/refresh_history_summary
+    directly, so the feature could be unplugged from the application and the
+    suite would not notice. It was: deleting refresh_history_summary() from
+    save_session, or dropping history_summary from StoredSession.from_dict so
+    it never survives a reload, each left all 337 tests green.
+
+    This drives save_session and reads the session back out of the store, so it
+    fails on either mutation.
+    """
+
+    def setUp(self) -> None:
+        from src.session_store import MemorySessionStore, reset_session_store
+
+        os.environ["MAX_HISTORY_TURNS"] = "3"
+        self.store = MemorySessionStore()
+        reset_session_store(self.store)
+
+    def tearDown(self) -> None:
+        from src.session_store import reset_session_store
+
+        os.environ.pop("MAX_HISTORY_TURNS", None)
+        reset_session_store(None)
+
+    def test_saving_a_long_session_persists_a_summary_that_keeps_turn_zero_out(self) -> None:
+        from src.chat import ChatSession, save_session
+        from src.session_store import StoredTurn
+
+        session = ChatSession(session_id="s-budget-1", user_id="browseraaaaaaaaaa")
+        session.turns = [
+            StoredTurn(
+                question=f"question number {i}",
+                answer=f"answer number {i}",
+                citations=[],
+                retrieved_sources=[],
+            )
+            for i in range(15)
+        ]
+
+        save_session(session)
+
+        reloaded = self.store.load("s-budget-1")
+        self.assertIsNotNone(reloaded)
+        # Non-empty: the summary was compiled AND survived the round trip.
+        self.assertTrue(reloaded.history_summary)
+        # Turn 0 is deliberately held out of the summary -- it carries the
+        # constraints ("I'm on OCL") that folding oldest-first would lose.
+        self.assertNotIn("question number 0", reloaded.history_summary)
+        # A middle turn is in it, so this is the summary and not some other string.
+        self.assertIn("question number 5", reloaded.history_summary)
+
+        # MemorySessionStore hands back the same object, so the assertions above
+        # never cross to_dict/from_dict -- which is where a redis-backed store
+        # actually reads it. Pin that leg explicitly, or dropping the field from
+        # from_dict passes every test while the summary silently stops surviving
+        # a reload in the only backend that serialises.
+        from src.session_store import StoredSession
+
+        round_tripped = StoredSession.from_dict(reloaded.to_dict())
+        self.assertEqual(round_tripped.history_summary, reloaded.history_summary)
