@@ -112,9 +112,29 @@ render "${BASE[@]}" --set redis.enabled=true --set redis.exporter.enabled=true -
 # Built from the chart, not the overlay: the overlay supplies SESSION_STORE, so
 # redis.enabled on top of it is the CORRECT pairing rather than the one the
 # guard rejects.
-render --set image.tag=90000000000099-0000000-arm64 --set ingress.enabled=false \
-  --set externalSecret.awsSecretPath=example/path --set redis.enabled=true
-[ "$RC" -ne 0 ] && pass "redis without SESSION_STORE rejected" || fail "should reject redis.enabled with no SESSION_STORE"
+MINIMAL=(--set image.tag=90000000000099-0000000-arm64 --set ingress.enabled=false --set externalSecret.awsSecretPath=example/path)
+# Each guard is greped for its OWN message, the way every other guard case in
+# this file does it. Exit code alone is not enough: the fixture below trips both
+# guards, so `RC -ne 0` passed with either one deleted -- which is how a guard
+# added specifically to stop an untested claim ended up untested itself.
+render "${MINIMAL[@]}" --set redis.enabled=true
+{ [ "$RC" -ne 0 ] && grep -q 'without SESSION_STORE=redis' <<<"$OUT"; } && pass "redis.enabled without SESSION_STORE=redis rejected" || fail "should reject redis.enabled with no SESSION_STORE"
+# An absent key and a wrong VALUE are the same mistake with different symptoms.
+render "${MINIMAL[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=memory --set web.env.REDIS_URL=redis://x:6379/0
+{ [ "$RC" -ne 0 ] && grep -q 'without SESSION_STORE=redis' <<<"$OUT"; } && pass "redis.enabled with SESSION_STORE=memory rejected" || fail "should reject a Redis the app will not use"
+# The URL guard keys on SESSION_STORE, not on redis.enabled, so it also covers
+# the external-Redis path values.yaml documents (enabled:false + a URL).
+render "${MINIMAL[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=redis
+{ [ "$RC" -ne 0 ] && grep -q 'no non-empty REDIS_URL' <<<"$OUT"; } && pass "SESSION_STORE=redis without REDIS_URL rejected" || fail "should reject a missing REDIS_URL"
+render "${MINIMAL[@]}" --set web.env.SESSION_STORE=redis
+{ [ "$RC" -ne 0 ] && grep -q 'no non-empty REDIS_URL' <<<"$OUT"; } && pass "external-redis path without REDIS_URL rejected" || fail "enabled:false + SESSION_STORE=redis must still need a URL"
+# Empty is not present: every other guard here rejects a blank value, and a
+# blank URL is the exact READY-pod-that-500s state the message describes.
+render "${MINIMAL[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=redis --set web.env.REDIS_URL=""
+{ [ "$RC" -ne 0 ] && grep -q 'no non-empty REDIS_URL' <<<"$OUT"; } && pass "empty REDIS_URL rejected" || fail "an empty URL must be rejected like a missing one"
+# Matches the app, which does .strip().lower() on this variable.
+render "${MINIMAL[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=Redis --set web.env.REDIS_URL=redis://x:6379/0
+[ "$RC" -eq 0 ] && pass "SESSION_STORE is case-insensitive, as the app reads it" || fail "Redis should be accepted: the app lowercases"
 
 echo "== J: the overlay actually persists chat, and the tag is well-formed =="
 # The feature this chart exists to ship is the sidebar; on the default store a
