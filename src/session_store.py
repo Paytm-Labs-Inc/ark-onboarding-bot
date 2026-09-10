@@ -15,6 +15,8 @@ _ARK_SESSION_ID_RE = re.compile(r"\bs-([a-z0-9]{8,})\b", re.IGNORECASE)
 SESSION_KEY_PREFIX = "ark-onboarding-bot:"
 DEFAULT_ARCHIVE_AFTER_DAYS = 7
 DEFAULT_SESSION_MAX_TURNS = 100
+DEFAULT_HISTORY_TURNS = 12
+DEFAULT_HISTORY_SUMMARY_MAX_CHARS = 3200
 TITLE_MAX_LEN = 64
 
 
@@ -35,14 +37,77 @@ def max_stored_turns() -> int:
 
 
 def max_history_turns() -> int:
-    """Turns sent to the model; 0 means the full stored thread."""
-    raw = os.environ.get("MAX_HISTORY_TURNS", "0").strip()
-    if not raw or raw == "0":
+    """Verbatim Q/A pairs sent to the model. Default 12; -1 = unlimited full thread."""
+    raw = os.environ.get("MAX_HISTORY_TURNS")
+    if raw is None:
+        return DEFAULT_HISTORY_TURNS
+    raw = raw.strip().lower()
+    if raw in ("-1", "unlimited", "all"):
         return 0
+    if raw == "0" or not raw:
+        return DEFAULT_HISTORY_TURNS
     try:
         return max(1, int(raw))
     except ValueError:
-        return 0
+        return DEFAULT_HISTORY_TURNS
+
+
+def history_summary_max_chars() -> int:
+    raw = os.environ.get("HISTORY_SUMMARY_MAX_CHARS")
+    if raw is None:
+        return DEFAULT_HISTORY_SUMMARY_MAX_CHARS
+    raw = raw.strip()
+    if not raw:
+        return DEFAULT_HISTORY_SUMMARY_MAX_CHARS
+    try:
+        return max(256, int(raw))
+    except ValueError:
+        return DEFAULT_HISTORY_SUMMARY_MAX_CHARS
+
+
+def _turn_dialogue_lines(question: str, answer: str) -> str:
+    lines: list[str] = []
+    q = question.strip()
+    a = answer.strip()
+    if q:
+        lines.append(f"User: {q}")
+    if a:
+        lines.append(f"Assistant: {a}")
+    return "\n".join(lines)
+
+
+def compile_history_summary(
+    turns: list[Any],
+    *,
+    verbatim_cap: int,
+    max_chars: int,
+) -> str:
+    """Fold middle turns into a capped summary; turn 0 stays verbatim separately."""
+    if verbatim_cap <= 0 or len(turns) <= verbatim_cap:
+        return ""
+    # Keep the first turn out of the summary — it usually holds constraints
+    # ("I'm on OCL", tenant name, etc.) that get lost if we drop oldest-first.
+    middle = turns[1:-verbatim_cap] if len(turns) > 1 else turns[:-verbatim_cap]
+    if not middle:
+        return ""
+    parts: list[str] = []
+    for turn in middle:
+        if hasattr(turn, "question"):
+            block = _turn_dialogue_lines(str(turn.question), str(turn.answer))
+        else:
+            block = _turn_dialogue_lines(
+                str(turn.get("question", "")),
+                str(turn.get("answer", "")),
+            )
+        if block:
+            parts.append(block)
+    text = "\n\n".join(parts)
+    if len(text) <= max_chars:
+        return text
+    # Truncate from the front to preserve the turns adjacent to the live window.
+    # Recent context carries coreference and disambiguation; older turns matter less.
+    # text[-(max_chars - 1):] keeps turns 20–32 instead of 1–5.
+    return "…" + text[-(max_chars - 1) :]
 
 
 def session_ttl_seconds() -> int | None:
@@ -132,6 +197,7 @@ class StoredSession:
     updated_at: str = ""
     archived: bool = False
     archived_at: str | None = None
+    history_summary: str = ""
     turns: list[StoredTurn] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -143,6 +209,7 @@ class StoredSession:
             "updated_at": self.updated_at,
             "archived": self.archived,
             "archived_at": self.archived_at,
+            "history_summary": self.history_summary,
             "turns": [turn.to_dict() for turn in self.turns],
         }
         if self.linked_ark_session_id:
@@ -174,6 +241,7 @@ class StoredSession:
             updated_at=str(data.get("updated_at") or ""),
             archived=bool(data.get("archived")),
             archived_at=str(archived_at) if archived_at else None,
+            history_summary=str(data.get("history_summary") or ""),
             turns=turns,
         )
 
@@ -476,12 +544,33 @@ class RedisSessionStore:
         # which modifies indices. Iterating zrange while modifying it can
         # miss sessions or cause consistency issues.
         idle_days = archive_after_days()
-        active_ids = self._client.zrange(self._active_key(user_id), 0, -1)
 
-        # ✅ Collect all sessions to archive (separate from modification).
+        # The scan reads no session bodies. _should_archive consults exactly two
+        # things: `archived`, which is false for everything in the ACTIVE index
+        # by construction, and _parse_iso(updated_at) -- which is precisely the
+        # score save() writes. So withscores answers the question, and only the
+        # rows that actually cross the cutoff get loaded.
+        #
+        # This was the whole cost of drawing the sidebar: listing GET the full
+        # body of every thread purely to read one timestamp, twice per refresh
+        # (active and archived), on load, after every answer and on New chat.
+        # With 20 threads of 40 turns that measured ~40 GETs and 3.2 MiB per
+        # refresh -- about 6.5 MiB of Redis reads per message once this ships.
+        cutoff = time.time() - idle_days * 86400
+        scored = self._client.zrange(
+            self._active_key(user_id), 0, -1, withscores=True
+        )
+
+        # ✅ Collect all sessions to archive (separate from modification),
+        # because archiving calls save(), which modifies the index we are
+        # iterating.
         to_archive = []
-        for session_id in active_ids:
+        for session_id, score in scored:
+            if not (0 < score <= cutoff):
+                continue
             session = self.load(session_id)
+            # Re-checked against the loaded row so _should_archive stays the
+            # single definition of the rule; the score only narrows the field.
             if session is not None and _should_archive(session, idle_days):
                 to_archive.append(session)
 

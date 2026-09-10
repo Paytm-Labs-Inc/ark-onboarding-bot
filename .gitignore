@@ -16,3 +16,7 @@ eval/results/
 # thousands of lines of unreviewable JSON in front of anyone reviewing a
 # deploy. Keep runs local; publish conclusions, not raw judge output.
 eval/bench/results/
+
+# Local scratch: smoke-test output and worktree pointers, committed by accident.
+.smoke_session_results.txt
+.worktrees/

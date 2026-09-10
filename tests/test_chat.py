@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
-from src.chat import ChatSession, ask_in_session, ask_in_session_stream
+from src.chat import ChatSession, ask_in_session, ask_in_session_stream, refresh_history_summary
 
 
 class ChatSessionTests(unittest.TestCase):
@@ -32,12 +33,31 @@ class ChatSessionTests(unittest.TestCase):
         self.assertEqual(len(history), 1)
         self.assertIn("Cursor", history[0]["question"])
 
-    def test_session_stores_all_turns_and_sends_full_history(self) -> None:
+    def test_session_stores_all_turns_under_verbatim_cap(self) -> None:
         session = ChatSession()
         for index in range(6):
             session.add_turn(f"q{index}", f"a{index}", [], [])
+        refresh_history_summary(session)
         self.assertEqual(len(session.turns), 6)
         self.assertEqual(len(session.history_for_prompt()), 6)
+        self.assertEqual(session.history_summary, "")
+
+    def test_long_thread_caps_verbatim_history_and_summarizes_older(self) -> None:
+        with patch.dict(os.environ, {"MAX_HISTORY_TURNS": "12"}, clear=False):
+            session = ChatSession()
+            for index in range(15):
+                session.add_turn(f"q{index}", f"a{index}", [], [])
+            refresh_history_summary(session)
+            self.assertEqual(len(session.turns), 15)
+            history = session.history_for_prompt()
+            self.assertEqual(len(history), 14)
+            self.assertNotIn("q0", session.history_summary)
+            self.assertIn("q1", session.history_summary)
+            self.assertIn("q2", session.history_summary)
+            self.assertNotIn("q14", session.history_summary)
+            self.assertEqual(history[-1]["question"], "q14")
+            self.assertEqual(history[0]["question"], "(Earlier conversation summary)")
+            self.assertEqual(history[1]["question"], "q0")
 
 
 class DegradedPassthroughTests(unittest.TestCase):

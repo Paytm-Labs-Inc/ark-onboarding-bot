@@ -85,11 +85,17 @@ class WebAppTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["answer"], "Use ~/.cursor/mcp.json")
         self.assertEqual(len(payload["sources"]), 1)
-        mock_ask.assert_called_once_with("sess-1", "how do I set up Cursor?")
+        mock_ask.assert_called_once()
+        self.assertEqual(mock_ask.call_args.args[0], "sess-1")
+        self.assertEqual(mock_ask.call_args.args[1], "how do I set up Cursor?")
+        self.assertEqual(
+            mock_ask.call_args.kwargs["user_id"],
+            self.client.cookies[auth.BROWSER_ID_COOKIE],
+        )
 
     @patch("src.web.ask_in_session_stream")
     def test_api_ask_stream_emits_sse_events(self, mock_stream) -> None:
-        def fake_stream(_session_id, _question):
+        def fake_stream(_session_id, _question, user_id=None):
             yield {"type": "delta", "text": "Run "}
             yield {
                 "type": "done",
@@ -120,7 +126,13 @@ class WebAppTests(unittest.TestCase):
         self.assertIn('"type": "delta"', body)
         self.assertIn('"type": "done"', body)
         self.assertIn("Run ark host enroll.", body)
-        mock_stream.assert_called_once_with("sess-2", "how do I enroll a host?")
+        mock_stream.assert_called_once()
+        self.assertEqual(mock_stream.call_args.args[0], "sess-2")
+        self.assertEqual(mock_stream.call_args.args[1], "how do I enroll a host?")
+        self.assertEqual(
+            mock_stream.call_args.kwargs["user_id"],
+            self.client.cookies[auth.BROWSER_ID_COOKIE],
+        )
 
     def test_api_ask_rejects_blank_question(self) -> None:
         response = self.client.post("/api/ask", json={"question": "   "})
@@ -143,6 +155,85 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertIn('"rating": "up"', lines[0])
 
+
+class SessionApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        os.environ.pop("ARK_ACCESS_TOKEN", None)
+        # These tests run with SSO configured so they exercise the identity
+        # current_user_id() prefers. The cookie fallback -- what production uses
+        # until the ingress gate is flipped -- is covered by
+        # BrowserScopedSessionTests below.
+        os.environ["SSO_IDENTITY_HEADER"] = "X-SSO-User"
+        from src.session_store import MemorySessionStore, reset_session_store
+
+        reset_session_store(MemorySessionStore())
+        self.warm_patch = patch("src.web.warm_services")
+        self.warm_patch.start()
+        self.client = TestClient(app)
+
+    def tearDown(self) -> None:
+        from src.session_store import reset_session_store
+
+        self.warm_patch.stop()
+        reset_session_store(None)
+        os.environ.pop("SSO_IDENTITY_HEADER", None)
+
+    @patch("src.web.ask_in_session")
+    def test_get_session_returns_saved_turns(self, mock_ask) -> None:
+        from src.session_store import (
+            MemorySessionStore,
+            StoredSession,
+            StoredTurn,
+            reset_session_store,
+            title_from_question,
+        )
+
+        mock_ask.return_value = {
+            "session_id": "sess-x",
+            "answer": "hello",
+            "citations": [],
+            "retrieved_sources": [],
+            "sources": [],
+            "handoff": False,
+        }
+        self.client.post("/api/ask", json={"question": "hi"})
+        sid = mock_ask.return_value["session_id"]
+        browser_id = self.client.cookies[auth.BROWSER_ID_COOKIE]
+        store = MemorySessionStore()
+        store.save(
+            StoredSession(
+                session_id=sid,
+                user_id=browser_id,
+                title=title_from_question("hi"),
+                turns=[StoredTurn("hi", "hello", [], [])],
+            )
+        )
+        reset_session_store(store)
+
+        response = self.client.get(f"/api/session/{sid}")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["session_id"], sid)
+        self.assertEqual(len(body["turns"]), 1)
+
+    def test_get_missing_session_404(self) -> None:
+        response = self.client.get("/api/session/does-not-exist")
+        self.assertEqual(response.status_code, 404)
+
+    def test_list_sessions_empty(self) -> None:
+        response = self.client.get("/api/sessions")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["sessions"], [])
+
+    def test_list_archived_sessions_empty(self) -> None:
+        response = self.client.get("/api/sessions?archived=true")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["sessions"], [])
+
+    @patch("src.web.ask_in_session")
+    def test_reset_missing_session_404(self, mock_ask) -> None:
+        response = self.client.post("/api/reset", json={"session_id": "missing"})
+        self.assertEqual(response.status_code, 404)
 
 
 class FeedbackWriteFailureTests(unittest.TestCase):
@@ -191,7 +282,7 @@ class AskRateLimitEdgeTests(unittest.TestCase):
 
     @patch.dict(os.environ, {"ASK_RATE_LIMIT_PER_MINUTE": "1"})
     def test_the_stream_endpoint_is_limited_too(self) -> None:
-        def fake_stream(session_id, question):
+        def fake_stream(session_id, question, user_id=None):
             yield {"type": "done", "answer": "ok", "citations": [], "session_id": "s"}
         with patch("src.web.ask_in_session_stream", side_effect=fake_stream):
             self.assertEqual(self.client.post("/api/ask/stream", json={"question": "q"}).status_code, 200)
@@ -470,6 +561,161 @@ class BrowserIdentityTests(unittest.TestCase):
             os.environ.pop("ARK_ACCESS_TOKEN", None)
 
 
+class BrowserScopedSessionTests(unittest.TestCase):
+    """Isolation must hold on the cookie alone, before SSO is flipped.
+
+    Shipping the sidebar on a per-browser id is only defensible if one browser
+    genuinely cannot read another's threads. These seed the store directly
+    rather than driving /api/ask: mocking the ask path writes no session, which
+    would leave the list assertions passing against an empty store and proving
+    nothing.
+    """
+
+    MINE = "browseraaaaaaaaaa"
+    THEIRS = "browserbbbbbbbbbb"
+
+    def setUp(self) -> None:
+        os.environ.pop("ARK_ACCESS_TOKEN", None)
+        os.environ.pop("SSO_IDENTITY_HEADER", None)
+        from src.session_store import MemorySessionStore, reset_session_store
+
+        self.store = MemorySessionStore()
+        reset_session_store(self.store)
+        self.warm_patch = patch("src.web.warm_services")
+        self.warm_patch.start()
+
+    def tearDown(self) -> None:
+        from src.session_store import reset_session_store
+
+        self.warm_patch.stop()
+        reset_session_store(None)
+
+    def _seed(self, user_id: str, session_id: str) -> str:
+        from src.session_store import StoredSession, StoredTurn
+
+        self.store.save(
+            StoredSession(
+                session_id=session_id,
+                user_id=user_id,
+                title="how do I set up Cursor?",
+                turns=[
+                    StoredTurn(
+                        question="how do I set up Cursor?",
+                        answer="Run ark init.",
+                        citations=[],
+                        retrieved_sources=[],
+                    )
+                ],
+            )
+        )
+        return session_id
+
+    def _client_for(self, browser_id: str) -> TestClient:
+        client = TestClient(app)
+        client.cookies.set(auth.BROWSER_ID_COOKIE, browser_id)
+        return client
+
+    def test_the_list_is_served_without_sso(self) -> None:
+        # The removed gate returned 503 here, which hid the sidebar entirely.
+        self._seed(self.MINE, "s-mine-1")
+        response = self._client_for(self.MINE).get("/api/sessions")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [s["session_id"] for s in response.json()["sessions"]], ["s-mine-1"]
+        )
+
+    def test_one_browser_cannot_list_anothers_threads(self) -> None:
+        self._seed(self.MINE, "s-mine-1")
+        self._seed(self.THEIRS, "s-theirs-1")
+
+        # Asserted against a store that demonstrably holds both, so an empty
+        # result here is scoping and not an empty store.
+        listed = self._client_for(self.THEIRS).get("/api/sessions").json()["sessions"]
+        self.assertEqual([s["session_id"] for s in listed], ["s-theirs-1"])
+
+    def test_a_thread_from_another_browser_is_404_not_403(self) -> None:
+        # 404 rather than 403: the id is the capability, and distinguishing
+        # "not yours" from "does not exist" would confirm the thread exists.
+        self._seed(self.MINE, "s-mine-1")
+
+        theirs = self._client_for(self.THEIRS)
+        self.assertEqual(theirs.get("/api/session/s-mine-1").status_code, 404)
+        # Same status as a thread that was never created at all.
+        self.assertEqual(theirs.get("/api/session/s-nope").status_code, 404)
+
+    def test_the_sso_cutover_does_not_re_key_existing_threads(self) -> None:
+        """Documents the cutover cost, because the code comment once denied it.
+
+        Threads carry the browser id in stored user_id. Flipping the ingress
+        gate changes which identity current_user_id() PREFERS, not what is
+        already on disk -- so on that day every existing sidebar empties and
+        every existing thread 404s. New threads key to the person correctly.
+
+        This is a real product decision (backfill, or tell people history
+        restarts) and it belongs to the SSO rollout. The test exists so the
+        decision is made rather than discovered in production.
+        """
+        self._seed(self.MINE, "s-mine-1")
+        client = self._client_for(self.MINE)
+        self.assertEqual(
+            [s["session_id"] for s in client.get("/api/sessions").json()["sessions"]],
+            ["s-mine-1"],
+        )
+
+        # The gate goes on; same browser, same cookie, now with an identity.
+        os.environ["SSO_IDENTITY_HEADER"] = "X-SSO-User"
+        try:
+            headers = {"X-SSO-User": "someone@paytm.com"}
+            self.assertEqual(
+                client.get("/api/sessions", headers=headers).json()["sessions"], []
+            )
+            self.assertEqual(
+                client.get("/api/session/s-mine-1", headers=headers).status_code, 404
+            )
+        finally:
+            os.environ.pop("SSO_IDENTITY_HEADER", None)
+
+        # The thread is not lost, only unreachable under the new identity.
+        self.assertIsNotNone(self.store.load("s-mine-1"))
+
+    def test_another_browser_cannot_delete_your_thread(self) -> None:
+        """The delete path deserves the same proof as the read paths.
+
+        /api/reset is the only endpoint that destroys data, and its owner check
+        was the one nothing pinned: removing `or stored.user_id != user_id`
+        from reset_session left the whole suite green, while the same deletion
+        in load_session_payload went red immediately.
+
+        The status code is the lesser assertion here. What matters is that the
+        thread is still in the store afterwards.
+        """
+        self._seed(self.MINE, "s-mine-1")
+
+        theirs = self._client_for(self.THEIRS)
+        response = theirs.post("/api/reset", json={"session_id": "s-mine-1"})
+        self.assertEqual(response.status_code, 404)
+
+        # The point of the test: the refusal actually protected the data.
+        self.assertIsNotNone(self.store.load("s-mine-1"))
+
+    def test_the_owner_can_delete_their_own_thread(self) -> None:
+        # Without this, the refusal above would pass just as well if reset
+        # were broken for everyone.
+        self._seed(self.MINE, "s-mine-1")
+        response = self._client_for(self.MINE).post(
+            "/api/reset", json={"session_id": "s-mine-1"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(self.store.load("s-mine-1"))
+
+    def test_the_owner_can_read_their_own_thread(self) -> None:
+        # Without this the 404s above would also pass if reads were simply broken.
+        self._seed(self.MINE, "s-mine-1")
+        response = self._client_for(self.MINE).get("/api/session/s-mine-1")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["session_id"], "s-mine-1")
+
+
 class ErrorTextAndHeadersTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
@@ -581,10 +827,10 @@ class DesignTokenConsistencyTests(unittest.TestCase):
         import src.answer as answer_mod
 
         answer_mod._gateway_check = (0.0, None)
-        os.environ["PI_API_KEY"] = "stale-key"
-        with patch("src.answer.httpx.get") as get:
-            get.return_value = MagicMock(status_code=401)
-            reason = answer_mod.unusable_backend_model()
+        with patch.dict(os.environ, {"PI_API_KEY": "stale-key", "ANSWER_BACKEND": "pi"}):
+            with patch("src.answer.httpx.get") as get:
+                get.return_value = MagicMock(status_code=401)
+                reason = answer_mod.unusable_backend_model()
         self.assertIsNotNone(reason)
         self.assertIn("credential", str(reason))
 
@@ -593,17 +839,13 @@ class DesignTokenConsistencyTests(unittest.TestCase):
         import src.answer as answer_mod
 
         answer_mod._gateway_check = (0.0, None)
-        os.environ["PI_API_KEY"] = "k"
-        os.environ["PI_MODEL"] = "qwen/qwen3-32b"
-        try:
+        with patch.dict(os.environ, {"PI_API_KEY": "k", "PI_MODEL": "qwen/qwen3-32b", "ANSWER_BACKEND": "pi"}):
             with patch("src.answer.httpx.get") as get:
                 get.return_value = MagicMock(
                     status_code=200,
                     json=lambda: {"data": [{"id": "llama-3.3-70b-versatile"}]},
                 )
                 reason = answer_mod.unusable_backend_model()
-        finally:
-            os.environ.pop("PI_MODEL", None)
         self.assertIsNotNone(reason)
         self.assertIn("not served", str(reason))
 
@@ -617,27 +859,27 @@ class DesignTokenConsistencyTests(unittest.TestCase):
         """
         import src.answer as answer_mod
 
-        os.environ["PI_API_KEY"] = "k"
-        for failure in (TimeoutError("read timeout"), None):
-            with self.subTest(failure=failure):
-                answer_mod._gateway_check = (0.0, None)
-                with patch("src.answer.httpx.get") as get:
-                    if failure is None:
-                        get.return_value = MagicMock(status_code=503)
-                    else:
-                        get.side_effect = failure
-                    self.assertIsNone(answer_mod.unusable_backend_model())
+        with patch.dict(os.environ, {"PI_API_KEY": "k", "ANSWER_BACKEND": "pi"}):
+            for failure in (TimeoutError("read timeout"), None):
+                with self.subTest(failure=failure):
+                    answer_mod._gateway_check = (0.0, None)
+                    with patch("src.answer.httpx.get") as get:
+                        if failure is None:
+                            get.return_value = MagicMock(status_code=503)
+                        else:
+                            get.side_effect = failure
+                        self.assertIsNone(answer_mod.unusable_backend_model())
 
     def test_the_gateway_check_is_cached(self) -> None:
         """kubelet polls /ready every few seconds; an uncached check is traffic."""
         import src.answer as answer_mod
 
         answer_mod._gateway_check = (0.0, None)
-        os.environ["PI_API_KEY"] = "k"
-        with patch("src.answer.httpx.get") as get:
-            get.return_value = MagicMock(status_code=200, json=lambda: {"data": []})
-            for _ in range(5):
-                answer_mod.unusable_backend_model(now=1000.0)
+        with patch.dict(os.environ, {"PI_API_KEY": "k", "ANSWER_BACKEND": "pi"}):
+            with patch("src.answer.httpx.get") as get:
+                get.return_value = MagicMock(status_code=200, json=lambda: {"data": []})
+                for _ in range(5):
+                    answer_mod.unusable_backend_model(now=1000.0)
         self.assertEqual(get.call_count, 1, "the probe must not call out every time")
 
     def test_new_chat_cannot_be_undone_by_an_in_flight_answer(self) -> None:
@@ -654,12 +896,13 @@ class DesignTokenConsistencyTests(unittest.TestCase):
         self.assertIn("let chatGeneration = 0;", body)
         self.assertIn("const generation = chatGeneration;", body)
         self.assertIn("chatGeneration += 1;", body, "New chat must bump the generation")
-        # The guard has to sit BEFORE the session id is adopted and the turn is
-        # persisted, or it does not prevent either.
-        guard = body.index("if (generation !== chatGeneration)")
-        self.assertLess(guard, body.index("sessionId = payload.session_id;"))
-        # the CALL site, not the function definition, which sits far earlier
-        self.assertLess(guard, body.index("persistCompletedTurn(question, payload.answer"))
+        # Scope to the ask submit handler: bootstrap/openSession also adopt
+        # session ids, and the guard must sit before those in the in-flight path.
+        submit = body[body.index('form.addEventListener("submit"'):]
+        guard = submit.index("if (generation !== chatGeneration)")
+        self.assertLess(guard, submit.index("sessionId = payload.session_id;"))
+        self.assertLess(guard, submit.index("persistCompletedTurn(question, payload.answer"))
+        guard += body.index('form.addEventListener("submit"')
 
         # The guard must ABORT, not merely exist. Presence-and-order assertions
         # survive neutralising the body -- ArkBot demonstrated exactly that
