@@ -56,8 +56,13 @@ jobs:
       - name: Retrieval eval gate
         run: python eval/run_eval.py --quiet-retriever --only-scored
 
-  # Adversarial scope + jailbreak refusals. The pre-retrieval router in
-  # src/scope_router.py is the gate; a red tile means a refusal regression.
+  # Adversarial scope + jailbreak refusals. The router in src/scope_router.py is
+  # the gate for the shapes it owns -- injection, out-of-scope, credential
+  # enumeration, bypass -- and tests/test_scope_router.py pins those against the
+  # holdout. It is NOT the gate for corpus-dependent rows such as a ship date:
+  # those reach the model, so a red tile there is a MODEL regression (or model
+  # nondeterminism), not a router one. Read the failing row before assuming a
+  # regex went missing.
   guardrail-eval:
     needs: injection-eval
     runs-on: ubuntu-latest
