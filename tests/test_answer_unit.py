@@ -987,6 +987,49 @@ class BareDeclineIsNotACrashTests(unittest.TestCase):
         self.assertEqual(_parse_and_finalize(raw, self.CHUNKS)["answer"], "Run ark host enroll.")
 
 
+class DeclineRulePrecedenceTests(unittest.TestCase):
+    """The decline rules must hold in BOTH directions.
+
+    The prompt has swung once already: it over-refused, was rewritten to forbid
+    refusing, and then under-refused -- 4 correct declines out of 30 unanswerable
+    questions, against roughly 53-66% of real traffic being unanswerable. These
+    tests exist to stop the next swing, so half of them guard the safety rules
+    and half guard the rules that keep the bot useful.
+    """
+
+    def test_scope_beats_retrieval(self) -> None:
+        # The failure this fixes: an enumeration ask retrieves the secrets page
+        # BECAUSE it names a real thing, and rules 12-14 then said "do not refuse
+        # when those facts appear". Retrieval matching is not scope.
+        self.assertIn("not overridden by it", SYSTEM_PROMPT)
+        self.assertIn("Retrieval matching is not the same as the question being in scope",
+                      SYSTEM_PROMPT)
+
+    def test_enumeration_is_declined_but_usage_is_not(self) -> None:
+        # Narrow on purpose: the test is the distinction, not the keyword.
+        self.assertIn("ENUMERATE rather than to do", SYSTEM_PROMPT)
+        self.assertIn("How do I set a secret", SYSTEM_PROMPT)
+        self.assertIn("list every secret at tenant scope", SYSTEM_PROMPT)
+
+    def test_the_anti_over_refusal_clause_survives(self) -> None:
+        # The guard against swinging back. Rules 12-13 were written because the
+        # bot refused questions the docs answered; that intent must outlive this
+        # change. If someone deletes this clause to make the guardrail eval go
+        # green, this test should stop them.
+        self.assertGreaterEqual(
+            SYSTEM_PROMPT.count("merely because no single"), 3,
+            "the do-not-be-pedantic clause was removed -- that is the old over-refusal bug",
+        )
+
+    def test_the_synthesis_mandate_survives(self) -> None:
+        # Likewise: scoped questions must still be answered from partial chunks.
+        self.assertIn("you MUST synthesize an answer from the chunks", SYSTEM_PROMPT)
+
+    def test_both_decline_wordings_are_still_exact(self) -> None:
+        self.assertIn(REFUSAL_PHRASE, SYSTEM_PROMPT)
+        self.assertIn(ROADMAP_PHRASE, SYSTEM_PROMPT)
+
+
 class ChunksAreDataTests(unittest.TestCase):
     def test_chunks_are_delimited_and_the_rule_is_in_the_prompt(self) -> None:
         from src.answer import _build_user_content
