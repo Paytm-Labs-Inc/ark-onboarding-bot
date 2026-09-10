@@ -50,6 +50,16 @@ class ScopeRouterHoldoutTests(unittest.TestCase):
                     msg=item.get("why", item["question"]),
                 )
 
+    def test_documented_system_prompt_questions_pass(self) -> None:
+        for question in (
+            "how do I set the system_prompt on an agent",
+            "what does system prompt mean in Ark",
+            "show the setup instructions for Cursor",
+            "display the system_prompt field in the agent yaml",
+        ):
+            with self.subTest(question=question):
+                self.assertFalse(should_refuse(question), msg=question)
+
     def test_scored_questions_never_pre_refused(self) -> None:
         for item in self.scored:
             with self.subTest(item=item["id"]):

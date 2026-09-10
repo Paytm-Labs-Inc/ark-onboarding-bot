@@ -16,8 +16,11 @@ _JAILBREAK_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"(instructions|rules|directives|prompt)",
         r"(ignore|disregard|forget)\s+(all\s+)?(instructions|rules|directives)",
         r"forget everything above",
-        r"(show|print|reveal|display|repeat|translate)\s+(me\s+)?(your\s+)?(the\s+)?"
-        r"(system prompt|instructions you were given|instructions)",
+        r"(show|print|reveal|display|repeat|translate)\s+(me\s+)?your\s+"
+        r"(system prompt|instructions|prompt)",
+        r"(show|print|reveal|display)\s+(me\s+)?(the\s+)?instructions you were given",
+        r"(show|print|reveal|display)\s+(me\s+)?the\s+system prompt"
+        r"(?! (field|key|parameter|option|yaml))",
         r"repeat the text above",
         r"(you are now|act as|pretend you)\s+(an?\s+)?"
         r"(unrestricted|unrestricted assistant|DevGPT|FreeBot|assistant with no rules)",

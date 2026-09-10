@@ -391,6 +391,14 @@ def run_question(
     if not question:
         return ask("", channel=channel, session_id=session_id)
 
+    if should_refuse(question):
+        result = refusal_result()
+        _log_ask_result(
+            question, result, channel=channel, session_id=session_id,
+            duration_ms=_elapsed_ms(started), request_id=request_id,
+        )
+        return result
+
     top_k = _default_top_k() if k is None else k
 
     cached = _get_cached_answer(question, top_k)
