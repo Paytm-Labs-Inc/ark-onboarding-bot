@@ -32,11 +32,12 @@ class ChatSessionTests(unittest.TestCase):
         self.assertEqual(len(history), 1)
         self.assertIn("Cursor", history[0]["question"])
 
-    def test_session_keeps_recent_turns_only(self) -> None:
+    def test_session_stores_all_turns_and_sends_full_history(self) -> None:
         session = ChatSession()
         for index in range(6):
             session.add_turn(f"q{index}", f"a{index}", [], [])
-        self.assertEqual(len(session.turns), 4)
+        self.assertEqual(len(session.turns), 6)
+        self.assertEqual(len(session.history_for_prompt()), 6)
 
 
 class DegradedPassthroughTests(unittest.TestCase):

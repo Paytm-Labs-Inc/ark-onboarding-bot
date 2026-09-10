@@ -10,3 +10,5 @@ httpx>=0.27
 # Answer generation uses Pi Inference (PI_API_KEY) by default; the Cursor agent
 # CLI + CURSOR_API_KEY is the optional ANSWER_BACKEND=cursor path.
 slack-bolt>=1.18
+redis>=5.0
+fakeredis>=2.0
