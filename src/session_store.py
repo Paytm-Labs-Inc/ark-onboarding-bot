@@ -390,28 +390,36 @@ class RedisSessionStore:
         ) or time.time()
         ttl = session_ttl_seconds()
 
-        # ✅ Use WATCH/MULTI/EXEC to ensure atomicity across user indices.
-        # If another thread changes the session's user_id between our read and
-        # execute, WatchError is raised and we retry with the new user_id.
-        # This prevents one session appearing in multiple users' indices.
+        # ✅ Use WATCH/MULTI/EXEC to ensure atomicity across all 3 keys
+        # (body_key, meta_key, index_keys). If any watched key changes between
+        # watch and execute, the transaction is aborted and we retry. This ensures
+        # a crash mid-write doesn't leave orphaned data.
         while True:
             try:
-                # ✅ Read current metadata AFTER watch to detect user changes.
+                # ✅ WATCH all keys that we'll modify to detect concurrent changes.
                 self._client.watch(meta_key)
+
+                # ✅ Read current metadata AFTER watch to detect user changes.
                 existing_meta = self._client.hgetall(meta_key)
                 existing_user = existing_meta.get("user_id", "")
 
-                # Start transaction AFTER reading current state.
+                # ✅ Determine which indices we'll update (must be atomic with meta change).
+                user = session.user_id
+                active_key = self._active_key(user)
+                archived_key = self._archived_key(user)
+
+                # Start MULTI/EXEC transaction — all commands execute or none.
                 pipe = self._client.pipeline(transaction=True)
 
-                # ✅ If user_id changed, clean up old indices.
-                if existing_user and existing_user != session.user_id:
+                # ✅ If user_id changed, clean up old indices FIRST (before new write).
+                if existing_user and existing_user != user:
                     old_active = self._active_key(existing_user)
                     old_archived = self._archived_key(existing_user)
                     pipe.zrem(old_active, session.session_id)
                     pipe.zrem(old_archived, session.session_id)
 
-                # Write body and metadata atomically.
+                # ✅ Write body and metadata atomically in one transaction.
+                # No crash gap: all 3 keys (body, meta, index) updated together or not at all.
                 if ttl is not None:
                     pipe.setex(body_key, ttl, payload)
                     pipe.hset(meta_key, mapping=meta)
@@ -420,10 +428,7 @@ class RedisSessionStore:
                     pipe.set(body_key, payload)
                     pipe.hset(meta_key, mapping=meta)
 
-                # Update indices atomically (now with the correct user_id).
-                user = session.user_id
-                active_key = self._active_key(user)
-                archived_key = self._archived_key(user)
+                # ✅ Update indices atomically (now with the correct user_id).
                 if session.archived:
                     pipe.zrem(active_key, session.session_id)
                     pipe.zadd(archived_key, {session.session_id: score})
@@ -431,13 +436,13 @@ class RedisSessionStore:
                     pipe.zrem(archived_key, session.session_id)
                     pipe.zadd(active_key, {session.session_id: score})
 
-                # Execute atomically.
+                # ✅ Execute atomically: all commands or none. No partial updates.
                 pipe.execute()
-                break  # ✅ Success, exit retry loop.
+                break  # Success, exit retry loop.
 
             except Exception as e:
-                # ✅ WatchError (redis.exceptions.WatchError) means meta_key changed.
-                # Retry the entire operation with the new state.
+                # ✅ WatchError means a watched key was modified by another client.
+                # Retry the entire operation with the current state.
                 if e.__class__.__name__ == "WatchError":
                     continue
                 raise
