@@ -5,6 +5,16 @@ on:
   push:
     branches: [main]
 
+# The five jobs below that call the Pi Inference gateway run in SEQUENCE, not in
+# parallel. A single run used to be five concurrent callers into a rate-limited
+# gateway, which produced three HTTP 429 failures on 2026-09-09 -- each on one
+# row, with no content regression, and each passing first try when run alone.
+#
+# Chained with `needs:` rather than a repo-wide concurrency group: that group
+# only holds ONE pending run, so a third trigger cancels the waiting one and
+# that PR gets no verdict at all -- and a cancelled run on main fails publish.
+# A slow verdict is recoverable; a missing one looks like "not run" and is not.
+#
 jobs:
   workflow-lint:
     # publish-image.yml only ever runs on main, so a broken expression in it
@@ -20,6 +30,7 @@ jobs:
           ./actionlint -color
 
   retrieval-eval:
+    needs: workflow-lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +62,7 @@ jobs:
   # gating on them would block every PR including the fix. It reports until the
   # pre-retrieval router lands, then the continue-on-error below comes off.
   guardrail-eval:
+    needs: injection-eval
     runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: true   # REMOVE once the pre-retrieval router lands
@@ -81,6 +93,7 @@ jobs:
             --questions eval/guardrail-questions.json --quiet-retriever
 
   injection-eval:
+    needs: refusal-eval
     runs-on: ubuntu-latest
     timeout-minutes: 20
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
@@ -114,6 +127,7 @@ jobs:
           python eval/bench/injection_test.py --position middle
 
   refusal-eval:
+    needs: retrieval-eval
     runs-on: ubuntu-latest
     # 11 real model calls, each bounded by PI_TIMEOUT_SECONDS x attempts.
     timeout-minutes: 30
@@ -158,6 +172,7 @@ jobs:
           python eval/run_eval.py --full --only-refusals --quiet-retriever
 
   full-eval:
+    needs: guardrail-eval
     runs-on: ubuntu-latest
     # 34 real model calls; ~35 min worst case on the pi path.
     timeout-minutes: 60
