@@ -5,16 +5,35 @@
 # against that combination, but only this Job makes the other one work.
 #
 # A hook rather than a plain Job, so the corpus is rewritten on every deploy and
-# cannot drift behind the image that ships the documents. before-hook-creation
-# deletes the previous run first, because a Job with a fixed name cannot be
-# recreated over itself.
+# cannot drift behind the image that ships the documents.
+#
+# pre-upgrade, not post-upgrade, and the difference is the whole feature. On
+# post-upgrade the pods roll first: they start, read whatever corpus is already
+# in Redis, build their index, and only then does the ingest write the new one.
+# Every deploy would serve the previous corpus, so a doc edit could not reach
+# users on the deploy that fetched it -- which is the problem this exists to
+# solve. Helm waits for a hook Job to complete, so pre-upgrade means the corpus
+# is in place before a single new pod starts.
+#
+# post-install rather than pre-install for the first deploy, because the Redis
+# this writes to is part of the same chart and does not exist yet at
+# pre-install. On a first install the pods find no corpus and fall back to
+# embedding data/, which is correct and is what they do today anyway.
+#
+# The cost: a failed ingest fails the upgrade. That is deliberate for an
+# unreachable Redis, since the pods need it regardless, and `helm upgrade
+# --no-hooks` is the escape hatch. It is why the doc refresh below is
+# best-effort rather than fatal.
+#
+# before-hook-creation deletes the previous run first, because a Job with a
+# fixed name cannot be recreated over itself.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: ark-onboarding-bot-corpus-ingest
   namespace: {{ .Values.namespace }}
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook": post-install,pre-upgrade
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
@@ -55,7 +74,14 @@ spec:
               {{- if .Values.corpus.ingest.refreshDocs }}
               # Re-pull the documents from the Foundry site first. This is what
               # makes a doc edit reach users without an image rebuild.
-              python -m src.ingest
+              #
+              # Best-effort on purpose. This hook gates the rollout, so a docs
+              # site that is slow or down would otherwise block shipping an
+              # application fix. On failure we say so loudly and ingest the
+              # copy in the image, which is stale but not wrong.
+              if ! python -m src.ingest; then
+                echo "WARNING: doc refresh failed; ingesting the image's copy of data/ instead" >&2
+              fi
               {{- end }}
               python -m src.corpus_store
               python -m src.corpus_store --status

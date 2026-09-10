@@ -121,7 +121,11 @@ render "${BASE[@]}" --set web.env.CORPUS_STORE=redis
 CORPUS=(--set corpus.store=redis --set corpus.ingest.enabled=true --set redis.enabled=true --set web.env.SESSION_STORE=redis --set web.env.REDIS_URL=redis://ark-onboarding-bot-redis:6379/0)
 render "${BASE[@]}" "${CORPUS[@]}"
 [ "$RC" -eq 0 ] && grep -q 'CORPUS_STORE: "redis"' <<<"$OUT" && grep -q 'name: ark-onboarding-bot-corpus-ingest' <<<"$OUT" && pass "corpus on: env set and the ingest Job renders" || fail "corpus render wrong"
-grep -q '"helm.sh/hook": post-install,post-upgrade' <<<"$OUT" && grep -q 'hook-delete-policy": before-hook-creation' <<<"$OUT" && pass "ingest runs on deploy and replaces its previous run" || fail "hook annotations missing -- a second upgrade would fail on the existing Job"
+# post-upgrade would let the pods roll first, read the previous corpus and
+# build their index before the ingest ever ran -- so a doc edit could not reach
+# users on the deploy that fetched it.
+grep -q '"helm.sh/hook": post-install,pre-upgrade' <<<"$OUT" && pass "ingest runs BEFORE the pods roll" || fail "hook must be pre-upgrade, or every deploy serves the previous corpus"
+grep -q 'hook-delete-policy": before-hook-creation' <<<"$OUT" && pass "replaces its previous run" || fail "a second upgrade would fail on the existing Job"
 # A different image would embed with a different encoder, which the reader
 # rejects rather than serves.
 [ "$(grep -c 'image: "880170353725.dkr.ecr.ap-south-1.amazonaws.com/pai-mlops-platform/ark-chatbot:90000000000001-abcdef0-arm64"' <<<"$OUT")" -ge 2 ] && pass "ingest uses the same image as the pods" || fail "ingest image differs from the web image"

@@ -136,9 +136,11 @@ corpus:
     # inference gateway. Turn it on once that egress is confirmed; until then
     # the Job ingests the image's copy, which is correct, just not decoupled.
     refreshDocs: false
-    # The Job runs as a post-install/post-upgrade hook, so the corpus is
-    # rewritten on every deploy. A scheduled refresh is a follow-up; it needs a
-    # CronJob and a decision about how often the docs really change.
+    # The Job runs as a post-install/pre-upgrade hook, so the corpus is in
+    # place before any new pod starts. Helm waits for it, which means a failed
+    # ingest fails the upgrade; `helm upgrade --no-hooks` is the escape hatch.
+    # A scheduled refresh is a follow-up; it needs a CronJob and a decision
+    # about how often the docs really change.
     backoffLimit: 2
     resources:
       requests:
