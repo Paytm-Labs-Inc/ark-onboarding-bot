@@ -229,17 +229,23 @@ def evaluate_question(
                     if item.get("accepts_roadmap"):
                         declined = is_non_answer(answer_text)
                         # A roadmap decline cites the roadmap page BY DESIGN:
-                        # answer.py _finalize_parsed returns
-                        # {"answer": ROADMAP_PHRASE, "citations": [roadmap]}
-                        # when it retrieved that page. Demanding zero citations
-                        # here made the runtime's own correct output ungradeable,
-                        # so these rows went red on nothing but whether the model
-                        # reported the chunk it read. Any OTHER source still
-                        # fails: that is the model answering, not declining.
-                        cited_beyond_roadmap = [
-                            c for c in citations if not is_roadmap_source(c)
-                        ]
-                        citation_hit = declined and not cited_beyond_roadmap
+                        # answer.py _finalize_parsed returns the promise with
+                        # the roadmap source attached when it retrieved that
+                        # page, and when the promise is backed it keeps every
+                        # other citation the model reported too. Demanding zero
+                        # citations -- or only the roadmap -- made the runtime's
+                        # own correct output ungradeable, so the row went red on
+                        # nothing but which chunks the model named.
+                        #
+                        # What matters is that the promise is BACKED. Extra
+                        # sources alongside it are top-k reporting noise, not
+                        # evidence of answering: declined already established
+                        # the text carries no substantive answer. A promise with
+                        # citations but no roadmap among them still fails --
+                        # that is the unbacked promise roadmap_promise_unbacked
+                        # exists to catch.
+                        backed = any(is_roadmap_source(c) for c in citations)
+                        citation_hit = declined and (not citations or backed)
                     else:
                         declined = is_plain_refusal(answer_text)
                         citation_hit = declined and not citations
