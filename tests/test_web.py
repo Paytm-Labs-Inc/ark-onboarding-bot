@@ -5,13 +5,14 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
 from src import feedback as feedback_module
-from src import web
+from src import auth, web
 from src.web import app, missing_backend_credential
 
 
@@ -349,6 +350,72 @@ class SignOutClearsTheStoredChatTests(unittest.TestCase):
         key = "ark-onboarding-bot:chat:${base}"
         self.assertIn(key, chat, "chat.html no longer builds the expected key")
         self.assertIn(key, login, "login.html clears a different key than chat.html writes")
+
+
+class BrowserIdentityTests(unittest.TestCase):
+    """A per-browser id so chats have an owner before SSO exists.
+
+    Identity, never authorisation. The distinction is the whole test class:
+    anyone can send a cookie, so if this ever gated access, clearing cookies
+    would become a way in.
+    """
+
+    def setUp(self) -> None:
+        self.client = TestClient(app)
+        self._token = os.environ.pop("ARK_ACCESS_TOKEN", None)
+
+    def tearDown(self) -> None:
+        if self._token is not None:
+            os.environ["ARK_ACCESS_TOKEN"] = self._token
+        else:
+            os.environ.pop("ARK_ACCESS_TOKEN", None)
+
+    def test_a_browser_without_an_id_is_given_one(self) -> None:
+        response = self.client.get("/health")
+        self.assertIn(auth.BROWSER_ID_COOKIE, response.cookies)
+        self.assertRegex(response.cookies[auth.BROWSER_ID_COOKIE], r"^[A-Za-z0-9_-]{16,64}$")
+
+    def test_the_id_is_not_readable_by_the_page(self) -> None:
+        # Nothing in the page needs it, and a value scripts cannot read is one
+        # an injected script cannot use to identify a user.
+        header = self.client.get("/health").headers.get("set-cookie", "")
+        self.assertIn("httponly", header.lower())
+
+    def test_a_malformed_id_is_rejected_not_used(self) -> None:
+        # It is attacker-controlled and will build storage keys; a path
+        # separator or wildcard must never reach the store.
+        for bad in ("../../etc", "a" * 200, "has space", "*", ""):
+            request = SimpleNamespace(cookies={auth.BROWSER_ID_COOKIE: bad}, headers={})
+            self.assertIsNone(auth.browser_identity(request), bad)
+
+    def test_sso_identity_wins_over_the_browser_id(self) -> None:
+        # Once the gate is on, the person must beat the machine they sat at.
+        os.environ["SSO_IDENTITY_HEADER"] = "X-Auth-Request-Email"
+        try:
+            request = SimpleNamespace(
+                cookies={auth.BROWSER_ID_COOKIE: "browser0000000000"},
+                headers={"X-Auth-Request-Email": "someone@paytm.com"},
+            )
+            self.assertEqual(auth.current_identity(request), "someone@paytm.com")
+        finally:
+            os.environ.pop("SSO_IDENTITY_HEADER", None)
+
+    def test_a_browser_id_alone_is_not_authorisation(self) -> None:
+        # The one that matters. With a token configured, a request carrying only
+        # a browser id must still be refused -- otherwise "clear your cookies"
+        # becomes a way past the gate.
+        os.environ["ARK_ACCESS_TOKEN"] = "secret-token"
+        try:
+            client = TestClient(app)
+            response = client.get(
+                "/api/sessions",
+                cookies={auth.BROWSER_ID_COOKIE: "browser0000000000"},
+                follow_redirects=False,
+            )
+            self.assertIn(response.status_code, (401, 303, 404))
+            self.assertNotEqual(response.status_code, 200)
+        finally:
+            os.environ.pop("ARK_ACCESS_TOKEN", None)
 
 
 class ErrorTextAndHeadersTests(unittest.TestCase):
