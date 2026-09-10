@@ -182,6 +182,23 @@
     }
     .status.error { color: var(--ark-danger); }
 
+    .debug-badge {
+      display: inline-block; font-size: var(--ark-text-xs); font-weight: 600;
+      letter-spacing: var(--ark-tracking-caps); text-transform: uppercase;
+      padding: var(--ark-space-1) var(--ark-space-2); border-radius: var(--ark-radius-sm);
+      margin-bottom: var(--ark-space-2);
+    }
+    .debug-badge.already_fixed { background: rgba(34, 197, 94, 0.15); color: var(--ark-success); }
+    .debug-badge.needs_fix { background: rgba(167, 148, 234, 0.2); color: var(--ark-violet-400); }
+    .debug-badge.cannot_fix { background: rgba(239, 68, 68, 0.12); color: var(--ark-danger); }
+    .gate-actions { display: flex; gap: var(--ark-space-2); margin-top: var(--ark-space-3); flex-wrap: wrap; }
+    .gate-actions button.approve { background: var(--ark-violet-500); border-color: var(--ark-violet-500); color: #fff; }
+    .debug-action-link {
+      color: var(--ark-violet-400); cursor: pointer; text-decoration: underline;
+      background: none; border: none; padding: 0; font: inherit;
+    }
+    .answer-text code { font-family: var(--ark-font-mono, monospace); font-size: 0.92em; }
+
     @media (max-width: 640px) {
       .wrap { padding: var(--ark-space-4) var(--ark-space-3); }
       .question { max-width: 90%; }
@@ -212,7 +229,7 @@
     <div id="chat"></div>
 
     <form id="ask-form">
-      <textarea id="question" placeholder="Ask an onboarding question..." rows="2"></textarea>
+      <textarea id="question" placeholder="Ask an onboarding question, or paste s-... to debug a session..." rows="2"></textarea>
       <button type="submit" class="primary" id="submit-btn">Ask</button>
     </form>
     <div class="status" id="status"></div>
@@ -231,11 +248,11 @@
     const statusEl = document.getElementById("status");
     const newChatBtn = document.getElementById("new-chat");
 
-    const CHAT_STORAGE_VERSION = 1;
+    const CHAT_STORAGE_VERSION = 2;
     const MAX_STORED_TURNS = 30;
 
     const EMPTY_TEXT =
-      "Ask how to set up Cursor, enroll compute, fix a stuck session, and more.";
+      "Ask how to set up Cursor, enroll compute, fix a stuck session — or paste an Ark session id (s-...) to debug a failure.";
 
     function chatStorageKey() {
       const base = document.querySelector("base")?.getAttribute("href") || "/";
@@ -325,6 +342,123 @@
         .replaceAll(">", "&gt;");
     }
 
+    function formatMarkdownToHtml(text) {
+      let html = escapeHtml(text);
+      html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+      html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+      html = html.replace(/^- (.+)$/gm, "• $1");
+      return html.replace(/\n/g, "<br>");
+    }
+
+    const ACTION_MARKER = /\[\[action:([a-z0-9_]+)\|([^\]]+)\]\]/gi;
+
+    function renderAnswerText(text) {
+      const parts = [];
+      let last = 0;
+      let match;
+      ACTION_MARKER.lastIndex = 0;
+      while ((match = ACTION_MARKER.exec(text)) !== null) {
+        if (match.index > last) {
+          parts.push(formatMarkdownToHtml(text.slice(last, match.index)));
+        }
+        const id = match[1];
+        const label = match[2];
+        parts.push(
+          `<button type="button" class="debug-action-link" data-action="${escapeHtml(id)}">${escapeHtml(label)}</button>`
+        );
+        last = match.index + match[0].length;
+      }
+      if (last < text.length) {
+        parts.push(formatMarkdownToHtml(text.slice(last)));
+      }
+      return parts.join("");
+    }
+
+    function debugBadgeLabel(meta) {
+      if (!meta || !meta.case) return "Session debug";
+      if (meta.case === "already_fixed") return "Already fixed";
+      if (meta.case === "needs_fix") return "Needs fix";
+      return "Cannot fix";
+    }
+
+    function renderGateControls(container, meta) {
+      if (!meta || !meta.gate_pending || !meta.gate_id) return;
+      const row = document.createElement("div");
+      row.className = "gate-actions";
+      if (meta.gate_kind === "fix_plan") {
+        const approve = document.createElement("button");
+        approve.type = "button";
+        approve.className = "approve";
+        approve.textContent = "Approve plan";
+        approve.addEventListener("click", () => postGateAction("approve", meta.gate_id, container));
+        const reject = document.createElement("button");
+        reject.type = "button";
+        reject.className = "secondary";
+        reject.textContent = "Reject plan";
+        reject.addEventListener("click", () => postGateAction("reject", meta.gate_id, container));
+        row.appendChild(approve);
+        row.appendChild(reject);
+      }
+      container.appendChild(row);
+    }
+
+    async function postGateAction(kind, gateId, answerBlock) {
+      setStatus(kind === "approve" ? "Starting fix session…" : "Rejecting plan…");
+      try {
+        const response = await fetch(`api/session-debug/${kind}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ gate_id: gateId }),
+        });
+        if (response.status === 401) {
+          window.location = "login";
+          return;
+        }
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || "Request failed");
+        const textEl = answerBlock.querySelector(".answer-text");
+        if (textEl) textEl.innerHTML = renderAnswerText(payload.answer || "");
+        answerBlock.querySelector(".gate-actions")?.remove();
+        renderGateControls(answerBlock, payload);
+        setStatus("");
+      } catch (error) {
+        setStatus(error.message || "Gate action failed.", true);
+      }
+    }
+
+    async function postDebugAction(gateId, action, answerBlock) {
+      setStatus("Working…");
+      try {
+        const response = await fetch("api/session-debug/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ gate_id: gateId, action }),
+        });
+        if (response.status === 401) {
+          window.location = "login";
+          return;
+        }
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || "Request failed");
+        const textEl = answerBlock.querySelector(".answer-text");
+        if (textEl) textEl.innerHTML = renderAnswerText(payload.answer || "");
+        answerBlock.querySelector(".gate-actions")?.remove();
+        renderGateControls(answerBlock, payload);
+        setStatus("");
+      } catch (error) {
+        setStatus(error.message || "Action failed.", true);
+      }
+    }
+
+    chat.addEventListener("click", (event) => {
+      const btn = event.target.closest(".debug-action-link");
+      if (!btn) return;
+      const turn = btn.closest(".turn");
+      const gateId = turn?.dataset.gateId;
+      if (!gateId) return;
+      postDebugAction(gateId, btn.dataset.action, turn.querySelector(".answer"));
+    });
+
     async function sendFeedback(meta, rating, upBtn, downBtn) {
       upBtn.disabled = true;
       downBtn.disabled = true;
@@ -369,20 +503,31 @@
       turn.appendChild(row);
     }
 
+    function appendDebugChrome(answerBlock, meta) {
+      if (!meta || !meta.debug) return;
+      const badge = document.createElement("div");
+      badge.className = `debug-badge ${meta.case || "cannot_fix"}`;
+      badge.textContent = debugBadgeLabel(meta);
+      answerBlock.insertBefore(badge, answerBlock.firstChild);
+      renderGateControls(answerBlock, meta);
+    }
+
     function renderCompletedTurn(question, answer, sources, meta, { scroll = true } = {}) {
       const empty = document.getElementById("empty-state");
       if (empty) empty.remove();
 
       const turn = document.createElement("div");
       turn.className = "turn";
+      if (meta && meta.gate_id) turn.dataset.gateId = meta.gate_id;
       turn.innerHTML = `
         <div class="question">${escapeHtml(question)}</div>
         <div class="answer">
           <div class="answer-label">Answer</div>
-          <div class="answer-text">${escapeHtml(answer)}</div>
+          <div class="answer-text">${renderAnswerText(answer)}</div>
         </div>
       `;
       const answerBlock = turn.querySelector(".answer");
+      appendDebugChrome(answerBlock, meta);
       if (meta && meta.handoff) {
         answerBlock.insertAdjacentHTML("beforeend",
           '<p class="degraded-note">If this is a live issue, post in <strong>#foundry-users</strong> '
@@ -436,6 +581,11 @@
 
     function finishStreamingTurn(turn, answerEl, sources, meta) {
       const answerBlock = turn.querySelector(".answer");
+      if (meta && meta.gate_id) turn.dataset.gateId = meta.gate_id;
+      if (answerEl && meta && meta.answer) {
+        answerEl.innerHTML = renderAnswerText(meta.answer);
+      }
+      appendDebugChrome(answerBlock, meta);
       if (meta && meta.handoff) {
         answerBlock.insertAdjacentHTML("beforeend",
           '<p class="degraded-note">If this is a live issue, post in <strong>#foundry-users</strong> '
@@ -500,7 +650,9 @@
             const raw = line.slice(6).trim();
             if (!raw) continue;
             payload = JSON.parse(raw);
-            if (payload.type === "delta" && payload.text) {
+            if (payload.type === "progress" && payload.message) {
+              setStatus(payload.message);
+            } else if (payload.type === "delta" && payload.text) {
               answerEl.textContent += payload.text;
               turn.scrollIntoView({ behavior: "smooth", block: "end" });
             } else if (payload.type === "error") {
@@ -569,9 +721,15 @@
           session_id: payload.session_id,
           degraded: payload.degraded || null,
           handoff: Boolean(payload.handoff),
+          debug: Boolean(payload.debug),
+          case: payload.case || null,
+          gate_id: payload.gate_id || null,
+          gate_pending: Boolean(payload.gate_pending),
+          gate_kind: payload.gate_kind || null,
+          gate_actions: payload.gate_actions || [],
         };
         if (payload.answer && answerEl.textContent !== payload.answer) {
-          answerEl.textContent = payload.answer;
+          answerEl.innerHTML = renderAnswerText(payload.answer);
         }
         finishStreamingTurn(liveTurn, answerEl, payload.sources, meta);
         persistCompletedTurn(question, payload.answer, payload.sources, meta);

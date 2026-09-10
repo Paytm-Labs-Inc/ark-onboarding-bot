@@ -29,7 +29,17 @@ from src.auth import (
     request_authorized,
     token_valid,
 )
-from src.chat import ask_in_session, ask_in_session_stream, reset_session
+from src.chat import (
+    ask_in_session,
+    ask_in_session_stream,
+    enrich_citations,
+    reset_session,
+)
+from src.session_debug import (
+    approve_plan,
+    reject_plan,
+    run_debug_action,
+)
 from src.feedback import append_feedback, read_feedback
 from src.warmup import check_retrieval_ready, warm_services
 
@@ -265,6 +275,15 @@ class ResetRequest(BaseModel):
     session_id: str
 
 
+class GateActionRequest(BaseModel):
+    gate_id: str = Field(min_length=1, max_length=64)
+
+
+class DebugActionRequest(BaseModel):
+    gate_id: str = Field(min_length=1, max_length=64)
+    action: str = Field(min_length=1, max_length=64)
+
+
 class FeedbackRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     answer: str = Field(max_length=8000)
@@ -463,6 +482,33 @@ def api_ask_stream(
 def api_reset(body: ResetRequest) -> dict[str, bool]:
     reset_session(body.session_id)
     return {"ok": True}
+
+
+@app.post("/api/session-debug/approve")
+def api_session_debug_approve(body: GateActionRequest) -> dict:
+    result = approve_plan(body.gate_id.strip())
+    payload = result.to_ask_dict()
+    payload["sources"] = enrich_citations(payload.get("citations", []))
+    payload["handoff"] = False
+    return payload
+
+
+@app.post("/api/session-debug/reject")
+def api_session_debug_reject(body: GateActionRequest) -> dict:
+    result = reject_plan(body.gate_id.strip())
+    payload = result.to_ask_dict()
+    payload["sources"] = enrich_citations(payload.get("citations", []))
+    payload["handoff"] = False
+    return payload
+
+
+@app.post("/api/session-debug/action")
+def api_session_debug_action(body: DebugActionRequest) -> dict:
+    result = run_debug_action(body.gate_id.strip(), body.action.strip())
+    payload = result.to_ask_dict()
+    payload["sources"] = enrich_citations(payload.get("citations", []))
+    payload["handoff"] = False
+    return payload
 
 
 @app.post("/api/feedback")

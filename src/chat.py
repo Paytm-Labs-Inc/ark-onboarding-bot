@@ -13,6 +13,19 @@ from src.citations import parse_citation
 
 MAX_HISTORY_TURNS = 4
 
+_DEBUG_META_KEYS = (
+    "debug",
+    "case",
+    "ark_session_id",
+    "gate_id",
+    "gate_pending",
+    "gate_kind",
+    "gate_actions",
+    "fix_plan",
+    "dispatch_session_id",
+    "pr_url",
+)
+
 
 @dataclass
 class ChatTurn:
@@ -20,11 +33,14 @@ class ChatTurn:
     answer: str
     citations: list[str]
     retrieved_sources: list[str]
+    debug: bool = False
+    gate_id: str | None = None
 
 
 @dataclass
 class ChatSession:
     turns: list[ChatTurn] = field(default_factory=list)
+    debug_thread: bool = False
 
     def history_for_prompt(self) -> list[dict[str, str]]:
         recent = self.turns[-MAX_HISTORY_TURNS:]
@@ -36,6 +52,9 @@ class ChatSession:
         answer: str,
         citations: list[str],
         retrieved_sources: list[str],
+        *,
+        debug: bool = False,
+        gate_id: str | None = None,
     ) -> None:
         self.turns.append(
             ChatTurn(
@@ -43,8 +62,11 @@ class ChatSession:
                 answer=answer,
                 citations=citations,
                 retrieved_sources=retrieved_sources,
+                debug=debug,
+                gate_id=gate_id,
             )
         )
+        self.debug_thread = debug
         if len(self.turns) > MAX_HISTORY_TURNS:
             self.turns = self.turns[-MAX_HISTORY_TURNS:]
 
@@ -69,6 +91,10 @@ def enrich_citations(citations: list[str]) -> list[dict[str, str]]:
     return [parse_citation(source) for source in citations]
 
 
+def _debug_meta(result: dict[str, Any]) -> dict[str, Any]:
+    return {key: result[key] for key in _DEBUG_META_KEYS if key in result}
+
+
 def ask_in_session(session_id: str | None, question: str) -> dict[str, Any]:
     sid, session = get_session(session_id)
     result = ask(
@@ -76,25 +102,35 @@ def ask_in_session(session_id: str | None, question: str) -> dict[str, Any]:
         history=session.history_for_prompt(),
         channel="web",
         session_id=sid,
+        debug_thread=session.debug_thread,
     )
     answer_text = str(result.get("answer", ""))
     citations = [str(item) for item in result.get("citations", [])]
     retrieved_sources = [str(item) for item in result.get("retrieved_sources", [])]
-    session.add_turn(question, answer_text, citations, retrieved_sources)
-    return {
+    session.add_turn(
+        question,
+        answer_text,
+        citations,
+        retrieved_sources,
+        debug=bool(result.get("debug")),
+        gate_id=result.get("gate_id"),
+    )
+    payload = {
         "session_id": sid,
         "answer": answer_text,
         "citations": citations,
         "retrieved_sources": retrieved_sources,
         "sources": enrich_citations(citations),
-        "handoff": is_non_answer(answer_text),
+        "handoff": is_non_answer(answer_text) and not result.get("debug"),
     }
+    payload.update(_debug_meta(result))
+    return payload
 
 
 def ask_in_session_stream(
     session_id: str | None, question: str
 ) -> Iterator[dict[str, Any]]:
-    """Like ask_in_session, but yields delta events then a final done payload."""
+    """Like ask_in_session, but yields delta/progress events then a final done payload."""
     sid, session = get_session(session_id)
     final: dict[str, Any] | None = None
 
@@ -103,6 +139,7 @@ def ask_in_session_stream(
         history=session.history_for_prompt(),
         channel="web",
         session_id=sid,
+        debug_thread=session.debug_thread,
     ):
         if event.get("type") == "done":
             answer_text = str(event.get("answer", ""))
@@ -110,7 +147,14 @@ def ask_in_session_stream(
             retrieved_sources = [
                 str(item) for item in event.get("retrieved_sources", [])
             ]
-            session.add_turn(question, answer_text, citations, retrieved_sources)
+            session.add_turn(
+                question,
+                answer_text,
+                citations,
+                retrieved_sources,
+                debug=bool(event.get("debug")),
+                gate_id=event.get("gate_id"),
+            )
             final = {
                 "type": "done",
                 "session_id": sid,
@@ -119,14 +163,10 @@ def ask_in_session_stream(
                 "retrieved_sources": retrieved_sources,
                 "sources": enrich_citations(citations),
             }
-            # Rebuilt from an explicit field list, so anything the answer layer
-            # adds has to be carried across deliberately or the browser never
-            # sees it. Kept absent when clean, matching the stream contract.
             if event.get("degraded"):
                 final["degraded"] = event["degraded"]
-            # Same predicate Slack uses, decided at the consumer boundary so the
-            # answer text stays exact for is_non_answer and the eval.
-            final["handoff"] = is_non_answer(answer_text)
+            final["handoff"] = is_non_answer(answer_text) and not event.get("debug")
+            final.update(_debug_meta(event))
             yield final
         else:
             yield event

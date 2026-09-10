@@ -13,8 +13,10 @@ from collections.abc import Iterator
 from typing import IO, Any
 
 from src.answer import REFUSAL_PHRASE, answer, is_non_answer, stream_answer
+from src.intent_router import resolve_intent
 from src.query_log import log_query
 from src.retrieve import RetrievalResult, retrieve_scored
+from src.session_debug import debug_session, debug_session_stream
 
 try:
     from src.retriever import DEFAULT_TOP_K
@@ -243,6 +245,7 @@ def ask_stream(
     channel: str = "cli",
     session_id: str | None = None,
     log: bool = True,
+    debug_thread: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """Retrieve relevant chunks, then stream a grounded answer."""
     started = time.perf_counter()
@@ -259,6 +262,25 @@ def ask_stream(
             "chunk_count": 0,
             "stream_mode": "none",
         }
+        return
+
+    intent, ark_session_id = resolve_intent(question, debug_thread=debug_thread)
+    if intent == "session_debug" and ark_session_id:
+        for event in debug_session_stream(ark_session_id):
+            if event.get("type") == "done":
+                done = {**event, "stream_mode": "none"}
+                if log:
+                    _log_ask_result(
+                        question,
+                        done,
+                        channel=channel,
+                        session_id=session_id,
+                        duration_ms=_elapsed_ms(started),
+                        request_id=request_id,
+                    )
+                yield done
+            else:
+                yield event
         return
 
     top_k = _default_top_k() if k is None else k
@@ -313,6 +335,7 @@ def ask(
     channel: str = "cli",
     session_id: str | None = None,
     log: bool = True,
+    debug_thread: bool = False,
 ) -> dict[str, Any]:
     """Retrieve relevant chunks, then generate a grounded answer."""
     started = time.perf_counter()
@@ -326,6 +349,20 @@ def ask(
             "top_score": None,
             "chunk_count": 0,
         }
+
+    intent, ark_session_id = resolve_intent(question, debug_thread=debug_thread)
+    if intent == "session_debug" and ark_session_id:
+        result = debug_session(ark_session_id).to_ask_dict()
+        if log:
+            _log_ask_result(
+                question,
+                result,
+                channel=channel,
+                session_id=session_id,
+                duration_ms=_elapsed_ms(started),
+                request_id=request_id,
+            )
+        return result
 
     top_k = _default_top_k() if k is None else k
 
