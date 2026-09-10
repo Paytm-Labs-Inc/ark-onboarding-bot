@@ -353,13 +353,19 @@ class RedisSessionStore:
 
     def _purge_stale_index(self, session_id: str) -> None:
         """Drop sidebar index entries when the body key is missing."""
+        # ✅ All operations in a single transaction to prevent orphaned indices.
+        # If operations are split, a concurrent save() could re-add the session
+        # to indices after the delete but before the zrem calls.
         meta_key = self._meta_key(session_id)
         meta = self._client.hgetall(meta_key)
         user_id = meta.get("user_id", "")
-        self._client.delete(self._body_key(session_id), meta_key)
+
+        pipe = self._client.pipeline(transaction=True)
+        pipe.delete(self._body_key(session_id), meta_key)
         if user_id:
-            self._client.zrem(self._active_key(user_id), session_id)
-            self._client.zrem(self._archived_key(user_id), session_id)
+            pipe.zrem(self._active_key(user_id), session_id)
+            pipe.zrem(self._archived_key(user_id), session_id)
+        pipe.execute()
 
     def save(self, session: StoredSession, *, touch_activity: bool = True) -> None:
         session.turns = _cap_turns(session.turns)
@@ -437,22 +443,45 @@ class RedisSessionStore:
                 raise
 
     def delete(self, session_id: str) -> None:
-        meta = self._client.hgetall(self._meta_key(session_id))
-        user_id = meta.get("user_id", "")
-        pipe = self._client.pipeline(transaction=True)
-        pipe.delete(self._body_key(session_id), self._meta_key(session_id))
-        if user_id:
-            pipe.zrem(self._active_key(user_id), session_id)
-            pipe.zrem(self._archived_key(user_id), session_id)
-        pipe.execute()
+        # ✅ Use WATCH/MULTI/EXEC to ensure atomicity. If user_id changes
+        # between reading meta and executing delete, we must use the current
+        # user_id to clean the correct indices.
+        meta_key = self._meta_key(session_id)
+        while True:
+            try:
+                self._client.watch(meta_key)
+                meta = self._client.hgetall(meta_key)
+                user_id = meta.get("user_id", "")
+
+                pipe = self._client.pipeline(transaction=True)
+                pipe.delete(self._body_key(session_id), meta_key)
+                if user_id:
+                    pipe.zrem(self._active_key(user_id), session_id)
+                    pipe.zrem(self._archived_key(user_id), session_id)
+                pipe.execute()
+                break
+
+            except Exception as e:
+                if e.__class__.__name__ == "WatchError":
+                    continue
+                raise
 
     def _apply_archive_rules(self, user_id: str) -> None:
+        # ✅ Load all sessions FIRST, then archive. Archiving calls save(),
+        # which modifies indices. Iterating zrange while modifying it can
+        # miss sessions or cause consistency issues.
         idle_days = archive_after_days()
         active_ids = self._client.zrange(self._active_key(user_id), 0, -1)
+
+        # ✅ Collect all sessions to archive (separate from modification).
+        to_archive = []
         for session_id in active_ids:
             session = self.load(session_id)
-            if session is None or not _should_archive(session, idle_days):
-                continue
+            if session is not None and _should_archive(session, idle_days):
+                to_archive.append(session)
+
+        # ✅ Then archive each (now safe to modify indices).
+        for session in to_archive:
             self.save(_archive_session(session), touch_activity=False)
 
     def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
