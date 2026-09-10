@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.answer import PiAtCapacity, missing_backend_credential, unusable_backend_model
+from src.answer import PiAtCapacity, configured_model, missing_backend_credential, unusable_backend_model
 from src.auth import (
     BROWSER_ID_COOKIE,
     COOKIE_NAME,
@@ -386,7 +386,13 @@ async def ready() -> dict[str, object] | JSONResponse:
         return JSONResponse(
             status_code=503, content={**body, "status": "not_ready", "reason": unusable}
         )
-    return body
+    # Report what was verified, not just that nothing failed. Without this the
+    # success body is identical whether the gateway was checked or the check
+    # does not exist -- which is the shape of the outage #83 was written for:
+    # "the key is set" looked the same as "the model answers". Naming the model
+    # would also have made the 2026-09-01 deregistration obvious on the probe
+    # instead of only in failing answers.
+    return {**body, "model": configured_model(), "gateway": "ok"}
 
 
 @app.post("/api/ask")

@@ -352,6 +352,43 @@ class SignOutClearsTheStoredChatTests(unittest.TestCase):
         self.assertIn(key, login, "login.html clears a different key than chat.html writes")
 
 
+class ReadyReportsWhatItVerifiedTests(unittest.TestCase):
+    """A green probe must say what it checked.
+
+    Before this, the success body was identical whether the gateway had been
+    verified or the check did not exist -- the same ambiguity that let two
+    outages sit behind a green /ready: "the key is set" read the same as "the
+    model answers".
+    """
+
+    @patch("src.web.unusable_backend_model", return_value=None)
+    @patch("src.web.check_retrieval_ready", return_value=(True, {"status": "ready", "chunks": 393}))
+    def test_a_ready_probe_names_the_model_and_the_gateway(self, _r, _g) -> None:
+        os.environ["PI_API_KEY"] = "pi-x"
+        os.environ["PI_MODEL"] = "llama-3.3-70b-versatile"
+        try:
+            payload = TestClient(app).get("/ready").json()
+            self.assertEqual(payload["status"], "ready")
+            self.assertEqual(payload["chunks"], 393)
+            self.assertEqual(payload["model"], "llama-3.3-70b-versatile")
+            self.assertEqual(payload["gateway"], "ok")
+        finally:
+            os.environ.pop("PI_MODEL", None)
+
+    @patch("src.web.unusable_backend_model", return_value="model 'x' is not served by the gateway")
+    @patch("src.web.check_retrieval_ready", return_value=(True, {"status": "ready", "chunks": 393}))
+    def test_a_failing_gateway_still_reports_the_reason_and_no_ok(self, _r, _g) -> None:
+        # The failure path must not claim gateway ok -- that would be worse than
+        # saying nothing.
+        os.environ["PI_API_KEY"] = "pi-x"
+        response = TestClient(app).get("/ready")
+        self.assertEqual(response.status_code, 503)
+        payload = response.json()
+        self.assertEqual(payload["status"], "not_ready")
+        self.assertIn("not served", payload["reason"])
+        self.assertNotIn("gateway", payload)
+
+
 class BrowserIdentityTests(unittest.TestCase):
     """A per-browser id so chats have an owner before SSO exists.
 

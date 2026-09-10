@@ -272,6 +272,11 @@ _gateway_check: tuple[float, str | None] = (0.0, None)
 _gateway_check_lock = threading.Lock()
 
 
+def configured_model() -> str:
+    """The model the Pi backend will actually call."""
+    return (os.environ.get("PI_MODEL") or PI_DEFAULT_MODEL).strip()
+
+
 def unusable_backend_model(*, now: float | None = None) -> str | None:
     """Name the reason the configured model cannot answer, or None.
 
