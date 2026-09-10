@@ -16,6 +16,7 @@ from src.answer import REFUSAL_PHRASE, answer, is_non_answer, stream_answer
 from src.intent_router import resolve_intent
 from src.query_log import log_query
 from src.retrieve import RetrievalResult, retrieve_scored
+from src.scope_router import named_team_missing_from_chunks, refusal_result, should_refuse
 from src.session_debug import debug_session, debug_session_stream
 
 try:
@@ -219,6 +220,9 @@ def _result_from_retrieval(
     chunks = scored.chunks
     top_score = scored.top_score
     chunk_count = len(chunks)
+    retrieved_sources = [
+        str(chunk["source"]) for chunk in chunks if chunk.get("source")
+    ]
     if not chunks:
         return {
             "answer": REFUSAL_PHRASE,
@@ -228,10 +232,17 @@ def _result_from_retrieval(
             "chunk_count": chunk_count,
         }
 
+    if named_team_missing_from_chunks(question, chunks):
+        return {
+            "answer": REFUSAL_PHRASE,
+            "citations": [],
+            "retrieved_sources": retrieved_sources,
+            "top_score": top_score,
+            "chunk_count": chunk_count,
+        }
+
     result = answer(question, chunks, history=history)
-    result["retrieved_sources"] = [
-        str(chunk["source"]) for chunk in chunks if chunk.get("source")
-    ]
+    result["retrieved_sources"] = retrieved_sources
     result["top_score"] = top_score
     result["chunk_count"] = chunk_count
     return result
@@ -283,6 +294,16 @@ def ask_stream(
                 yield event
         return
 
+    if should_refuse(question):
+        done = {"type": "done", **refusal_result(), "stream_mode": "none"}
+        if log:
+            _log_ask_result(
+                question, done, channel=channel, session_id=session_id,
+                duration_ms=_elapsed_ms(started), request_id=request_id,
+            )
+        yield done
+        return
+
     top_k = _default_top_k() if k is None else k
     scored = _cached_retrieve_scored(_retrieval_query(question, history), k=top_k)
     chunks = scored.chunks
@@ -294,6 +315,22 @@ def ask_stream(
     }
 
     if not chunks:
+        done = {
+            "type": "done",
+            "answer": REFUSAL_PHRASE,
+            "citations": [],
+            "stream_mode": "none",
+            **meta,
+        }
+        if log:
+            _log_ask_result(
+                question, done, channel=channel, session_id=session_id,
+                duration_ms=_elapsed_ms(started), request_id=request_id,
+            )
+        yield done
+        return
+
+    if named_team_missing_from_chunks(question, chunks):
         done = {
             "type": "done",
             "answer": REFUSAL_PHRASE,
@@ -364,6 +401,15 @@ def ask(
             )
         return result
 
+    if should_refuse(question):
+        result = refusal_result()
+        if log:
+            _log_ask_result(
+                question, result, channel=channel, session_id=session_id,
+                duration_ms=_elapsed_ms(started), request_id=request_id,
+            )
+        return result
+
     top_k = _default_top_k() if k is None else k
 
     # Hit on the question text even when this chat already has history, so
@@ -407,6 +453,18 @@ def run_question(
     question = question.strip()
     if not question:
         return ask("", channel=channel, session_id=session_id)
+
+    intent, ark_session_id = resolve_intent(question)
+    if intent == "session_debug" and ark_session_id:
+        return ask(question, history=history, channel=channel, session_id=session_id)
+
+    if should_refuse(question):
+        result = refusal_result()
+        _log_ask_result(
+            question, result, channel=channel, session_id=session_id,
+            duration_ms=_elapsed_ms(started), request_id=request_id,
+        )
+        return result
 
     top_k = _default_top_k() if k is None else k
 

@@ -56,16 +56,12 @@ jobs:
       - name: Retrieval eval gate
         run: python eval/run_eval.py --quiet-retriever --only-scored
 
-  # Adversarial scope + indirect prompt injection. Two jobs because they have
-  # different maturity: the injection defence PASSES today (0 of 12 poisoned
-  # chunks obeyed) so it gates; the scope guardrails FAIL 6 of 17 today, so
-  # gating on them would block every PR including the fix. It reports until the
-  # pre-retrieval router lands, then the continue-on-error below comes off.
+  # Adversarial scope + jailbreak refusals. The pre-retrieval router in
+  # src/scope_router.py is the gate; a red tile means a refusal regression.
   guardrail-eval:
     needs: injection-eval
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true   # REMOVE once the pre-retrieval router lands
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4

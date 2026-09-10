@@ -1,4 +1,4 @@
-"""In-memory chat sessions with short conversation history."""
+"""Chat sessions with pluggable persistence (memory or Redis)."""
 
 from __future__ import annotations
 
@@ -10,8 +10,17 @@ from typing import Any
 from src.answer import is_non_answer
 from src.ask import ask, ask_stream
 from src.citations import parse_citation
+from src.session_store import (
+    StoredSession,
+    StoredTurn,
+    extract_ark_session_id,
+    get_session_store,
+    max_history_turns,
+    stored_to_payload,
+    title_from_question,
+)
 
-MAX_HISTORY_TURNS = 4
+ANONYMOUS_USER = "anonymous"
 
 _DEBUG_META_KEYS = (
     "debug",
@@ -39,11 +48,20 @@ class ChatTurn:
 
 @dataclass
 class ChatSession:
+    session_id: str = ""
+    user_id: str = ANONYMOUS_USER
+    title: str = ""
+    linked_ark_session_id: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+    archived: bool = False
+    archived_at: str | None = None
     turns: list[ChatTurn] = field(default_factory=list)
     debug_thread: bool = False
 
     def history_for_prompt(self) -> list[dict[str, str]]:
-        recent = self.turns[-MAX_HISTORY_TURNS:]
+        cap = max_history_turns()
+        recent = self.turns if cap <= 0 else self.turns[-cap:]
         return [{"question": turn.question, "answer": turn.answer} for turn in recent]
 
     def add_turn(
@@ -56,6 +74,11 @@ class ChatSession:
         debug: bool = False,
         gate_id: str | None = None,
     ) -> None:
+        if not self.title:
+            self.title = title_from_question(question)
+        linked = extract_ark_session_id(question)
+        if linked:
+            self.linked_ark_session_id = linked
         self.turns.append(
             ChatTurn(
                 question=question,
@@ -66,25 +89,95 @@ class ChatSession:
                 gate_id=gate_id,
             )
         )
-        self.debug_thread = debug
-        if len(self.turns) > MAX_HISTORY_TURNS:
-            self.turns = self.turns[-MAX_HISTORY_TURNS:]
+        self.debug_thread = debug or self.debug_thread
 
 
-_sessions: dict[str, ChatSession] = {}
+def _turn_to_stored(turn: ChatTurn) -> StoredTurn:
+    return StoredTurn(
+        question=turn.question,
+        answer=turn.answer,
+        citations=list(turn.citations),
+        retrieved_sources=list(turn.retrieved_sources),
+    )
 
 
-def get_session(session_id: str | None) -> tuple[str, ChatSession]:
-    if session_id and session_id in _sessions:
-        return session_id, _sessions[session_id]
+def _stored_to_turn(stored: StoredTurn) -> ChatTurn:
+    return ChatTurn(
+        question=stored.question,
+        answer=stored.answer,
+        citations=list(stored.citations),
+        retrieved_sources=list(stored.retrieved_sources),
+    )
+
+
+def _session_from_stored(stored: StoredSession) -> ChatSession:
+    session = ChatSession(
+        session_id=stored.session_id,
+        user_id=stored.user_id,
+        title=stored.title,
+        linked_ark_session_id=stored.linked_ark_session_id,
+        created_at=stored.created_at,
+        updated_at=stored.updated_at,
+        archived=stored.archived,
+        archived_at=stored.archived_at,
+    )
+    session.turns = [_stored_to_turn(turn) for turn in stored.turns]
+    session.debug_thread = bool(stored.linked_ark_session_id)
+    return session
+
+
+def _session_to_stored(session: ChatSession) -> StoredSession:
+    return StoredSession(
+        session_id=session.session_id,
+        user_id=session.user_id,
+        title=session.title,
+        linked_ark_session_id=session.linked_ark_session_id,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        archived=session.archived,
+        archived_at=session.archived_at,
+        turns=[_turn_to_stored(turn) for turn in session.turns],
+    )
+
+
+def get_session(session_id: str | None, user_id: str = ANONYMOUS_USER) -> tuple[str, ChatSession]:
+    store = get_session_store()
+    if session_id:
+        stored = store.load(session_id)
+        if stored is not None and stored.user_id == user_id:
+            if stored.archived:
+                stored.archived = False
+                stored.archived_at = None
+                store.save(stored)
+            return session_id, _session_from_stored(stored)
     new_id = str(uuid.uuid4())
-    session = ChatSession()
-    _sessions[new_id] = session
+    session = ChatSession(session_id=new_id, user_id=user_id)
     return new_id, session
 
 
-def reset_session(session_id: str) -> None:
-    _sessions.pop(session_id, None)
+def save_session(session: ChatSession) -> None:
+    get_session_store().save(_session_to_stored(session))
+
+
+def reset_session(session_id: str, user_id: str = ANONYMOUS_USER) -> bool:
+    store = get_session_store()
+    stored = store.load(session_id)
+    if stored is None or stored.user_id != user_id:
+        return False
+    store.delete(session_id)
+    return True
+
+
+def load_session_payload(session_id: str, user_id: str = ANONYMOUS_USER) -> dict[str, Any] | None:
+    stored = get_session_store().load(session_id)
+    if stored is None or stored.user_id != user_id:
+        return None
+    return stored_to_payload(stored)
+
+
+def list_user_sessions(user_id: str, archived: bool = False) -> list[dict[str, Any]]:
+    summaries = get_session_store().list_for_user(user_id, archived=archived)
+    return [summary.to_dict() for summary in summaries]
 
 
 def enrich_citations(citations: list[str]) -> list[dict[str, str]]:
@@ -95,8 +188,10 @@ def _debug_meta(result: dict[str, Any]) -> dict[str, Any]:
     return {key: result[key] for key in _DEBUG_META_KEYS if key in result}
 
 
-def ask_in_session(session_id: str | None, question: str) -> dict[str, Any]:
-    sid, session = get_session(session_id)
+def ask_in_session(
+    session_id: str | None, question: str, user_id: str = ANONYMOUS_USER
+) -> dict[str, Any]:
+    sid, session = get_session(session_id, user_id=user_id)
     result = ask(
         question,
         history=session.history_for_prompt(),
@@ -115,7 +210,8 @@ def ask_in_session(session_id: str | None, question: str) -> dict[str, Any]:
         debug=bool(result.get("debug")),
         gate_id=result.get("gate_id"),
     )
-    payload = {
+    save_session(session)
+    payload: dict[str, Any] = {
         "session_id": sid,
         "answer": answer_text,
         "citations": citations,
@@ -124,15 +220,16 @@ def ask_in_session(session_id: str | None, question: str) -> dict[str, Any]:
         "handoff": is_non_answer(answer_text) and not result.get("debug"),
     }
     payload.update(_debug_meta(result))
+    if session.linked_ark_session_id:
+        payload["linked_ark_session_id"] = session.linked_ark_session_id
     return payload
 
 
 def ask_in_session_stream(
-    session_id: str | None, question: str
+    session_id: str | None, question: str, user_id: str = ANONYMOUS_USER
 ) -> Iterator[dict[str, Any]]:
-    """Like ask_in_session, but yields delta/progress events then a final done payload."""
-    sid, session = get_session(session_id)
-    final: dict[str, Any] | None = None
+    """Like ask_in_session, but yields progress/delta events then a final done payload."""
+    sid, session = get_session(session_id, user_id=user_id)
 
     for event in ask_stream(
         question,
@@ -155,7 +252,8 @@ def ask_in_session_stream(
                 debug=bool(event.get("debug")),
                 gate_id=event.get("gate_id"),
             )
-            final = {
+            save_session(session)
+            final: dict[str, Any] = {
                 "type": "done",
                 "session_id": sid,
                 "answer": answer_text,
@@ -163,6 +261,8 @@ def ask_in_session_stream(
                 "retrieved_sources": retrieved_sources,
                 "sources": enrich_citations(citations),
             }
+            if session.linked_ark_session_id:
+                final["linked_ark_session_id"] = session.linked_ark_session_id
             if event.get("degraded"):
                 final["degraded"] = event["degraded"]
             final["handoff"] = is_non_answer(answer_text) and not event.get("debug")
