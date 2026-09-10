@@ -728,7 +728,12 @@
       }
     }
 
-    function persistThreadFromPayload(payload) {
+    function persistThreadFromPayload(payload, generation) {
+      // If a new chat started while this load was in flight, skip persisting
+      // the old session to avoid resurrecting a conversation the user cleared.
+      if (generation !== undefined && generation !== chatGeneration) {
+        return;
+      }
       clearStoredChat();
       for (const turn of payload.turns || []) {
         persistCompletedTurn(
@@ -743,6 +748,7 @@
     async function openSession(sid) {
       if (!sid || sid === sessionId) return;
       setStatus("Loading chat…");
+      const generation = chatGeneration;
       try {
         const response = await fetch(`api/session/${encodeURIComponent(sid)}`);
         if (response.status === 401) {
@@ -753,11 +759,15 @@
           throw new Error("Session not found.");
         }
         const payload = await response.json();
+        if (generation !== chatGeneration) {
+          // New chat started while loading. Discard this session.
+          return;
+        }
         sessionId = payload.session_id;
         chatGeneration += 1;
         renderThreadFromPayload(payload);
         updateLinkedArkSessionDisplay(payload.linked_ark_session_id || null);
-        persistThreadFromPayload(payload);
+        persistThreadFromPayload(payload, chatGeneration);
         setStatus("");
         loadSidebarLists();
       } catch (error) {
@@ -785,6 +795,7 @@
 
       if (!sessionId) return;
 
+      const generation = chatGeneration;
       try {
         const response = await fetch(`api/session/${encodeURIComponent(sessionId)}`);
         if (response.status === 401) {
@@ -793,10 +804,14 @@
         }
         if (response.ok) {
           const payload = await response.json();
+          if (generation !== chatGeneration) {
+            // New chat started during bootstrap. Keep the stored chat.
+            return;
+          }
           sessionId = payload.session_id;
           renderThreadFromPayload(payload, { scroll: false });
           updateLinkedArkSessionDisplay(payload.linked_ark_session_id || null);
-          persistThreadFromPayload(payload);
+          persistThreadFromPayload(payload, generation);
         }
       } catch (_err) {
         // Keep localStorage paint when the server is unreachable.
