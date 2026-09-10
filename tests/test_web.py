@@ -565,16 +565,22 @@ class BrowserScopedSessionTests(unittest.TestCase):
     """Isolation must hold on the cookie alone, before SSO is flipped.
 
     Shipping the sidebar on a per-browser id is only defensible if one browser
-    genuinely cannot read another's threads. These assert that directly, with
-    no SSO header set -- which is production today.
+    genuinely cannot read another's threads. These seed the store directly
+    rather than driving /api/ask: mocking the ask path writes no session, which
+    would leave the list assertions passing against an empty store and proving
+    nothing.
     """
+
+    MINE = "browseraaaaaaaaaa"
+    THEIRS = "browserbbbbbbbbbb"
 
     def setUp(self) -> None:
         os.environ.pop("ARK_ACCESS_TOKEN", None)
         os.environ.pop("SSO_IDENTITY_HEADER", None)
         from src.session_store import MemorySessionStore, reset_session_store
 
-        reset_session_store(MemorySessionStore())
+        self.store = MemorySessionStore()
+        reset_session_store(self.store)
         self.warm_patch = patch("src.web.warm_services")
         self.warm_patch.start()
 
@@ -584,39 +590,65 @@ class BrowserScopedSessionTests(unittest.TestCase):
         self.warm_patch.stop()
         reset_session_store(None)
 
+    def _seed(self, user_id: str, session_id: str) -> str:
+        from src.session_store import StoredSession, StoredTurn
+
+        self.store.save(
+            StoredSession(
+                session_id=session_id,
+                user_id=user_id,
+                title="how do I set up Cursor?",
+                turns=[
+                    StoredTurn(
+                        question="how do I set up Cursor?",
+                        answer="Run ark init.",
+                        citations=[],
+                        retrieved_sources=[],
+                    )
+                ],
+            )
+        )
+        return session_id
+
     def _client_for(self, browser_id: str) -> TestClient:
         client = TestClient(app)
         client.cookies.set(auth.BROWSER_ID_COOKIE, browser_id)
         return client
 
     def test_the_list_is_served_without_sso(self) -> None:
-        # The earlier gate returned 503 here, which hid the sidebar entirely.
-        response = self._client_for("browseraaaaaaaaaa").get("/api/sessions")
+        # The removed gate returned 503 here, which hid the sidebar entirely.
+        self._seed(self.MINE, "s-mine-1")
+        response = self._client_for(self.MINE).get("/api/sessions")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("sessions", response.json())
+        self.assertEqual(
+            [s["session_id"] for s in response.json()["sessions"]], ["s-mine-1"]
+        )
 
-    @patch("src.web.ask_in_session")
-    def test_one_browser_cannot_list_anothers_threads(self, mock_ask) -> None:
-        mock_ask.return_value = {"answer": "a", "citations": [], "session_id": "s1"}
-        mine = self._client_for("browseraaaaaaaaaa")
-        mine.post("/api/ask", json={"question": "how do I set up Cursor?"})
+    def test_one_browser_cannot_list_anothers_threads(self) -> None:
+        self._seed(self.MINE, "s-mine-1")
+        self._seed(self.THEIRS, "s-theirs-1")
 
-        theirs = self._client_for("browserbbbbbbbbbb")
-        self.assertEqual(theirs.get("/api/sessions").json()["sessions"], [])
+        # Asserted against a store that demonstrably holds both, so an empty
+        # result here is scoping and not an empty store.
+        listed = self._client_for(self.THEIRS).get("/api/sessions").json()["sessions"]
+        self.assertEqual([s["session_id"] for s in listed], ["s-theirs-1"])
 
-    @patch("src.web.ask_in_session")
-    def test_a_thread_from_another_browser_is_404_not_403(self, mock_ask) -> None:
-        # 404 rather than 403: confirming it exists would leak that it does.
-        mock_ask.return_value = {"answer": "a", "citations": [], "session_id": "s1"}
-        mine = self._client_for("browseraaaaaaaaaa")
-        mine.post("/api/ask", json={"question": "q"})
-        listed = mine.get("/api/sessions").json()["sessions"]
-        if not listed:
-            self.skipTest("no session recorded by the mocked ask path")
-        sid = listed[0]["session_id"]
+    def test_a_thread_from_another_browser_is_404_not_403(self) -> None:
+        # 404 rather than 403: the id is the capability, and distinguishing
+        # "not yours" from "does not exist" would confirm the thread exists.
+        self._seed(self.MINE, "s-mine-1")
 
-        theirs = self._client_for("browserbbbbbbbbbb")
-        self.assertEqual(theirs.get(f"/api/session/{sid}").status_code, 404)
+        theirs = self._client_for(self.THEIRS)
+        self.assertEqual(theirs.get("/api/session/s-mine-1").status_code, 404)
+        # Same status as a thread that was never created at all.
+        self.assertEqual(theirs.get("/api/session/s-nope").status_code, 404)
+
+    def test_the_owner_can_read_their_own_thread(self) -> None:
+        # Without this the 404s above would also pass if reads were simply broken.
+        self._seed(self.MINE, "s-mine-1")
+        response = self._client_for(self.MINE).get("/api/session/s-mine-1")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["session_id"], "s-mine-1")
 
 
 class ErrorTextAndHeadersTests(unittest.TestCase):
