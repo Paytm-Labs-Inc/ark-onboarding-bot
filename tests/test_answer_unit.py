@@ -10,6 +10,8 @@ import httpx
 from unittest.mock import MagicMock, patch
 
 from src.answer import (
+    _build_user_content,
+    _messages_for,
     _parse_and_finalize,
     REFUSAL_PHRASE,
     ROADMAP_PHRASE,
@@ -1079,6 +1081,40 @@ class PlainRefusalTests(unittest.TestCase):
         # The window exists so a grounded answer quoting the phrase is not
         # scored as a refusal. A raw substring match loses that.
         self.assertFalse(is_plain_refusal("Run ark host enroll. " * 8 + REFUSAL_PHRASE))
+
+
+class SystemRoleTests(unittest.TestCase):
+    """The rules belong in a system message, not in the user turn.
+
+    Everything was one user-role string, which is why persona and continuation
+    attacks land: with no system message, "ignore your instructions" is
+    addressed to text of exactly the same standing as itself.
+    """
+
+    def test_a_composed_prompt_splits_into_system_and_user(self) -> None:
+        prompt = _build_user_content("how do I set up Cursor?", [{"text": "t", "source": "s"}])
+        messages = _messages_for(prompt)
+        self.assertEqual([m["role"] for m in messages], ["system", "user"])
+
+    def test_the_rules_are_in_the_system_message_only(self) -> None:
+        prompt = _build_user_content("q", [{"text": "t", "source": "s"}])
+        system, user = _messages_for(prompt)
+        self.assertEqual(system["content"], SYSTEM_PROMPT)
+        # The whole point: a rule the user turn still carries is a rule the
+        # model reads at the same standing as the retrieved chunks.
+        self.assertNotIn("Decline ONLY in these two cases", user["content"])
+
+    def test_the_chunks_and_question_stay_in_the_user_message(self) -> None:
+        prompt = _build_user_content("how do I enroll a host?", [{"text": "t", "source": "s"}])
+        _, user = _messages_for(prompt)
+        self.assertIn("<documents>", user["content"])
+        self.assertIn("how do I enroll a host?", user["content"])
+
+    def test_a_prompt_composed_elsewhere_is_left_alone(self) -> None:
+        # The Cursor backend and any caller passing its own string must not be
+        # handed a system message built from rules they did not ask for.
+        messages = _messages_for("a prompt from somewhere else")
+        self.assertEqual(messages, [{"role": "user", "content": "a prompt from somewhere else"}])
 
 
 class ChunksAreDataTests(unittest.TestCase):
