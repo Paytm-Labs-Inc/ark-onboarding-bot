@@ -15,6 +15,7 @@ from typing import IO, Any
 from src.answer import REFUSAL_PHRASE, answer, is_non_answer, stream_answer
 from src.query_log import log_query
 from src.retrieve import RetrievalResult, retrieve_scored
+from src.scope_router import refusal_result, should_refuse
 
 try:
     from src.retriever import DEFAULT_TOP_K
@@ -261,6 +262,16 @@ def ask_stream(
         }
         return
 
+    if should_refuse(question):
+        done = {"type": "done", **refusal_result(), "stream_mode": "none"}
+        if log:
+            _log_ask_result(
+                question, done, channel=channel, session_id=session_id,
+                duration_ms=_elapsed_ms(started), request_id=request_id,
+            )
+        yield done
+        return
+
     top_k = _default_top_k() if k is None else k
     scored = _cached_retrieve_scored(_retrieval_query(question, history), k=top_k)
     chunks = scored.chunks
@@ -326,6 +337,15 @@ def ask(
             "top_score": None,
             "chunk_count": 0,
         }
+
+    if should_refuse(question):
+        result = refusal_result()
+        if log:
+            _log_ask_result(
+                question, result, channel=channel, session_id=session_id,
+                duration_ms=_elapsed_ms(started), request_id=request_id,
+            )
+        return result
 
     top_k = _default_top_k() if k is None else k
 
