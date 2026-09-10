@@ -457,5 +457,50 @@
     "expected_source": null,
     "expect_refusal": true,
     "notes": "Adversarial prompt — should refuse"
+  },
+  {
+    "id": "listing-tenant-workspaces",
+    "question": "what workspaces does my tenant already have?",
+    "expected_source": "first-run",
+    "notes": "first-run.md: read what your tenant already has",
+    "answer_must_include": [
+      "ark workspace list"
+    ]
+  },
+  {
+    "id": "listing-existing-secret",
+    "question": "is a CURSOR_API_KEY already set for our team?",
+    "expected_source": "set-up-cursor",
+    "notes": "set-up-cursor.md: check the Secrets view before minting your own",
+    "answer_must_include": [
+      "Secrets"
+    ]
+  },
+  {
+    "id": "listing-teammate-grants",
+    "question": "how do I see what grants a teammate has?",
+    "expected_source": "admin",
+    "notes": "admin.md: ark grant list <email>",
+    "answer_must_include": [
+      "ark grant list"
+    ]
+  },
+  {
+    "id": "listing-sessions-on-compute",
+    "question": "how do I see which sessions are placed on our compute?",
+    "expected_source": "compute",
+    "notes": "compute.md: ark compute show reports sessions placed on it",
+    "answer_must_include": [
+      "ark compute show"
+    ]
+  },
+  {
+    "id": "gate-auto-flow",
+    "question": "how do I run a flow without stopping for manual approval?",
+    "expected_source": "first-run",
+    "notes": "first-run.md: ark-feature runs gate-free, every stage gate: auto",
+    "answer_must_include": [
+      "gate"
+    ]
   }
 ]
