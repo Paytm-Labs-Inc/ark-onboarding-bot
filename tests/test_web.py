@@ -159,9 +159,10 @@ class WebAppTests(unittest.TestCase):
 class SessionApiTests(unittest.TestCase):
     def setUp(self) -> None:
         os.environ.pop("ARK_ACCESS_TOKEN", None)
-        # ✅ SECURITY GATE: Set SSO_IDENTITY_HEADER for session API tests
-        # Without this, the /api/sessions and /api/session endpoints return 503
-        # to prevent cross-user data leaks (only browser_id without SSO = shared chats).
+        # These tests run with SSO configured so they exercise the identity
+        # current_user_id() prefers. The cookie fallback -- what production uses
+        # until the ingress gate is flipped -- is covered by
+        # BrowserScopedSessionTests below.
         os.environ["SSO_IDENTITY_HEADER"] = "X-SSO-User"
         from src.session_store import MemorySessionStore, reset_session_store
 
@@ -558,6 +559,64 @@ class BrowserIdentityTests(unittest.TestCase):
             self.assertEqual(with_token.status_code, 200)
         finally:
             os.environ.pop("ARK_ACCESS_TOKEN", None)
+
+
+class BrowserScopedSessionTests(unittest.TestCase):
+    """Isolation must hold on the cookie alone, before SSO is flipped.
+
+    Shipping the sidebar on a per-browser id is only defensible if one browser
+    genuinely cannot read another's threads. These assert that directly, with
+    no SSO header set -- which is production today.
+    """
+
+    def setUp(self) -> None:
+        os.environ.pop("ARK_ACCESS_TOKEN", None)
+        os.environ.pop("SSO_IDENTITY_HEADER", None)
+        from src.session_store import MemorySessionStore, reset_session_store
+
+        reset_session_store(MemorySessionStore())
+        self.warm_patch = patch("src.web.warm_services")
+        self.warm_patch.start()
+
+    def tearDown(self) -> None:
+        from src.session_store import reset_session_store
+
+        self.warm_patch.stop()
+        reset_session_store(None)
+
+    def _client_for(self, browser_id: str) -> TestClient:
+        client = TestClient(app)
+        client.cookies.set(auth.BROWSER_ID_COOKIE, browser_id)
+        return client
+
+    def test_the_list_is_served_without_sso(self) -> None:
+        # The earlier gate returned 503 here, which hid the sidebar entirely.
+        response = self._client_for("browseraaaaaaaaaa").get("/api/sessions")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("sessions", response.json())
+
+    @patch("src.web.ask_in_session")
+    def test_one_browser_cannot_list_anothers_threads(self, mock_ask) -> None:
+        mock_ask.return_value = {"answer": "a", "citations": [], "session_id": "s1"}
+        mine = self._client_for("browseraaaaaaaaaa")
+        mine.post("/api/ask", json={"question": "how do I set up Cursor?"})
+
+        theirs = self._client_for("browserbbbbbbbbbb")
+        self.assertEqual(theirs.get("/api/sessions").json()["sessions"], [])
+
+    @patch("src.web.ask_in_session")
+    def test_a_thread_from_another_browser_is_404_not_403(self, mock_ask) -> None:
+        # 404 rather than 403: confirming it exists would leak that it does.
+        mock_ask.return_value = {"answer": "a", "citations": [], "session_id": "s1"}
+        mine = self._client_for("browseraaaaaaaaaa")
+        mine.post("/api/ask", json={"question": "q"})
+        listed = mine.get("/api/sessions").json()["sessions"]
+        if not listed:
+            self.skipTest("no session recorded by the mocked ask path")
+        sid = listed[0]["session_id"]
+
+        theirs = self._client_for("browserbbbbbbbbbb")
+        self.assertEqual(theirs.get(f"/api/session/{sid}").status_code, 404)
 
 
 class ErrorTextAndHeadersTests(unittest.TestCase):

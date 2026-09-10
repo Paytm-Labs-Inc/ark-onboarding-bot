@@ -495,32 +495,33 @@ def api_ask_stream(
 
 @app.get("/api/sessions")
 def api_list_sessions(request: Request, archived: bool = False) -> dict[str, object]:
-    # ✅ SECURITY GATE: SSO_IDENTITY_HEADER must be set for /api/sessions.
-    # If unset, everyone is "anonymous" (keyed by browser_id only), meaning
-    # multiple users sharing a browser can access each other's chats.
-    # This gate prevents shipping with shared-browser data leaks.
-    sso_header = os.environ.get("SSO_IDENTITY_HEADER", "").strip()
-    if not sso_header:
-        raise HTTPException(
-            status_code=503,
-            detail="Session APIs require SSO_IDENTITY_HEADER to be configured. "
-                   "Data isolation cannot be guaranteed without per-user identity.",
-        )
+    # Scoped by current_user_id(), which prefers the SSO identity and falls back
+    # to the per-browser cookie from #98. Until the oauth2-proxy gate is flipped
+    # that means "private per browser", not "private per person".
+    #
+    # Shipping on the cookie is a deliberate product call, not an oversight. The
+    # WRITE path already keys on exactly this id -- /api/ask, /api/ask/stream and
+    # /api/reset all call current_user_id() -- so threads are already stored per
+    # browser today. The earlier gate refused only to LIST them, which hid the
+    # feature without changing what was stored or who could reach it.
+    #
+    # The case that gate named cannot arise: current_user_id() raises rather than
+    # returning a shared "anonymous" bucket, so there is no pile of everyone's
+    # chats behind one id.
+    #
+    # Residual risk, accepted knowingly: two people sharing one browser, where
+    # the first does not sign out. #90 clears the cached chat on sign-out, and
+    # sso_identity() wins the moment the ingress gate is on -- no code change
+    # here, threads simply re-key to the person.
     user_id = current_user_id(request)
     return {"sessions": list_user_sessions(user_id, archived=archived)}
 
 
 @app.get("/api/session/{session_id}")
 def api_get_session(request: Request, session_id: str) -> dict[str, object]:
-    # ✅ SECURITY GATE: SSO_IDENTITY_HEADER must be set for /api/session.
-    # If unset, only browser_id is used for isolation, allowing cross-user access.
-    sso_header = os.environ.get("SSO_IDENTITY_HEADER", "").strip()
-    if not sso_header:
-        raise HTTPException(
-            status_code=503,
-            detail="Session APIs require SSO_IDENTITY_HEADER to be configured. "
-                   "Data isolation cannot be guaranteed without per-user identity.",
-        )
+    # Same scoping as /api/sessions above. A thread belonging to another id is a
+    # 404 rather than a 403: the id is the capability, and distinguishing "not
+    # yours" from "does not exist" would confirm the thread exists.
     payload = load_session_payload(session_id, user_id=current_user_id(request))
     if payload is None:
         raise HTTPException(status_code=404, detail="Session not found.")
