@@ -488,11 +488,18 @@
   {
     "id": "listing-sessions-on-compute",
     "question": "how do I see which sessions are placed on our compute?",
-    "expected_source": "compute",
-    "notes": "compute.md: ark compute show reports sessions placed on it",
+    "expected_source": [
+      "compute",
+      "k8s-compute"
+    ],
+    "notes": "compute.md documents `ark compute show`; k8s-compute covers the same ground for pools, so either citation is correct",
     "answer_must_include": [
       "ark compute show"
-    ]
+    ],
+    "page_evidence": {
+      "compute": "ark compute show",
+      "k8s-compute": "compute"
+    }
   },
   {
     "id": "gate-auto-flow",
