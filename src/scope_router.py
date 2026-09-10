@@ -115,8 +115,22 @@ _NAMED_TEAM_INVENTORY = re.compile(
 _KNOWN_TEAMS = frozenset({"my", "our", "your", "platform"})
 
 
+# Documented field names whose underscore form is destroyed by normalisation.
+# `system_prompt` is an agent-definition key (authoring-your-own.md:16, example
+# at :27); strip the underscore and it becomes the exact English phrase the
+# extraction patterns hunt for, so "show me the system_prompt for the analyzer
+# agent" was declined -- a documented question, refused.
+#
+# Held as one token through normalisation instead. A denylist of the words that
+# may follow ("field", "key", "yaml", ...) cannot work: "for", "block", "of",
+# "in", "used by" are all equally valid and the list is never finished.
+_FIELD_IDENTIFIERS = ("system_prompt",)
+
+
 def _normalise(question: str) -> str:
     text = question.lower().strip()
+    for field in _FIELD_IDENTIFIERS:
+        text = text.replace(field, field.replace("_", ""))
     text = re.sub(r"[^a-z0-9 ]+", " ", text)
     return " ".join(text.split())
 
