@@ -150,10 +150,20 @@ def main() -> int:
             f"PASS POST /api/ask follow-up -> HTTP 200, answer_len={len(ask2.get('answer', ''))}",
         )
 
+    # 404 is a PASS here, not a failure. `sid` is the pre-restart thread, and
+    # with SESSION_STORE=memory the restart is SUPPOSED to have lost it -- the
+    # check three steps up asserts exactly that. /api/reset now 404s on a
+    # missing session (it did not before the session API landed), so demanding
+    # 200 made this script report OVERALL: FAIL on every memory-mode run while
+    # passing under redis. A check that is always red for one backend is a
+    # check nobody reads, and this script is the only end-to-end evidence the
+    # Redis rollout has.
     status, _ = http("POST", "/api/reset", {"session_id": sid})
-    if status != 200:
+    if status not in (200, 404):
         log(results, f"FAIL POST /api/reset -> HTTP {status}")
         failures += 1
+    elif status == 404:
+        log(results, "PASS POST /api/reset -> HTTP 404 (thread already gone, expected for memory)")
     else:
         log(results, "PASS POST /api/reset -> HTTP 200")
 

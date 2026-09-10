@@ -761,14 +761,22 @@
           window.location = "login";
           return;
         }
-        const activePayload = activeResp.ok ? await activeResp.json() : { sessions: [] };
-        const archivedPayload = archivedResp.ok ? await archivedResp.json() : { sessions: [] };
-        renderSessionList(activeSessionsEl, activePayload.sessions || [], {
-          emptyLabel: "No chats yet",
-        });
-        renderSessionList(archivedSessionsEl, archivedPayload.sessions || [], {
-          emptyLabel: "No archived chats",
-        });
+        // A non-ok response is NOT an empty list. Falling back to { sessions: [] }
+        // rendered "No chats yet" when Redis was down or the endpoint 500'd --
+        // telling someone their history is gone when it merely failed to load.
+        // Those two readings lead to opposite actions, so they get different
+        // words. The thrown-fetch case below already did this; this is the HTTP
+        // half it missed.
+        renderSessionList(
+          activeSessionsEl,
+          activeResp.ok ? (await activeResp.json()).sessions || [] : [],
+          { emptyLabel: activeResp.ok ? "No chats yet" : "Could not load chats" },
+        );
+        renderSessionList(
+          archivedSessionsEl,
+          archivedResp.ok ? (await archivedResp.json()).sessions || [] : [],
+          { emptyLabel: archivedResp.ok ? "No archived chats" : "Could not load archive" },
+        );
       } catch (_err) {
         renderSessionList(activeSessionsEl, [], { emptyLabel: "Could not load chats" });
         renderSessionList(archivedSessionsEl, [], { emptyLabel: "Could not load archive" });
