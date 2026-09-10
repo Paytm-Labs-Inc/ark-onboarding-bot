@@ -85,8 +85,12 @@ class WebAppTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["answer"], "Use ~/.cursor/mcp.json")
         self.assertEqual(len(payload["sources"]), 1)
-        mock_ask.assert_called_once_with(
-            "sess-1", "how do I set up Cursor?", user_id="anonymous"
+        mock_ask.assert_called_once()
+        self.assertEqual(mock_ask.call_args.args[0], "sess-1")
+        self.assertEqual(mock_ask.call_args.args[1], "how do I set up Cursor?")
+        self.assertEqual(
+            mock_ask.call_args.kwargs["user_id"],
+            self.client.cookies[auth.BROWSER_ID_COOKIE],
         )
 
     @patch("src.web.ask_in_session_stream")
@@ -122,8 +126,12 @@ class WebAppTests(unittest.TestCase):
         self.assertIn('"type": "delta"', body)
         self.assertIn('"type": "done"', body)
         self.assertIn("Run ark host enroll.", body)
-        mock_stream.assert_called_once_with(
-            "sess-2", "how do I enroll a host?", user_id="anonymous"
+        mock_stream.assert_called_once()
+        self.assertEqual(mock_stream.call_args.args[0], "sess-2")
+        self.assertEqual(mock_stream.call_args.args[1], "how do I enroll a host?")
+        self.assertEqual(
+            mock_stream.call_args.kwargs["user_id"],
+            self.client.cookies[auth.BROWSER_ID_COOKIE],
         )
 
     def test_api_ask_rejects_blank_question(self) -> None:
@@ -184,11 +192,12 @@ class SessionApiTests(unittest.TestCase):
         }
         self.client.post("/api/ask", json={"question": "hi"})
         sid = mock_ask.return_value["session_id"]
+        browser_id = self.client.cookies[auth.BROWSER_ID_COOKIE]
         store = MemorySessionStore()
         store.save(
             StoredSession(
                 session_id=sid,
-                user_id="anonymous",
+                user_id=browser_id,
                 title=title_from_question("hi"),
                 turns=[StoredTurn("hi", "hello", [], [])],
             )

@@ -23,15 +23,14 @@ from src.auth import (
     BROWSER_ID_COOKIE,
     COOKIE_NAME,
     browser_identity,
+    current_identity,
     new_browser_id,
     PUBLIC_PATHS,
     auth_enabled,
     request_authorized,
-    sso_identity,
     token_valid,
 )
 from src.chat import (
-    ANONYMOUS_USER,
     ask_in_session,
     ask_in_session_stream,
     list_user_sessions,
@@ -50,7 +49,17 @@ SESSION_MAX_AGE = 12 * 60 * 60
 
 
 def current_user_id(request: Request) -> str:
-    return sso_identity(request) or ANONYMOUS_USER
+    """Storage key for this browser/user. Never the shared literal 'anonymous'."""
+    identity = current_identity(request)
+    if identity:
+        return identity
+    assigned = getattr(request.state, "browser_id", None)
+    if assigned:
+        return assigned
+    raise HTTPException(
+        status_code=500,
+        detail="Browser identity missing; issue_browser_id middleware must run first.",
+    )
 
 
 def base_path() -> str:
@@ -176,11 +185,15 @@ async def issue_browser_id(request: Request, call_next):
     session cookie's own logic rather than being hardcoded, so local http still
     works.
     """
+    assigned = None
+    if current_identity(request) is None:
+        assigned = new_browser_id()
+        request.state.browser_id = assigned
     response = await call_next(request)
-    if browser_identity(request) is None:
+    if assigned is not None:
         response.set_cookie(
             BROWSER_ID_COOKIE,
-            new_browser_id(),
+            assigned,
             max_age=60 * 60 * 24 * 365,
             httponly=True,
             samesite="lax",
