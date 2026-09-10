@@ -495,12 +495,32 @@ def api_ask_stream(
 
 @app.get("/api/sessions")
 def api_list_sessions(request: Request, archived: bool = False) -> dict[str, object]:
+    # ✅ SECURITY GATE: SSO_IDENTITY_HEADER must be set for /api/sessions.
+    # If unset, everyone is "anonymous" (keyed by browser_id only), meaning
+    # multiple users sharing a browser can access each other's chats.
+    # This gate prevents shipping with shared-browser data leaks.
+    sso_header = os.environ.get("SSO_IDENTITY_HEADER", "").strip()
+    if not sso_header:
+        raise HTTPException(
+            status_code=503,
+            detail="Session APIs require SSO_IDENTITY_HEADER to be configured. "
+                   "Data isolation cannot be guaranteed without per-user identity.",
+        )
     user_id = current_user_id(request)
     return {"sessions": list_user_sessions(user_id, archived=archived)}
 
 
 @app.get("/api/session/{session_id}")
 def api_get_session(request: Request, session_id: str) -> dict[str, object]:
+    # ✅ SECURITY GATE: SSO_IDENTITY_HEADER must be set for /api/session.
+    # If unset, only browser_id is used for isolation, allowing cross-user access.
+    sso_header = os.environ.get("SSO_IDENTITY_HEADER", "").strip()
+    if not sso_header:
+        raise HTTPException(
+            status_code=503,
+            detail="Session APIs require SSO_IDENTITY_HEADER to be configured. "
+                   "Data isolation cannot be guaranteed without per-user identity.",
+        )
     payload = load_session_payload(session_id, user_id=current_user_id(request))
     if payload is None:
         raise HTTPException(status_code=404, detail="Session not found.")
