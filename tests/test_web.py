@@ -159,6 +159,10 @@ class WebAppTests(unittest.TestCase):
 class SessionApiTests(unittest.TestCase):
     def setUp(self) -> None:
         os.environ.pop("ARK_ACCESS_TOKEN", None)
+        # ✅ SECURITY GATE: Set SSO_IDENTITY_HEADER for session API tests
+        # Without this, the /api/sessions and /api/session endpoints return 503
+        # to prevent cross-user data leaks (only browser_id without SSO = shared chats).
+        os.environ["SSO_IDENTITY_HEADER"] = "X-SSO-User"
         from src.session_store import MemorySessionStore, reset_session_store
 
         reset_session_store(MemorySessionStore())
@@ -171,6 +175,7 @@ class SessionApiTests(unittest.TestCase):
 
         self.warm_patch.stop()
         reset_session_store(None)
+        os.environ.pop("SSO_IDENTITY_HEADER", None)
 
     @patch("src.web.ask_in_session")
     def test_get_session_returns_saved_turns(self, mock_ask) -> None:
