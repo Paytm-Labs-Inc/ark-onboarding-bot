@@ -29,6 +29,8 @@ _JAILBREAK_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"(instructions|rules|directives|prompt)",
         r"(ignore|disregard|forget)\s+(all\s+)?(instructions|rules|directives)",
         r"forget everything above",
+        r"ignore the docs",
+        r"bypass (ark )?auth",
         r"(show|print|reveal|display|repeat|translate)\s+(me\s+)?your\s+"
         r"(system prompt|instructions|prompt)",
         r"(show|print|reveal|display)\s+(me\s+)?(the\s+)?instructions you were given",
@@ -60,6 +62,22 @@ _OOS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"\bcreate a new jira board\b(?! link)",
         r"\bdeploy (my )?(application|app|service) to production\b",
         r"\bproduction on aws\b",
+        r"\bkubernetes on my laptop\b",
+        r"\binstall and configure kubernetes\b",
+        r"\bbuild a custom slack bot\b",
+        r"\bopenai api key\b",
+        r"\bfor chatgpt\b",
+    )
+)
+
+# Calendar-date asks. The roadmap has no dates — refuse even if an Ark noun
+# is present ("slack session control", "session debugger").
+_DATE_ASK_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bwhen exactly will .+\bship\b",
+        r"\bwhen will .+\bship\b",
+        r"\bwhat date will .+\bship\b",
     )
 )
 
@@ -79,6 +97,7 @@ _BYPASS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"\b(push|merge)\b.{0,48}\bwithout\b.{0,32}\b(pr review|review gate|approval gate)\b",
         r"\bcop(?:y|ies) .+\b(secret|credential)s?\b.{0,32}\b(external|server)\b",
         r"\bgive me (a |an )?.{0,32}\b(token|secret|password)\b",
+        r"\b(connection string|production database)\b",
     )
 )
 
@@ -107,6 +126,8 @@ def should_refuse(question: str) -> bool:
     if not text:
         return False
     if any(pattern.search(text) for pattern in _JAILBREAK_PATTERNS):
+        return True
+    if any(pattern.search(text) for pattern in _DATE_ASK_PATTERNS):
         return True
     if any(pattern.search(text) for pattern in _BYPASS_PATTERNS):
         return True

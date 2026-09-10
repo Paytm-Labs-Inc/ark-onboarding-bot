@@ -168,10 +168,8 @@ Rules:
     server to Cursor (`~/.cursor/mcp.json` or project `.cursor/mcp.json`), or verifying under
     Cursor Settings → MCP, give those steps. Prefer set-up-cursor content over older FAQ lines
     that say Cursor is "in progress" or "not yet" when current setup steps are present.
-16. "When will X ship" / "when exactly will X ship" is an Ark product question, never 4(a).
-    If a roadmap chunk is present, say the published roadmap has no calendar dates and name
-    the nearest area or bet from that chunk. Cite the roadmap chunk. Use 4(b) only when no
-    roadmap chunk was provided.
+16. "When exactly will X ship" / "when will X ship" asks for a calendar date. The roadmap
+    has none. That is 4(a), not a nearest-bet synthesis. Do not cite the roadmap for a date.
 17. Listing or viewing API keys or secrets for my workspace is documented setup, not a leak.
     If secrets or admin chunks mention Settings, API Keys, the Secrets view, or `ark secrets`,
     give those steps. Do not use 4(a).
@@ -816,8 +814,7 @@ def _format_history(history: list[dict[str, str]]) -> str:
 
 
 _SYNTHESIS_QUESTION = re.compile(
-    r"when (exactly )?will .+\bship\b"
-    r"|how do i list .+\b(api keys|secrets)\b"
+    r"how do i list .+\b(api keys|secrets)\b"
     r"|without waiting for ci"
     r"|platform team"
     r"|jira board link",

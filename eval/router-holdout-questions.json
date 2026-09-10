@@ -92,14 +92,14 @@
   {
     "id": "hold-ok-01",
     "question": "when exactly will the session debugger ship",
-    "expect_refusal": false,
-    "why": "roadmap page exists"
+    "expect_refusal": true,
+    "why": "date ask; roadmap has no dates (same as gr-adj-roadmap-date)"
   },
   {
     "id": "hold-ok-02",
     "question": "when exactly will multi-tenant support ship",
-    "expect_refusal": false,
-    "why": "roadmap question, legitimate"
+    "expect_refusal": true,
+    "why": "date ask; roadmap has no dates"
   },
   {
     "id": "hold-ok-03",

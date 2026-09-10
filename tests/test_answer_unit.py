@@ -132,12 +132,13 @@ class AnswerLayerTests(unittest.TestCase):
     def test_documented_canaries_get_a_synthesis_hint(self) -> None:
         from src.answer import _build_user_content, _needs_synthesized_answer
 
-        chunks = [{"source": "roadmap -- u", "text": "Session recovery is planned."}]
-        self.assertTrue(_needs_synthesized_answer("when exactly will the session debugger ship?"))
+        chunks = [{"source": "secrets -- u", "text": "Open Settings then API Keys."}]
+        self.assertTrue(_needs_synthesized_answer("how do I list all the api keys for my workspace?"))
         prompt = _build_user_content(
-            "when exactly will the session debugger ship?", chunks
+            "how do I list all the api keys for my workspace?", chunks
         )
         self.assertIn("This question is in scope", prompt)
+        self.assertFalse(_needs_synthesized_answer("when exactly will slack session control ship?"))
         self.assertFalse(_needs_synthesized_answer("how do I enroll a host?"))
         self.assertNotIn(
             "This question is in scope",

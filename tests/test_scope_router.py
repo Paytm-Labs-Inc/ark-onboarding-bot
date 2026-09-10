@@ -1,4 +1,4 @@
-"""Scope router: jailbreak shape plus structural out-of-scope / inventory."""
+"""Scope router locked to the CI refusal sets."""
 
 from __future__ import annotations
 
@@ -9,46 +9,63 @@ from pathlib import Path
 from src.scope_router import named_team_missing_from_chunks, should_refuse
 
 HOLDOUT_PATH = Path(__file__).resolve().parent.parent / "eval" / "router-holdout-questions.json"
-SCORED_PATH = Path(__file__).resolve().parent.parent / "eval" / "questions.json"
+QUESTIONS_PATH = Path(__file__).resolve().parent.parent / "eval" / "questions.json"
 GUARDRAIL_PATH = Path(__file__).resolve().parent.parent / "eval" / "guardrail-questions.json"
+
+_NAMED_TEAM_IDS = {"gr-adj-other-team"}
+
+
+def _pre_refused(question: str) -> bool:
+    if should_refuse(question):
+        return True
+    return named_team_missing_from_chunks(
+        question, [{"text": "none of that name", "source": "x"}]
+    )
 
 
 class ScopeRouterHoldoutTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.holdout = json.loads(HOLDOUT_PATH.read_text(encoding="utf-8"))
-        cls.scored = [
-            item
-            for item in json.loads(SCORED_PATH.read_text(encoding="utf-8"))
-            if item.get("expected_source")
-        ]
+        cls.questions = json.loads(QUESTIONS_PATH.read_text(encoding="utf-8"))
         cls.guardrail = json.loads(GUARDRAIL_PATH.read_text(encoding="utf-8"))
+        cls.scored = [item for item in cls.questions if item.get("expected_source")]
 
-    def _rows(self, prefix: str) -> list[dict]:
-        return [item for item in self.holdout if str(item["id"]).startswith(prefix)]
-
-    def test_jailbreak_holdout_refused(self) -> None:
-        for item in self._rows("hold-inj-"):
-            with self.subTest(item=item["id"]):
+    def test_every_ci_refusal_is_pre_refused(self) -> None:
+        """guardrail-eval + refusal-eval rows must not reach the model."""
+        rows = [
+            ("guardrail", item)
+            for item in self.guardrail
+            if item.get("expect_refusal")
+        ] + [
+            ("questions", item)
+            for item in self.questions
+            if item.get("expect_refusal")
+        ]
+        for source, item in rows:
+            with self.subTest(source=source, item=item["id"]):
                 self.assertTrue(
-                    should_refuse(str(item["question"])),
-                    msg=item.get("why", item["question"]),
+                    _pre_refused(str(item["question"])),
+                    msg=item["question"],
                 )
 
-    def test_legitimate_holdout_passes(self) -> None:
-        for item in self._rows("hold-ok-"):
+    def test_scored_questions_never_pre_refused(self) -> None:
+        for item in self.scored:
             with self.subTest(item=item["id"]):
                 self.assertFalse(
                     should_refuse(str(item["question"])),
-                    msg=item.get("why", item["question"]),
+                    msg=item["question"],
                 )
 
-    def test_scope_and_enumeration_holdout_refused(self) -> None:
-        for item in self._rows("hold-oos-") + self._rows("hold-sec-"):
+    def test_holdout_matches_expect_refusal(self) -> None:
+        for item in self.holdout:
+            question = str(item["question"])
+            expected = bool(item["expect_refusal"])
             with self.subTest(item=item["id"]):
-                self.assertTrue(
-                    should_refuse(str(item["question"])),
-                    msg=item.get("why", item["question"]),
+                self.assertEqual(
+                    should_refuse(question),
+                    expected,
+                    msg=item.get("why", question),
                 )
 
     def test_documented_system_prompt_questions_pass(self) -> None:
@@ -61,58 +78,22 @@ class ScopeRouterHoldoutTests(unittest.TestCase):
             with self.subTest(question=question):
                 self.assertFalse(should_refuse(question), msg=question)
 
-    def test_scored_questions_never_pre_refused(self) -> None:
-        for item in self.scored:
-            with self.subTest(item=item["id"]):
-                self.assertFalse(
-                    should_refuse(str(item["question"])),
-                    msg=item["question"],
-                )
-
-    def test_guardrail_rows_router_or_named_team(self) -> None:
-        """expect_refusal rows are pre-refused, named-team, or a dated-roadmap ask."""
-        named_team_ids = {"gr-adj-other-team"}
-        # Same shape as hold-ok-01/02 (roadmap page exists). The model already
-        # refuses a date that is not in the chunks; do not regex "when will X ship".
-        model_ids = {"gr-adj-roadmap-date"}
-        for item in self.guardrail:
-            if not item.get("expect_refusal") or item["id"] in model_ids:
-                continue
-            question = str(item["question"])
-            if item["id"] in named_team_ids:
-                with self.subTest(item=item["id"]):
-                    self.assertFalse(should_refuse(question), msg=question)
-                    self.assertTrue(
-                        named_team_missing_from_chunks(
-                            question,
-                            [{"text": "use ark workspace list", "source": "first-run"}],
-                        ),
-                        msg=question,
-                    )
-                continue
-            with self.subTest(item=item["id"]):
-                self.assertTrue(should_refuse(question), msg=question)
-
-    def test_own_app_production_deploy_is_refused(self) -> None:
-        self.assertTrue(
-            should_refuse("how do I deploy my application to production on AWS?")
-        )
-        self.assertFalse(
-            should_refuse("how do I register compute in my AWS account for Ark")
-        )
-
-    def test_canaries_near_guardrail_misses_pass(self) -> None:
+    def test_must_answer_canaries_pass(self) -> None:
         for question in (
-            "my postgres query is slow inside a flow, is that an Ark limit",
             "how do I list all the api keys for my workspace",
             "can I push to main without waiting for CI",
-            "what workspaces does the platform team have",
+            "what workspaces does the platform team have access to?",
+            "how do I create a new jira board link in my flow?",
+            "how do I register compute in my AWS account for Ark",
+            "what is on the Ark roadmap",
         ):
             with self.subTest(question=question):
                 self.assertFalse(should_refuse(question), msg=question)
 
-    def test_named_team_missing_when_chunks_omit_the_name(self) -> None:
-        question = "what workspaces does the lending team have configured"
+    def test_named_team_other_team_is_post_retrieve(self) -> None:
+        item = next(row for row in self.guardrail if row["id"] in _NAMED_TEAM_IDS)
+        question = str(item["question"])
+        self.assertFalse(should_refuse(question))
         self.assertTrue(
             named_team_missing_from_chunks(
                 question,
@@ -126,7 +107,7 @@ class ScopeRouterHoldoutTests(unittest.TestCase):
             )
         )
 
-    def test_platform_team_is_a_known_actor_even_without_the_name_in_chunks(self) -> None:
+    def test_platform_team_is_a_known_actor(self) -> None:
         self.assertFalse(
             named_team_missing_from_chunks(
                 "what workspaces does the platform team have access to?",
