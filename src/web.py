@@ -20,7 +20,10 @@ from pydantic import BaseModel, Field
 
 from src.answer import PiAtCapacity, missing_backend_credential, unusable_backend_model
 from src.auth import (
+    BROWSER_ID_COOKIE,
     COOKIE_NAME,
+    browser_identity,
+    new_browser_id,
     PUBLIC_PATHS,
     auth_enabled,
     request_authorized,
@@ -145,6 +148,34 @@ async def enforce_auth(request: Request, call_next):
             content={"detail": "Authentication required. Sign in at /login."},
         )
     return RedirectResponse(url=f"{base_path()}/login", status_code=303)
+
+
+@app.middleware("http")
+async def issue_browser_id(request: Request, call_next):
+    """Give a browser without an id one, so its chats have somewhere to live.
+
+    Runs on every response rather than at login, because the id has to exist
+    before the first question is asked, and not every surface goes through a
+    login page.
+
+    httponly: nothing in the page needs to read it, and a value the page cannot
+    read is a value an injected script cannot exfiltrate to identify a user.
+    samesite=lax so a link from Foundry still carries it. secure follows the
+    session cookie's own logic rather than being hardcoded, so local http still
+    works.
+    """
+    response = await call_next(request)
+    if browser_identity(request) is None:
+        response.set_cookie(
+            BROWSER_ID_COOKIE,
+            new_browser_id(),
+            max_age=60 * 60 * 24 * 365,
+            httponly=True,
+            samesite="lax",
+            secure=request.url.scheme == "https",
+            path=base_path() or "/",
+        )
+    return response
 
 
 # Middleware added later wraps what came before. security_headers (below) is
