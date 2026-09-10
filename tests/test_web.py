@@ -46,16 +46,22 @@ class WebAppTests(unittest.TestCase):
     # unit test should never call out, so the check is stubbed here.
     @patch("src.web.unusable_backend_model", return_value=None)
     @patch("src.warmup.retrieve", return_value=[{"source": "x", "text": "y"}])
-    @patch("src.warmup.load_chunks", return_value=[{"source": "x", "text": "y"}])
+    @patch(
+        "src.warmup.default_index_info",
+        return_value={"chunks": 1, "corpus_source": "files"},
+    )
     def test_ready_returns_ok_when_corpus_loaded(
-        self, _mock_chunks: object, _mock_retrieve: object, _gateway: object
+        self, _mock_info: object, _mock_retrieve: object, _gateway: object
     ) -> None:
         response = self.client.get("/ready")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
 
-    @patch("src.warmup.load_chunks", return_value=[])
-    def test_ready_returns_503_when_corpus_empty(self, _mock_chunks: object) -> None:
+    @patch(
+        "src.warmup.default_index_info",
+        return_value={"chunks": 0, "corpus_source": "files"},
+    )
+    def test_ready_returns_503_when_corpus_empty(self, _mock_info: object) -> None:
         response = self.client.get("/ready")
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["reason"], "no corpus chunks")

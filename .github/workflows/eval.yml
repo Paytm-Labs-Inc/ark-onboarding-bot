@@ -56,6 +56,85 @@ jobs:
       - name: Retrieval eval gate
         run: python eval/run_eval.py --quiet-retriever --only-scored
 
+  # Without this the corpus-store code is never executed in CI: with no
+  # REDIS_URL every job takes the file fallback, so the stored path could
+  # be broken and every check would still be green. Runs beside retrieval-eval
+  # rather than in the serialised chain below, because it makes no gateway
+  # calls and so adds no rate-limit contention.
+  corpus-store-eval:
+    needs: workflow-lint
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 6379:6379
+    env:
+      REDIS_URL: redis://127.0.0.1:6379/0
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Cache sentence-transformers model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: huggingface-${{ runner.os }}-all-MiniLM-L6-v2
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Ingest the corpus into Redis
+        run: python -m src.corpus_store
+
+      - name: The stored corpus must be the same corpus
+        run: |
+          python - <<'CHECK'
+          import json, os, sys
+          sys.path.insert(0, ".")  # so the script also runs if extracted to debug
+          import numpy as np
+          from src import retriever as R
+
+          os.environ["CORPUS_STORE"] = "files"
+          R._default_index = None
+          files = R.load_default_index()
+
+          os.environ["CORPUS_STORE"] = "redis"
+          R._default_index = None
+          stored = R.load_default_index()
+
+          if R._default_index_source != "redis":
+              sys.exit("stored path fell back to files; the Redis path was not tested")
+          if not np.array_equal(files.embeddings, stored.embeddings):
+              sys.exit("embedding matrices differ between the file and stored corpora")
+
+          questions = [q["question"] for q in json.load(open("eval/questions.json"))]
+          drift = [
+              q for q in questions
+              if [c["source"] for c in R.retrieve(q, top_k=8, index=files)]
+              != [c["source"] for c in R.retrieve(q, top_k=8, index=stored)]
+          ]
+          if drift:
+              sys.exit(f"retrieval differs on {len(drift)} question(s): {drift[:3]}")
+          print(f"stored corpus matches on all {len(questions)} questions")
+          CHECK
+
+      - name: Retrieval eval gate, served from Redis
+        env:
+          CORPUS_STORE: redis
+        run: python eval/run_eval.py --quiet-retriever --only-scored
+
+
   # Adversarial scope + indirect prompt injection. Two jobs because they have
   # different maturity: the injection defence PASSES today (0 of 12 poisoned
   # chunks obeyed) so it gates; the scope guardrails FAIL 6 of 17 today, so

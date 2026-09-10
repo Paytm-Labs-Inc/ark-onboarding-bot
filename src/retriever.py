@@ -18,6 +18,7 @@ DEFAULT_TOP_K = 8
 
 _model = None
 _default_index: "Index | None" = None
+_default_index_source: str | None = None
 
 ONBOARDING_STEPS_RE = re.compile(
     r"(?i)"
@@ -246,13 +247,76 @@ def _embed(texts: list[str]) -> np.ndarray:
     return np.asarray(vecs, dtype=np.float32)
 
 
-def build_index(chunks: list[Chunk]) -> Index:
-    """Embed all chunk texts into an L2-normalized matrix."""
+def build_index(chunks: list[Chunk], embeddings: np.ndarray | None = None) -> Index:
+    """Embed all chunk texts into an L2-normalized matrix.
+
+    `embeddings` skips the model call when the vectors were computed earlier
+    and stored, which is the whole point of keeping the corpus in Redis.
+    They must be in the same order as `chunks` and already normalized, because
+    retrieval takes a plain dot product against them.
+
+    BM25 is always rebuilt here. It is a term-frequency table over text we
+    already hold, it costs milliseconds, and storing it would add a second
+    thing that can fall out of step with the corpus.
+    """
     if not chunks:
         return Index(chunks=[], embeddings=np.zeros((0, 0), dtype=np.float32))
-    embeddings = _embed([c["text"] for c in chunks])
+    if embeddings is None:
+        embeddings = _embed([c["text"] for c in chunks])
+    elif len(embeddings) != len(chunks):
+        raise ValueError(
+            f"{len(chunks)} chunks but {len(embeddings)} embeddings; they must align"
+        )
     bm25 = _BM25([_tokens(c["text"]) for c in chunks])
     return Index(chunks=list(chunks), embeddings=embeddings, bm25=bm25)
+
+
+def load_default_index(data_dir: Path = DATA_DIR) -> Index:
+    """The corpus, from Redis when configured and from data/ otherwise.
+
+    The stored path is not an optimisation with a fallback; it is the same
+    index either way. Anything that stops Redis answering -- unset,
+    unreachable, never ingested, embedded by a different model -- lands back on
+    the files in the image, which is exactly what runs today.
+    """
+    # corpus_store imports only the standard library at module scope and pulls
+    # psycopg in lazily, so this should never fire. It is here so that no
+    # problem with the corpus code can stop retrieval from starting at all.
+    try:
+        from src.corpus_store import load_stored_corpus
+    except Exception:  # noqa: BLE001
+        load_stored_corpus = None  # type: ignore[assignment]
+
+    global _default_index_source
+    if load_stored_corpus is not None:
+        stored = load_stored_corpus(MODEL_NAME)
+        if stored is not None:
+            chunks, vectors = stored
+            matrix = np.asarray(vectors, dtype=np.float32)
+            print(
+                f"corpus loaded from Redis: {len(chunks)} chunks, no embedding at boot"
+            )
+            _default_index_source = "redis"
+            return build_index([dict(c) for c in chunks], embeddings=matrix)  # type: ignore[arg-type]
+    _default_index_source = "files"
+    return build_index(load_chunks(data_dir))
+
+
+def default_index_info() -> dict[str, object]:
+    """What the loaded corpus actually is, for the readiness probe.
+
+    Counting files on disk answers a different question once the corpus can
+    live in the database: the probe would report the image's copy while the pod
+    served the stored corpus, and would fail outright on an image that no
+    longer ships data/ at all.
+    """
+    index = _default_index
+    if index is None:
+        # Reported as a pair on purpose: a source without an index is a
+        # half-truth, and the probe should say "not loaded" rather than name a
+        # backend it has not actually served a query from.
+        return {"chunks": 0, "corpus_source": "not loaded"}
+    return {"chunks": len(index.chunks), "corpus_source": _default_index_source or "unknown"}
 
 
 def _expand_query(question: str) -> str:
@@ -321,7 +385,7 @@ def retrieve_scored(
         return ScoredRetrieval(chunks=[], top_score=None)
     if index is None:
         if _default_index is None:
-            _default_index = build_index(load_chunks(data_dir))
+            _default_index = load_default_index(data_dir)
         index = _default_index
     if not index.chunks:
         return ScoredRetrieval(chunks=[], top_score=None)
