@@ -39,6 +39,34 @@ class ScopeRouterHoldoutTests(unittest.TestCase):
                     msg=item["question"],
                 )
 
+    def test_holdout_must_refuse_rows_are_pre_refused(self) -> None:
+        """The router must still catch what is wrong for EVERY corpus.
+
+        Deleting test_every_ci_refusal_is_pre_refused took this direction with
+        it, and the gap was real rather than theoretical: with it gone, gutting
+        _INVENTORY_PATTERNS, the persona jailbreak patterns or the ignore/forget
+        injection patterns each left the whole suite green.
+
+        Why this assertion is safe where the deleted one was not. That one ran
+        over the CI eval corpus, which grows every time someone thinks of a new
+        adversarial phrasing -- so each new row became a regex the router was
+        obliged to grow, and every over-refusal so far came from exactly that.
+        This runs over the HOLDOUT, a fixed set written to describe the router's
+        own ownership boundary, and every row in it is wrong for any corpus:
+        injection, out-of-scope, and credential enumeration. None is
+        corpus-dependent, so no ship-date regex can ever be demanded here.
+
+        The eval cannot cover this. It measures the model's final answer, so a
+        router that silently stops catching a jailbreak stays green there as
+        long as the model happens to decline -- and the pre-retrieval gate is
+        gone without a single test going red.
+        """
+        for item in self.holdout:
+            if not item.get("expect_refusal"):
+                continue
+            with self.subTest(item=item["id"]):
+                self.assertTrue(_pre_refused(str(item["question"])), msg=item["question"])
+
     def test_holdout_must_not_refuse_rows_are_answered(self) -> None:
         """Only the must-NOT-refuse half is a router obligation.
 
@@ -158,9 +186,6 @@ class ScopeRouterHoldoutTests(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class DocumentedFieldNamesAreNotExtractionTests(unittest.TestCase):
     """`system_prompt` is an agent field, not a request for the bot's prompt.
 
@@ -214,3 +239,6 @@ class RoadmapQuestionsAreAnsweredTests(unittest.TestCase):
         ):
             self.assertFalse(should_refuse(q), q)
 
+
+if __name__ == "__main__":
+    unittest.main()

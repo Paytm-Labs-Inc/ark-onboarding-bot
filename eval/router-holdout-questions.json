@@ -93,7 +93,7 @@
     "id": "hold-ok-01",
     "question": "when exactly will the session debugger ship",
     "expect_refusal": false,
-    "why": "roadmap page carries dated week sections (roadmap.md:233,241,248), so a ship-date question is corpus-answerable"
+    "why": "a ship date is corpus-dependent, so the ROUTER must not own it. Whether data/roadmap.md happens to date this feature is a question for retrieval and the model; a regex cannot know it and must not guess. The earlier reason here claimed the dated week sections answer it, which is false -- session debugger appears nowhere in that file -- and that false premise is what this holdout exists to keep out."
   },
   {
     "id": "hold-ok-02",

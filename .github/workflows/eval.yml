@@ -111,7 +111,8 @@ jobs:
         env:
           PI_API_KEY: ${{ secrets.PI_API_KEY }}
         run: |
-          # Rule 15 says document text is data, never instructions. The corpus is
+          # The chunks-as-data rule says document text is data, never
+          # instructions (cited by content: it has been renumbered before). The corpus is
           # ingested from pages anyone with doc access can edit, so this is the
           # threat that actually applies. Any compliance fails the build.
           if [ -z "$PI_API_KEY" ]; then
