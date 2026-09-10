@@ -36,6 +36,7 @@ from src.session_timeline import build_timeline, prepend_timeline, timeline_to_d
 class DebugResult:
     answer: str
     case: str | None = None
+    cannot_fix_reason: str | None = None
     ark_session_id: str | None = None
     gate_id: str | None = None
     gate_pending: bool = False
@@ -58,6 +59,7 @@ class DebugResult:
             "retrieved_sources": self.retrieved_sources,
             "debug": True,
             "case": self.case,
+            "cannot_fix_reason": self.cannot_fix_reason,
             "ark_session_id": self.ark_session_id,
             "gate_id": self.gate_id,
             "gate_pending": self.gate_pending,
@@ -115,6 +117,7 @@ def _finish_debug_result(
     return DebugResult(
         answer=prepend_timeline(report, body),
         case=case,
+        cannot_fix_reason=verdict.cannot_fix_reason if verdict else None,
         ark_session_id=ark_session_id,
         gate_id=gate_id,
         gate_pending=gate_pending,
@@ -232,7 +235,16 @@ def approve_plan(plan_id: str) -> DebugResult:
         )
 
     dispatch_id = str(dispatch.get("dispatch_session_id") or "")
-    pr_info = poll_and_create_pr(dispatch_id)
+    try:
+        pr_info = poll_and_create_pr(dispatch_id)
+    except ArkError as exc:
+        pr_info = {
+            "pr_url": None,
+            "message": (
+                f"Fix session {dispatch_id or '(unknown)'} started, but PR status "
+                f"could not be checked: {exc}"
+            ),
+        }
     pr_url = pr_info.get("pr_url")
 
     lines = [
@@ -374,6 +386,8 @@ def debug_session_stream(ark_session_id: str) -> Iterator[dict[str, Any]]:
 
 def run_debug_action(gate_id: str, action: str) -> DebugResult:
     """Generate a next-step artifact (Slack message, ticket, follow-up prompt)."""
+    from src.session_actions import action_intro_lines
+
     answer, pending = run_action(gate_id, action)
     if pending is None:
         return DebugResult(answer=answer, gate_id=gate_id)
@@ -388,8 +402,12 @@ def run_debug_action(gate_id: str, action: str) -> DebugResult:
     else:
         gate_kind = None
 
+    body = answer
+    if left:
+        body = "\n".join([answer, *action_intro_lines(pending.case, left)])
+
     return DebugResult(
-        answer=answer,
+        answer=body,
         case=pending.case,
         ark_session_id=pending.ark_session_id,
         gate_id=gate_id,

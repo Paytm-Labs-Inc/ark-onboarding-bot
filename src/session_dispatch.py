@@ -98,13 +98,25 @@ def generate_fix_plan(
 ) -> FixPlan:
     """Draft a fix plan for human review — no auto-dispatch."""
     context = enrichment.rag_text()[:3000] + "\n" + enrichment.code_text()[:3000]
-    plan_raw = completion_json(
-        _PLANNER_PROMPT.format(
-            scout=report.to_context_blob()[:8000],
-            context=context,
-            verdict=json.dumps(verdict.to_dict()),
+    try:
+        plan_raw = completion_json(
+            _PLANNER_PROMPT.format(
+                scout=report.to_context_blob()[:8000],
+                context=context,
+                verdict=json.dumps(verdict.to_dict()),
+            )
         )
-    )
+    except Exception as exc:  # noqa: BLE001 — planner failure must not hide diagnosis
+        return FixPlan(
+            summary=str(verdict.summary or "Fix plan"),
+            root_cause=str(verdict.root_cause or report.error or "unknown"),
+            proposed_fix=str(
+                verdict.proposed_fix
+                or f"Review the failure manually. (Planner unavailable: {exc})"
+            ),
+            target_files=[],
+            test_plan="Re-run the failing verify action after the fix.",
+        )
     target_files = plan_raw.get("target_files") or []
     if not isinstance(target_files, list):
         target_files = [str(target_files)]

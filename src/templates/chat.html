@@ -378,14 +378,43 @@
       if (!meta || !meta.case) return "Session debug";
       if (meta.case === "already_fixed") return "Already fixed";
       if (meta.case === "needs_fix") return "Needs fix";
-      return "Cannot fix";
+      if (meta.case === "cannot_fix") {
+        const reason =
+          meta.cannot_fix_reason
+          || (meta.verdict && meta.verdict.cannot_fix_reason)
+          || "unknown";
+        const byReason = {
+          infra: "Platform issue",
+          new_feature: "Out of scope",
+          permissions: "Credentials issue",
+          too_large: "Too large",
+          unknown: "Cannot fix",
+        };
+        return byReason[reason] || "Cannot fix";
+      }
+      return "Session debug";
+    }
+
+    function renderHelperActionButtons(row, actions) {
+      if (!actions || !actions.length) return;
+      for (const item of actions) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "debug-action-link gate-action";
+        btn.dataset.action = item.id;
+        btn.textContent = item.label;
+        row.appendChild(btn);
+      }
     }
 
     function renderGateControls(container, meta) {
-      if (!meta || !meta.gate_pending || !meta.gate_id) return;
+      if (!meta || !meta.gate_id) return;
+      const hasPlan = meta.gate_pending && meta.gate_kind === "fix_plan";
+      const hasHelpers = meta.gate_actions && meta.gate_actions.length;
+      if (!hasPlan && !hasHelpers) return;
       const row = document.createElement("div");
       row.className = "gate-actions";
-      if (meta.gate_kind === "fix_plan") {
+      if (hasPlan) {
         const approve = document.createElement("button");
         approve.type = "button";
         approve.className = "approve";
@@ -399,7 +428,36 @@
         row.appendChild(approve);
         row.appendChild(reject);
       }
+      renderHelperActionButtons(row, meta.gate_actions);
       container.appendChild(row);
+    }
+
+    function storeDiagnosis(turn, answer) {
+      if (turn && answer && !turn.dataset.diagnosis) {
+        turn.dataset.diagnosis = answer;
+      }
+    }
+
+    function applyDebugPayload(turn, answerBlock, payload, { append = false } = {}) {
+      const textEl = answerBlock.querySelector(".answer-text");
+      if (!textEl) return;
+      if (append && turn && turn.dataset.diagnosis) {
+        const chunk = payload.answer || "";
+        const prior = turn.dataset.artifacts || "";
+        turn.dataset.artifacts = prior ? `${prior}\n\n---\n\n${chunk}` : chunk;
+        const combined = `${turn.dataset.diagnosis}\n\n---\n\n${turn.dataset.artifacts}`;
+        textEl.innerHTML = renderAnswerText(combined);
+      } else {
+        storeDiagnosis(turn, payload.answer || "");
+        textEl.innerHTML = renderAnswerText(payload.answer || "");
+      }
+      answerBlock.querySelector(".gate-actions")?.remove();
+      renderGateControls(answerBlock, payload);
+      const badge = answerBlock.querySelector(".debug-badge");
+      if (badge && payload.case) {
+        badge.className = `debug-badge ${payload.case}`;
+        badge.textContent = debugBadgeLabel(payload);
+      }
     }
 
     async function postGateAction(kind, gateId, answerBlock) {
@@ -416,10 +474,8 @@
         }
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || "Request failed");
-        const textEl = answerBlock.querySelector(".answer-text");
-        if (textEl) textEl.innerHTML = renderAnswerText(payload.answer || "");
-        answerBlock.querySelector(".gate-actions")?.remove();
-        renderGateControls(answerBlock, payload);
+        const turn = answerBlock.closest(".turn");
+        applyDebugPayload(turn, answerBlock, payload);
         setStatus("");
       } catch (error) {
         setStatus(error.message || "Gate action failed.", true);
@@ -440,10 +496,8 @@
         }
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || "Request failed");
-        const textEl = answerBlock.querySelector(".answer-text");
-        if (textEl) textEl.innerHTML = renderAnswerText(payload.answer || "");
-        answerBlock.querySelector(".gate-actions")?.remove();
-        renderGateControls(answerBlock, payload);
+        const turn = answerBlock.closest(".turn");
+        applyDebugPayload(turn, answerBlock, payload, { append: true });
         setStatus("");
       } catch (error) {
         setStatus(error.message || "Action failed.", true);
@@ -519,6 +573,7 @@
       const turn = document.createElement("div");
       turn.className = "turn";
       if (meta && meta.gate_id) turn.dataset.gateId = meta.gate_id;
+      if (meta && meta.debug && answer) turn.dataset.diagnosis = answer;
       turn.innerHTML = `
         <div class="question">${escapeHtml(question)}</div>
         <div class="answer">
@@ -584,6 +639,7 @@
       if (meta && meta.gate_id) turn.dataset.gateId = meta.gate_id;
       if (answerEl && meta && meta.answer) {
         answerEl.innerHTML = renderAnswerText(meta.answer);
+        if (meta.debug) turn.dataset.diagnosis = meta.answer;
       }
       appendDebugChrome(answerBlock, meta);
       if (meta && meta.handoff) {

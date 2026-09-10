@@ -119,6 +119,33 @@ class SessionDebugTests(unittest.TestCase):
         self.assertIsNone(get_pending(pending.plan_id))
         client.session_lifecycle.assert_called_once()
 
+    @patch.dict(os.environ, {"ARK_DEFAULT_WORKSPACE": "ws", "ARK_DEFAULT_COMPUTE": "mac"})
+    @patch("src.session_dispatch.default_client")
+    def test_approve_plan_survives_pr_poll_failure(self, mock_client_factory: MagicMock) -> None:
+        from src.ark_client import ArkError
+
+        client = MagicMock()
+        client.session_lifecycle.return_value = {"sessionId": "s-dispatch2"}
+        mock_client_factory.return_value = client
+
+        report = ScoutReport(session_id="s-abc1234567", found=True, error="bug")
+        plan = FixPlan(summary="fix", root_cause="bug", proposed_fix="change line 1")
+        verdict = DebugVerdict(
+            case="needs_fix",
+            confidence=0.8,
+            summary="fix it",
+            root_cause="bug",
+            evidence=[],
+        )
+        pending = create_pending_plan(report, EnrichmentBundle(), verdict, plan)
+
+        with patch("src.session_debug.poll_and_create_pr", side_effect=ArkError("poll failed")):
+            result = approve_plan(pending.plan_id)
+
+        self.assertIn("approved", result.answer.lower())
+        self.assertEqual(result.dispatch_session_id, "s-dispatch2")
+        self.assertIn("poll failed", result.answer.lower())
+
     def test_reject_plan_clears_pending(self) -> None:
         report = ScoutReport(session_id="s-abc1234567", found=True, error="bug")
         plan = FixPlan(summary="fix", root_cause="bug", proposed_fix="x")

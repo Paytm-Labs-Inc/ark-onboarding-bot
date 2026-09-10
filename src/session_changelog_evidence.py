@@ -73,19 +73,21 @@ def find_strong_changelog_match(
 
     paths = _paths_from_text(error)
     root = project_path()
-    if paths and root:
+    if paths and root and needle:
         for path in paths[:5]:
             hits = _recent_commits(root, paths=[path], limit=3)
-            if not hits:
-                continue
-            hit = hits[0]
-            return ChangelogMatch(
-                ref=str(hit.get("ref") or "?"),
-                subject=str(hit.get("subject") or ""),
-                date=str(hit.get("date") or ""),
-                match_type="file_path",
-                match_detail=path,
-            )
+            for hit in hits:
+                subject = str(hit.get("subject") or "")
+                # File touch alone is not enough — subject must also mention the error.
+                if needle not in subject.lower():
+                    continue
+                return ChangelogMatch(
+                    ref=str(hit.get("ref") or "?"),
+                    subject=subject,
+                    date=str(hit.get("date") or ""),
+                    match_type="file_path",
+                    match_detail=path,
+                )
 
     return None
 

@@ -34,6 +34,22 @@ class FixPlanTests(unittest.TestCase):
         self.assertIn("workspaces/foo.yaml", plan.target_files)
         self.assertIn("Raise action timeout", plan.display_text())
 
+    @patch("src.session_dispatch.completion_json")
+    def test_generate_fix_plan_falls_back_on_planner_error(self, mock_json: MagicMock) -> None:
+        mock_json.side_effect = RuntimeError("planner down")
+        report = ScoutReport(session_id="s-abc1234567", found=True, error="timeout in verify")
+        verdict = DebugVerdict(
+            case="needs_fix",
+            confidence=0.8,
+            summary="Action timed out",
+            root_cause="verify action timed out",
+            proposed_fix="Increase the verify timeout",
+            evidence=[],
+        )
+        plan = generate_fix_plan(report, EnrichmentBundle(), verdict)
+        self.assertIn("timed out", plan.root_cause)
+        self.assertIn("Increase the verify timeout", plan.proposed_fix)
+
     def test_fix_plan_display_text(self) -> None:
         plan = FixPlan(
             summary="Fix null deref",

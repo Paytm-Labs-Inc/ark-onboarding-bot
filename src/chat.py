@@ -25,6 +25,7 @@ ANONYMOUS_USER = "anonymous"
 _DEBUG_META_KEYS = (
     "debug",
     "case",
+    "cannot_fix_reason",
     "ark_session_id",
     "gate_id",
     "gate_pending",
@@ -185,7 +186,11 @@ def enrich_citations(citations: list[str]) -> list[dict[str, str]]:
 
 
 def _debug_meta(result: dict[str, Any]) -> dict[str, Any]:
-    return {key: result[key] for key in _DEBUG_META_KEYS if key in result}
+    meta = {key: result[key] for key in _DEBUG_META_KEYS if key in result}
+    verdict = result.get("verdict")
+    if isinstance(verdict, dict) and "cannot_fix_reason" in verdict:
+        meta.setdefault("cannot_fix_reason", verdict.get("cannot_fix_reason"))
+    return meta
 
 
 def ask_in_session(
