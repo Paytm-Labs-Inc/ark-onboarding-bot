@@ -22,10 +22,19 @@ def log(results: list[str], msg: str) -> None:
     results.append(msg)
 
 
+# One stable browser identity for the whole run. Sessions are stored under the
+# caller's id, so without this every request would be issued a fresh ark_uid by
+# the middleware and the thread written by POST /api/ask would belong to a user
+# that no later request is. The restart and reset checks would then be asserting
+# against someone else's (empty) history and could never pass. Any value the
+# cookie validator accepts will do; it stands in for one browser across the run.
+SMOKE_BROWSER_ID = "smoke-session-store-0001"
+
+
 def http(method: str, path: str, body: dict | None = None) -> tuple[int, str]:
     url = BASE + path
     data = None
-    headers: dict[str, str] = {}
+    headers: dict[str, str] = {"Cookie": f"ark_uid={SMOKE_BROWSER_ID}"}
     if body is not None:
         data = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
