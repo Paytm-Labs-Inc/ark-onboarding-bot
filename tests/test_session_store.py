@@ -12,6 +12,7 @@ from src.chat import ask_in_session, list_user_sessions, load_session_payload, r
 from src.session_store import (
     DEFAULT_SESSION_MAX_TURNS,
     MemorySessionStore,
+    RedisSessionStore,
     StoredSession,
     StoredTurn,
     TITLE_MAX_LEN,
@@ -21,6 +22,11 @@ from src.session_store import (
     reset_session_store,
     title_from_question,
 )
+
+try:
+    import fakeredis
+except ImportError:
+    fakeredis = None  # type: ignore[assignment]
 
 
 class ExtractArkSessionIdTests(unittest.TestCase):
@@ -139,12 +145,12 @@ class MemorySessionStoreTests(unittest.TestCase):
         expected = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
         self.assertEqual(_parse_iso(stamp), expected)
 
-    def test_max_stored_turns_defaults_to_100(self) -> None:
+    def test_max_stored_turns_defaults_to_one_hundred(self) -> None:
         os.environ.pop("SESSION_MAX_TURNS", None)
         self.assertEqual(max_stored_turns(), DEFAULT_SESSION_MAX_TURNS)
         self.assertEqual(DEFAULT_SESSION_MAX_TURNS, 100)
 
-    def test_save_caps_turns_at_default_max(self) -> None:
+    def test_save_caps_at_default_when_over_one_hundred(self) -> None:
         os.environ.pop("SESSION_MAX_TURNS", None)
         turns = [StoredTurn(f"q{i}", f"a{i}", [], []) for i in range(101)]
         session = StoredSession(session_id="cap-1", user_id="user-a", turns=turns)
@@ -156,15 +162,39 @@ class MemorySessionStoreTests(unittest.TestCase):
         self.assertEqual(loaded.turns[0].question, "q1")
         self.assertEqual(loaded.turns[-1].question, "q100")
 
-    def test_save_keeps_all_turns_when_session_max_turns_zero(self) -> None:
-        os.environ["SESSION_MAX_TURNS"] = "0"
+    def test_archive_does_not_bump_updated_at(self) -> None:
+        import time
+
+        from src.session_store import _archive_session
+
+        old_time = "2026-01-01T10:00:00Z"
+        session = StoredSession(
+            session_id="arch-ts",
+            user_id="user-a",
+            title="Old",
+            created_at=old_time,
+            updated_at=old_time,
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        self.store._sessions[session.session_id] = session
+        self.store._user_active.setdefault("user-a", {})[session.session_id] = time.time()
+        self.store.save(_archive_session(session), touch_activity=False)
+        loaded = self.store.load("arch-ts")
+        assert loaded is not None
+        self.assertEqual(loaded.updated_at, old_time)
+        self.assertTrue(loaded.archived)
+
+    def test_save_caps_turns_when_session_max_turns_set(self) -> None:
+        os.environ["SESSION_MAX_TURNS"] = "100"
         turns = [StoredTurn(f"q{i}", f"a{i}", [], []) for i in range(101)]
         session = StoredSession(session_id="cap-2", user_id="user-a", turns=turns)
         self.store.save(session)
         loaded = self.store.load("cap-2")
         self.assertIsNotNone(loaded)
         assert loaded is not None
-        self.assertEqual(len(loaded.turns), 101)
+        self.assertEqual(len(loaded.turns), 100)
+        self.assertEqual(loaded.turns[0].question, "q1")
+        self.assertEqual(loaded.turns[-1].question, "q100")
         os.environ.pop("SESSION_MAX_TURNS", None)
 
     def test_title_truncated_at_max_len(self) -> None:
@@ -173,6 +203,85 @@ class MemorySessionStoreTests(unittest.TestCase):
         title = title_from_question(long_question.strip())
         self.assertLessEqual(len(title), TITLE_MAX_LEN)
         self.assertTrue(title.endswith("…"))
+
+
+@unittest.skipUnless(fakeredis is not None, "fakeredis not installed")
+class RedisSessionStoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        server = fakeredis.FakeStrictRedis(decode_responses=True)
+        self.store = RedisSessionStore.__new__(RedisSessionStore)
+        self.store._client = server
+        reset_session_store(self.store)
+
+    def tearDown(self) -> None:
+        reset_session_store(None)
+        os.environ.pop("SESSION_TTL_SECONDS", None)
+
+    def test_save_load_round_trip(self) -> None:
+        stored = StoredSession(
+            session_id="redis-1",
+            user_id="user-z",
+            title="Hi",
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        self.store.save(stored)
+        loaded = self.store.load("redis-1")
+        assert loaded is not None
+        self.assertEqual(loaded.title, "Hi")
+
+    def test_missing_body_purges_sidebar_index(self) -> None:
+        stored = StoredSession(
+            session_id="ghost-1",
+            user_id="user-z",
+            title="Ghost",
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        self.store.save(stored)
+        self.store._client.delete(self.store._body_key("ghost-1"))
+        self.assertIsNone(self.store.load("ghost-1"))
+        listed = self.store.list_for_user("user-z", archived=False)
+        self.assertEqual(listed, [])
+
+    def test_ttl_expires_body_and_meta_together(self) -> None:
+        os.environ["SESSION_TTL_SECONDS"] = "60"
+        stored = StoredSession(
+            session_id="ttl-1",
+            user_id="user-z",
+            title="TTL",
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        self.store.save(stored)
+        body_ttl = self.store._client.ttl(self.store._body_key("ttl-1"))
+        meta_ttl = self.store._client.ttl(self.store._meta_key("ttl-1"))
+        self.assertGreater(body_ttl, 0)
+        self.assertGreater(meta_ttl, 0)
+
+    def test_archive_moves_between_indexes(self) -> None:
+        from src.session_store import _archive_session
+
+        stored = StoredSession(
+            session_id="redis-arch",
+            user_id="user-z",
+            title="Move",
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        self.store.save(stored)
+        self.store.save(_archive_session(stored), touch_activity=False)
+        self.assertEqual(self.store.list_for_user("user-z", archived=False), [])
+        archived = self.store.list_for_user("user-z", archived=True)
+        self.assertEqual([item.session_id for item in archived], ["redis-arch"])
+
+    def test_delete_removes_all_keys(self) -> None:
+        stored = StoredSession(
+            session_id="redis-del",
+            user_id="user-z",
+            title="Bye",
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        self.store.save(stored)
+        self.store.delete("redis-del")
+        self.assertIsNone(self.store.load("redis-del"))
+        self.assertEqual(self.store.list_for_user("user-z", archived=False), [])
 
 
 class ChatPersistenceTests(unittest.TestCase):

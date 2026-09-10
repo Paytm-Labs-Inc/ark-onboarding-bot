@@ -19,17 +19,19 @@ TITLE_MAX_LEN = 64
 
 
 def max_stored_turns() -> int:
-    """0 means unlimited; unset defaults to DEFAULT_SESSION_MAX_TURNS."""
+    """Default 100 stored turns; SESSION_MAX_TURNS=0 means unlimited."""
     raw = os.environ.get("SESSION_MAX_TURNS")
     if raw is None:
         return DEFAULT_SESSION_MAX_TURNS
     raw = raw.strip()
-    if not raw or raw == "0":
+    if raw == "0":
         return 0
+    if not raw:
+        return DEFAULT_SESSION_MAX_TURNS
     try:
         return max(1, int(raw))
     except ValueError:
-        return 0
+        return DEFAULT_SESSION_MAX_TURNS
 
 
 def max_history_turns() -> int:
@@ -216,7 +218,7 @@ def _cap_turns(turns: list[StoredTurn]) -> list[StoredTurn]:
 class SessionStore(Protocol):
     def load(self, session_id: str) -> StoredSession | None: ...
 
-    def save(self, session: StoredSession) -> None: ...
+    def save(self, session: StoredSession, *, touch_activity: bool = True) -> None: ...
 
     def delete(self, session_id: str) -> None: ...
 
@@ -230,6 +232,19 @@ def _should_archive(session: StoredSession, idle_days: int) -> bool:
     if updated <= 0:
         return False
     return (time.time() - updated) >= idle_days * 86400
+
+
+def _apply_timestamps(session: StoredSession, *, touch_activity: bool) -> None:
+    if not session.created_at:
+        session.created_at = _now_iso()
+    if touch_activity:
+        session.updated_at = _now_iso()
+    elif not session.updated_at:
+        session.updated_at = _now_iso()
+    if session.archived:
+        session.archived_at = session.archived_at or _now_iso()
+    else:
+        session.archived_at = None
 
 
 def _archive_session(session: StoredSession) -> StoredSession:
@@ -247,23 +262,18 @@ class MemorySessionStore:
     def load(self, session_id: str) -> StoredSession | None:
         return self._sessions.get(session_id)
 
-    def save(self, session: StoredSession) -> None:
+    def save(self, session: StoredSession, *, touch_activity: bool = True) -> None:
         session.turns = _cap_turns(session.turns)
-        if not session.created_at:
-            session.created_at = _now_iso()
-        session.updated_at = _now_iso()
-        if session.archived:
-            session.archived_at = session.archived_at or _now_iso()
-        else:
-            session.archived_at = None
+        _apply_timestamps(session, touch_activity=touch_activity)
         self._sessions[session.session_id] = session
-        score = _parse_iso(session.updated_at) or time.time()
+        if session.archived:
+            score = _parse_iso(session.archived_at or session.updated_at) or time.time()
+        else:
+            score = _parse_iso(session.updated_at) or time.time()
         user = session.user_id
         if session.archived:
             self._user_active.setdefault(user, {}).pop(session.session_id, None)
-            self._user_archived.setdefault(user, {})[session.session_id] = (
-                _parse_iso(session.archived_at or session.updated_at) or score
-            )
+            self._user_archived.setdefault(user, {})[session.session_id] = score
         else:
             self._user_archived.setdefault(user, {}).pop(session.session_id, None)
             self._user_active.setdefault(user, {})[session.session_id] = score
@@ -287,7 +297,7 @@ class MemorySessionStore:
             session = self._sessions.get(session_id)
             if session is None or not _should_archive(session, idle_days):
                 continue
-            self.save(_archive_session(session))
+            self.save(_archive_session(session), touch_activity=False)
 
     def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
         self._apply_archive_rules(user_id)
@@ -301,6 +311,7 @@ class MemorySessionStore:
         for session_id, _score in ordered:
             session = self._sessions.get(session_id)
             if session is None:
+                index.get(user_id, {}).pop(session_id, None)
                 continue
             summaries.append(
                 SessionSummary(
@@ -336,27 +347,27 @@ class RedisSessionStore:
     def load(self, session_id: str) -> StoredSession | None:
         raw = self._client.get(self._body_key(session_id))
         if not raw:
+            self._purge_stale_index(session_id)
             return None
         return StoredSession.from_json(raw)
 
-    def save(self, session: StoredSession) -> None:
+    def _purge_stale_index(self, session_id: str) -> None:
+        """Drop sidebar index entries when the body key is missing."""
+        meta_key = self._meta_key(session_id)
+        meta = self._client.hgetall(meta_key)
+        user_id = meta.get("user_id", "")
+        self._client.delete(self._body_key(session_id), meta_key)
+        if user_id:
+            self._client.zrem(self._active_key(user_id), session_id)
+            self._client.zrem(self._archived_key(user_id), session_id)
+
+    def save(self, session: StoredSession, *, touch_activity: bool = True) -> None:
         session.turns = _cap_turns(session.turns)
-        if not session.created_at:
-            session.created_at = _now_iso()
-        session.updated_at = _now_iso()
-        if session.archived:
-            session.archived_at = session.archived_at or _now_iso()
-        else:
-            session.archived_at = None
+        _apply_timestamps(session, touch_activity=touch_activity)
 
         body_key = self._body_key(session.session_id)
+        meta_key = self._meta_key(session.session_id)
         payload = session.to_json()
-        ttl = session_ttl_seconds()
-        if ttl is not None:
-            self._client.setex(body_key, ttl, payload)
-        else:
-            self._client.set(body_key, payload)
-
         meta = {
             "user_id": session.user_id,
             "title": session.title,
@@ -367,25 +378,43 @@ class RedisSessionStore:
             "archived_at": session.archived_at or "",
             "turn_count": str(len(session.turns)),
         }
-        self._client.hset(self._meta_key(session.session_id), mapping=meta)
 
         user = session.user_id
         if session.archived:
             score = _parse_iso(session.archived_at or session.updated_at) or time.time()
-            self._client.zrem(self._active_key(user), session.session_id)
-            self._client.zadd(self._archived_key(user), {session.session_id: score})
+            active_key = self._active_key(user)
+            archived_key = self._archived_key(user)
         else:
             score = _parse_iso(session.updated_at) or time.time()
-            self._client.zrem(self._archived_key(user), session.session_id)
-            self._client.zadd(self._active_key(user), {session.session_id: score})
+            active_key = self._active_key(user)
+            archived_key = self._archived_key(user)
+
+        ttl = session_ttl_seconds()
+        pipe = self._client.pipeline(transaction=True)
+        if ttl is not None:
+            pipe.setex(body_key, ttl, payload)
+            pipe.hset(meta_key, mapping=meta)
+            pipe.expire(meta_key, ttl)
+        else:
+            pipe.set(body_key, payload)
+            pipe.hset(meta_key, mapping=meta)
+        if session.archived:
+            pipe.zrem(active_key, session.session_id)
+            pipe.zadd(archived_key, {session.session_id: score})
+        else:
+            pipe.zrem(archived_key, session.session_id)
+            pipe.zadd(active_key, {session.session_id: score})
+        pipe.execute()
 
     def delete(self, session_id: str) -> None:
         meta = self._client.hgetall(self._meta_key(session_id))
         user_id = meta.get("user_id", "")
-        self._client.delete(self._body_key(session_id), self._meta_key(session_id))
+        pipe = self._client.pipeline(transaction=True)
+        pipe.delete(self._body_key(session_id), self._meta_key(session_id))
         if user_id:
-            self._client.zrem(self._active_key(user_id), session_id)
-            self._client.zrem(self._archived_key(user_id), session_id)
+            pipe.zrem(self._active_key(user_id), session_id)
+            pipe.zrem(self._archived_key(user_id), session_id)
+        pipe.execute()
 
     def _apply_archive_rules(self, user_id: str) -> None:
         idle_days = archive_after_days()
@@ -394,7 +423,7 @@ class RedisSessionStore:
             session = self.load(session_id)
             if session is None or not _should_archive(session, idle_days):
                 continue
-            self.save(_archive_session(session))
+            self.save(_archive_session(session), touch_activity=False)
 
     def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
         self._apply_archive_rules(user_id)
@@ -406,6 +435,7 @@ class RedisSessionStore:
             if not meta:
                 session = self.load(session_id)
                 if session is None:
+                    self._client.zrem(zkey, session_id)
                     continue
                 meta = {
                     "title": session.title,

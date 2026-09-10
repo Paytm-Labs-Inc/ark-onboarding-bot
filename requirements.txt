@@ -11,3 +11,4 @@ httpx>=0.27
 # CLI + CURSOR_API_KEY is the optional ANSWER_BACKEND=cursor path.
 slack-bolt>=1.18
 redis>=5.0
+fakeredis>=2.0
