@@ -47,8 +47,9 @@ web:
     # dict, `strategy: Recreate` destroys the pod on every release, and there
     # were three releases today -- so on the default store the sidebar this
     # image ships would be emptied by its own deploy. The chart refuses
-    # redis.enabled without these two (see _helpers.tpl), because a healthy
-    # Redis nobody connects to is worse than no Redis.
+    # redis.enabled without BOTH of these (see _helpers.tpl), because a healthy
+    # Redis nobody connects to is worse than no Redis -- and because without
+    # REDIS_URL the pod goes READY and stays there while every request 500s.
     SESSION_STORE: redis
     REDIS_URL: redis://ark-onboarding-bot-redis:6379/0
 

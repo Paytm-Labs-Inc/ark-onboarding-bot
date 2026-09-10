@@ -26,7 +26,10 @@ so the wrong config cannot ship green. Returns nothing on success.
 {{- if and .Values.ingress.authGate.enabled (not .Values.ingress.authGate.signinUrl) -}}
 {{- fail "ingress.authGate.signinUrl is required when the gate is enabled, else the login redirect has nowhere to go." -}}
 {{- end -}}
-{{- if and .Values.redis.enabled (not (contains "SESSION_STORE" (toString .Values.web.env))) -}}
+{{- if and .Values.redis.enabled (not (hasKey .Values.web.env "SESSION_STORE")) -}}
 {{- fail "redis.enabled without SESSION_STORE in web.env: the pod would run a Redis it never connects to, and chats would still vanish on restart while the dashboard shows a healthy Redis. Set SESSION_STORE=redis and REDIS_URL." -}}
+{{- end -}}
+{{- if and .Values.redis.enabled (not (hasKey .Values.web.env "REDIS_URL")) -}}
+{{- fail "redis.enabled with SESSION_STORE but no REDIS_URL in web.env: build_session_store raises on the missing URL, and /ready never touches the session store -- so the pod goes READY and STAYS there while /api/sessions 500s and the ask path returns 502 'upstream unavailable', pointing whoever debugs it at the gateway instead of at this file. Set REDIS_URL." -}}
 {{- end -}}
 {{- end -}}

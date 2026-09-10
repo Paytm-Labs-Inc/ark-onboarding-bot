@@ -112,7 +112,7 @@ render "${BASE[@]}" --set redis.enabled=true --set redis.exporter.enabled=true -
 # Built from the chart, not the overlay: the overlay supplies SESSION_STORE, so
 # redis.enabled on top of it is the CORRECT pairing rather than the one the
 # guard rejects.
-render --set image.tag=90000000000113-194d2b2-arm64 --set ingress.enabled=false \
+render --set image.tag=90000000000099-0000000-arm64 --set ingress.enabled=false \
   --set externalSecret.awsSecretPath=example/path --set redis.enabled=true
 [ "$RC" -ne 0 ] && pass "redis without SESSION_STORE rejected" || fail "should reject redis.enabled with no SESSION_STORE"
 
@@ -120,15 +120,23 @@ echo "== J: the overlay actually persists chat, and the tag is well-formed =="
 # The feature this chart exists to ship is the sidebar; on the default store a
 # release empties it. Assert the deployed overlay opts out of that.
 render "${BASE[@]}"
-[ "$RC" -eq 0 ] && grep -q 'SESSION_STORE: "redis"' <<<"$OUT" && grep -q 'kind: StatefulSet' <<<"$OUT" && pass "deployed overlay persists chat threads" || fail "overlay must set SESSION_STORE=redis"
+[ "$RC" -eq 0 ] && grep -q 'SESSION_STORE: "redis"' <<<"$OUT" && grep -q 'REDIS_URL:' <<<"$OUT" && grep -q 'kind: StatefulSet' <<<"$OUT" && pass "deployed overlay persists chat threads" || fail "overlay must set SESSION_STORE=redis AND REDIS_URL"
 # Nothing rendered the tag actually committed: every case above overrides it,
 # so a fat-fingered digit or a reverted bump stayed green. The overlay comment
 # records a hard floor of ordinal 59 -- below it the pod crash-loops on first
 # sync and nothing recovers it, since there is no image-updater.
 render -f "$CHART/pai-risk-mlops-platform-values.yaml" --set web.forwardedAllowIps=10.42.0.0/16
 COMMITTED_TAG=$(grep -oE 'ark-chatbot:[^"]+' <<<"$OUT" | head -1 | cut -d: -f2)
-[[ "$COMMITTED_TAG" =~ ^9[0-9]{13}-[0-9a-f]{7,40}-arm64$ ]] && pass "committed tag is well-formed ($COMMITTED_TAG)" || fail "committed tag malformed: $COMMITTED_TAG"
-ORDINAL=$(( 10#${COMMITTED_TAG:2:12} ))
-[ "$ORDINAL" -ge 59 ] && pass "committed ordinal $ORDINAL is above the floor of 59" || fail "ordinal $ORDINAL is below the documented floor of 59"
+if [[ "$COMMITTED_TAG" =~ ^9[0-9]{13}-[0-9a-f]{7,40}-arm64$ ]]; then
+  pass "committed tag is well-formed ($COMMITTED_TAG)"
+  # Computed INSIDE the match. Unconditionally, a malformed tag makes this
+  # substring a non-number and `set -u` kills the script here -- which today
+  # only hides the summary line, because this is the last assertion in the
+  # file, and tomorrow silently skips whoever appends a case K.
+  ORDINAL=$(( 10#${COMMITTED_TAG:2:12} ))
+  [ "$ORDINAL" -ge 59 ] && pass "committed ordinal $ORDINAL is above the floor of 59" || fail "ordinal $ORDINAL is below the documented floor of 59"
+else
+  fail "committed tag malformed: $COMMITTED_TAG"
+fi
 
 echo; [ "$FAILED" -eq 0 ] && echo "All ark-onboarding-bot render assertions passed." || echo "Render assertions FAILED."; exit "$FAILED"
