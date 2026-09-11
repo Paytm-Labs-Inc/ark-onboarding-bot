@@ -1189,8 +1189,10 @@
           // Submit does not bump chatGeneration. Emptying the pane here would
           // wipe an in-flight turn, then the completion would still match and
           // persist onto a detached node — the answer never appears. Keep that
-          // turn (the server mints a new UUID for the dead id) and only bump
-          // when nothing is streaming, the same way startNewChat does.
+          // turn; the server mints a new UUID for the dead id.
+          // Do not bump: openSession captures chatGeneration before its fetch,
+          // and a bump here would discard a sidebar click that is already in
+          // flight, leaving the pane empty. sessionId is already cleared.
           if (submitBtn.disabled) {
             const live = chat.lastElementChild;
             chat.replaceChildren();
@@ -1199,7 +1201,6 @@
             }
             return;
           }
-          chatGeneration += 1;
           showEmptyState();
         }
       } catch (_err) {
