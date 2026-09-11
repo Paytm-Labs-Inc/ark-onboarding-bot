@@ -68,6 +68,26 @@ def handle_needs_fix(
     return "\n".join(lines)
 
 
+def handle_completed(report: ScoutReport) -> str:
+    stage = report.stage or "unknown"
+    lines = [
+        "This session completed successfully — there is nothing to debug.",
+        f"Final stage: {stage}",
+    ]
+    if report.session_summary:
+        lines.append(f"Task: {report.session_summary}")
+    if report.gather_errors:
+        lines.extend(
+            [
+                "",
+                "Note: some optional debug data could not be fetched "
+                "(this does not change the session outcome):",
+            ]
+        )
+        lines.extend(f"  • {err}" for err in report.gather_errors[:4])
+    return "\n".join(lines)
+
+
 def handle_cannot_fix(
     report: ScoutReport,
     verdict: DebugVerdict,

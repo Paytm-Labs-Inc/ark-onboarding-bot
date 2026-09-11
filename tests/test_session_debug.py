@@ -16,6 +16,31 @@ class SessionDebugTests(unittest.TestCase):
     @patch("src.session_debug.classify_session")
     @patch("src.session_debug.enrich_report")
     @patch("src.session_debug.gather_scout_report")
+    def test_debug_session_completed_skips_classifier(
+        self,
+        mock_gather: MagicMock,
+        mock_enrich: MagicMock,
+        mock_classify: MagicMock,
+    ) -> None:
+        mock_gather.return_value = ScoutReport(
+            session_id="s-fbtj7o5j90",
+            found=True,
+            status="completed",
+            stage="smoke",
+            session_summary="workspace test: modeltest-modeltest-ark-onboarding-bot",
+            flow_name="workspace-smoke",
+            gather_errors=["worktree_diff: Unknown method: worktree"],
+        )
+        result = debug_session("s-fbtj7o5j90")
+        self.assertEqual(result.case, "completed")
+        self.assertIn("completed successfully", result.answer.lower())
+        self.assertNotIn("not confident enough", result.answer.lower())
+        mock_enrich.assert_not_called()
+        mock_classify.assert_not_called()
+
+    @patch("src.session_debug.classify_session")
+    @patch("src.session_debug.enrich_report")
+    @patch("src.session_debug.gather_scout_report")
     def test_debug_session_already_fixed(
         self,
         mock_gather: MagicMock,
