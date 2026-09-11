@@ -6,7 +6,14 @@ import os
 import unittest
 from unittest.mock import patch
 
-from src.chat import ChatSession, ask_in_session, ask_in_session_stream, refresh_history_summary
+from src.chat import (
+    ChatSession,
+    archive_session,
+    ask_in_session,
+    ask_in_session_stream,
+    refresh_history_summary,
+    save_session,
+)
 
 
 class ChatSessionTests(unittest.TestCase):
@@ -114,6 +121,77 @@ class NonStreamHandoffTests(unittest.TestCase):
             self.assertTrue(ask_in_session(None, "q?")["handoff"])
         with patch("src.chat.ask", return_value={"answer": "Run ark host enroll.", "citations": []}):
             self.assertFalse(ask_in_session(None, "q?")["handoff"])
+
+
+class ArchiveRaceTests(unittest.TestCase):
+    """Archiving mid-stream must not be undone when the answer lands.
+
+    ask_in_session_stream loads the ChatSession before generation. archive_session
+    writes archived=True to the store while that object still has archived=False.
+    The done-event save used to persist the stale object and put the chat back
+    in Recent -- after the undo toast had already been shown.
+    """
+
+    def setUp(self) -> None:
+        from src.session_store import MemorySessionStore, reset_session_store
+
+        self.store = MemorySessionStore()
+        reset_session_store(self.store)
+
+    def tearDown(self) -> None:
+        from src.session_store import reset_session_store
+
+        reset_session_store(None)
+
+    def test_save_after_concurrent_archive_keeps_the_chat_archived(self) -> None:
+        session = ChatSession(session_id="sess-race", user_id="anonymous", title="what is ark?")
+        session.add_turn("what is ark?", "Ark is...", [], [])
+        save_session(session)
+
+        in_flight = ChatSession(
+            session_id="sess-race",
+            user_id="anonymous",
+            title="what is ark?",
+            archived=False,
+        )
+        in_flight.add_turn("what is ark?", "Ark is...", [], [])
+        in_flight.add_turn("follow up?", "More Ark.", [], [])
+
+        self.assertTrue(archive_session("sess-race"))
+        save_session(in_flight)
+
+        reloaded = self.store.load("sess-race")
+        self.assertIsNotNone(reloaded)
+        self.assertTrue(reloaded.archived)
+        self.assertIsNotNone(reloaded.archived_at)
+        self.assertEqual(len(reloaded.turns), 2)
+        self.assertEqual(reloaded.turns[-1].question, "follow up?")
+
+    def test_finishing_a_stream_does_not_unarchive_a_concurrent_archive(self) -> None:
+        with patch("src.chat.ask", return_value={"answer": "Ark is a platform.", "citations": []}):
+            first = ask_in_session(None, "what is ark?")
+        sid = first["session_id"]
+
+        def fake_stream(question, **kwargs):
+            yield {"type": "delta", "text": "More."}
+            yield {
+                "type": "done",
+                "answer": "More about Ark.",
+                "citations": [],
+                "retrieved_sources": [],
+            }
+
+        with patch("src.chat.ask_stream", side_effect=fake_stream):
+            events = ask_in_session_stream(sid, "tell me more")
+            next(events)
+            self.assertTrue(archive_session(sid))
+            list(events)
+
+        reloaded = self.store.load(sid)
+        self.assertIsNotNone(reloaded)
+        self.assertTrue(reloaded.archived)
+        self.assertEqual(reloaded.turns[-1].answer, "More about Ark.")
+
 
 if __name__ == "__main__":
     unittest.main()

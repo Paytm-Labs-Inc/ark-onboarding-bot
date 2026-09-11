@@ -860,11 +860,19 @@
       archivedSessionsEl.replaceChildren();
     }
 
-    function updateArchiveCount(count) {
+    function updateArchiveCount(count, { loadFailed = false } = {}) {
       if (archiveCountEl) {
-        archiveCountEl.textContent = count > 0 ? `(${count})` : "";
+        archiveCountEl.textContent = !loadFailed && count > 0 ? `(${count})` : "";
       }
       if (archiveEmptyHintEl) {
+        if (loadFailed) {
+          // This hint sits on the always-visible <summary>. A failed fetch
+          // is not an empty archive -- that reading lives only inside the
+          // collapsed <details> unless we write it here too.
+          archiveEmptyHintEl.textContent = "Could not load archive";
+          archiveEmptyHintEl.hidden = false;
+          return;
+        }
         archiveEmptyHintEl.textContent = count > 0 ? "" : "No archived chats";
         archiveEmptyHintEl.hidden = count > 0;
       }
@@ -980,11 +988,15 @@
             emptyLabel: archivedResp.ok ? "No archived chats" : "Could not load archive",
           },
         );
-        updateArchiveCount(archivedSessions.length);
+        if (archivedResp.ok) {
+          updateArchiveCount(archivedSessions.length);
+        } else {
+          updateArchiveCount(0, { loadFailed: true });
+        }
       } catch (_err) {
         renderSessionList(activeSessionsEl, [], { emptyLabel: "Could not load chats" });
         renderSessionList(archivedSessionsEl, [], { emptyLabel: "Could not load archive" });
-        updateArchiveCount(0);
+        updateArchiveCount(0, { loadFailed: true });
       }
     }
 

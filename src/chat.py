@@ -172,7 +172,15 @@ def get_session(session_id: str | None, user_id: str = ANONYMOUS_USER) -> tuple[
 
 def save_session(session: ChatSession) -> None:
     refresh_history_summary(session)
-    get_session_store().save(_session_to_stored(session))
+    store = get_session_store()
+    # Archive/unarchive write the store directly. An in-flight ask still holds
+    # the ChatSession loaded before that write; persisting it as-is would put
+    # an archived chat back in Recent after the undo toast had already shown.
+    existing = store.load(session.session_id)
+    if existing is not None:
+        session.archived = existing.archived
+        session.archived_at = existing.archived_at
+    store.save(_session_to_stored(session))
 
 
 def reset_session(session_id: str, user_id: str = ANONYMOUS_USER) -> bool:

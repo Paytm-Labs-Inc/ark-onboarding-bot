@@ -514,6 +514,30 @@ class SignOutClearsTheStoredChatTests(unittest.TestCase):
         self.assertIn(key, login, "login.html clears a different key than chat.html writes")
 
 
+class ArchiveHeaderShowsLoadFailureTests(unittest.TestCase):
+    """A failed archive fetch must not read as an empty archive.
+
+    The count/hint live on the always-visible <summary>. Feeding it 0 on
+    HTTP/network failure wrote "No archived chats" on the header while
+    "Could not load archive" sat inside the collapsed <details>.
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_failed_archive_fetch_updates_the_visible_hint(self) -> None:
+        chat = (self.ROOT / "src" / "templates" / "chat.html").read_text(encoding="utf-8")
+        fn_start = chat.index("function updateArchiveCount")
+        fn = chat[fn_start : fn_start + 700]
+        self.assertIn("loadFailed", fn)
+        self.assertIn("Could not load archive", fn)
+        self.assertIn("updateArchiveCount(0, { loadFailed: true })", chat)
+        self.assertNotIn(
+            "updateArchiveCount(0);",
+            chat,
+            "a bare count of 0 on failure still paints the header as empty",
+        )
+
+
 class ReadyReportsWhatItVerifiedTests(unittest.TestCase):
     """A green probe must say what it checked.
 
