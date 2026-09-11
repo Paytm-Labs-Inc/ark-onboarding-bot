@@ -113,13 +113,23 @@ echo "Layer 2 — Pi Inference answer backend"
 if [[ -z "${PI_API_KEY:-}" ]]; then
   skipped "src.ask (PI_API_KEY not set in .env)"
 else
-  ask_out=$("$PYTHON" -m src.ask "How do I enroll compute?" 2>&1) || true
-  if printf '%s' "$ask_out" | grep -qi "PI_API_KEY not set\|RuntimeError\|refuse"; then
+  ask_out=$("$PYTHON" -m src.ask "How do I enroll compute?" 2>&1) || ask_rc=$?
+  ask_rc=${ask_rc:-0}
+  if [[ "$ask_rc" -ne 0 ]]; then
+    bad "src.ask exited with status $ask_rc"
+    note "$(printf '%s' "$ask_out" | tail -3 | head -c 240)"
+  elif printf '%s' "$ask_out" | grep -qE 'Error:|PI_API_KEY not set|RuntimeError|Traceback \(most recent'; then
     bad "src.ask returned an error"
     note "$(printf '%s' "$ask_out" | tail -3 | head -c 240)"
-  elif [[ -n "$ask_out" ]]; then
+  elif printf '%s' "$ask_out" | grep -qF '--- Not in the docs ---'; then
+    bad "src.ask refused or found no grounded answer"
+    note "$(printf '%s' "$ask_out" | tail -3 | head -c 240)"
+  elif printf '%s' "$ask_out" | grep -qF '--- Answer ---'; then
     ok "src.ask returned an answer"
-    note "$(printf '%s' "$ask_out" | head -1 | head -c 120)..."
+    note "$(printf '%s' "$ask_out" | grep -v '^---' | grep -v '^$' | head -1 | head -c 120)..."
+  elif [[ -n "$ask_out" ]]; then
+    bad "src.ask returned unexpected output"
+    note "$(printf '%s' "$ask_out" | head -3 | head -c 240)"
   else
     bad "src.ask produced no output"
   fi
