@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from src.llm_json import completion_json
 from src.scout import ScoutReport
-from src.session_changelog_evidence import apply_already_fixed_gate
+from src.session_changelog_evidence import apply_already_fixed_gate, find_strong_changelog_match
 from src.session_enrichers import EnrichmentBundle
 from src.session_verdict import DebugCase, DebugVerdict
 
@@ -66,13 +66,18 @@ def _is_provisioning_failure(report: ScoutReport, lower: str) -> bool:
     return False
 
 
-def _heuristic_verdict(report: ScoutReport) -> DebugVerdict | None:
+def _heuristic_verdict(
+    report: ScoutReport,
+    enrichment: EnrichmentBundle,
+) -> DebugVerdict | None:
     """Rule-based triage when the LLM is unavailable or unnecessary."""
     err = (report.error or "").strip()
     lower = err.lower()
     if not err:
         return None
     if "cannot find module" in lower and ("ark-darwin" in lower or "/$bunfs/" in lower):
+        if find_strong_changelog_match(report, enrichment):
+            return None
         return DebugVerdict(
             case="cannot_fix",
             confidence=0.9,
@@ -103,7 +108,7 @@ def _heuristic_verdict(report: ScoutReport) -> DebugVerdict | None:
 
 
 def classify_session(report: ScoutReport, enrichment: EnrichmentBundle) -> DebugVerdict:
-    heuristic = _heuristic_verdict(report)
+    heuristic = _heuristic_verdict(report, enrichment)
     if heuristic:
         return heuristic
 

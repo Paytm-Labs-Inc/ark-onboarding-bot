@@ -165,6 +165,27 @@ def _fetch_runtime_list(
     return {}
 
 
+_SUCCESS_STATUSES = frozenset({"completed", "archived"})
+
+
+def session_succeeded(report: ScoutReport) -> bool:
+    """True when the session finished successfully and needs no failure triage."""
+    if not report.found:
+        return False
+    status = (report.status or "").strip().lower()
+    if status not in _SUCCESS_STATUSES:
+        return False
+    if (report.error or "").strip():
+        return False
+    show = report.raw_show if isinstance(report.raw_show, dict) else {}
+    stage_results = show.get("stage_results") or {}
+    if isinstance(stage_results, dict):
+        for result in stage_results.values():
+            if isinstance(result, dict) and result.get("ok") is False:
+                return False
+    return True
+
+
 def _extract_error(show: dict[str, Any]) -> tuple[str, str]:
     error = ""
     failed_stage = ""

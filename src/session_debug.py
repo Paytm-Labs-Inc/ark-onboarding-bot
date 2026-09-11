@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from src.codegraph_client import is_foundry_codebase, project_path
-from src.scout import ScoutReport, gather_scout_report
+from src.scout import ScoutReport, gather_scout_report, session_succeeded
 from src.session_classifier import DebugVerdict, classify_session
 from src.session_dispatch import generate_fix_plan
 from src.session_actions import (
@@ -19,6 +19,7 @@ from src.session_enrichers import EnrichmentBundle, enrich_report
 from src.session_handlers import (
     handle_already_fixed,
     handle_cannot_fix,
+    handle_completed,
     handle_needs_fix,
 )
 from src.session_timeline import build_timeline, prepend_timeline, timeline_to_dict
@@ -120,6 +121,15 @@ def _finish_debug_result(
     )
 
 
+def _completed_result(report: ScoutReport, *, ark_session_id: str) -> DebugResult:
+    return _finish_debug_result(
+        report,
+        answer=handle_completed(report),
+        case="completed",
+        ark_session_id=ark_session_id,
+    )
+
+
 def _needs_fix_result(
     report: ScoutReport,
     *,
@@ -163,6 +173,9 @@ def debug_session(ark_session_id: str) -> DebugResult:
             ark_session_id=ark_session_id,
             scout=_scout_dict(report),
         )
+
+    if session_succeeded(report):
+        return _completed_result(report, ark_session_id=ark_session_id)
 
     enrichment = enrich_report(report)
     verdict = classify_session(report, enrichment)
@@ -226,8 +239,15 @@ def debug_session_stream(ark_session_id: str) -> Iterator[dict[str, Any]]:
                 answer=f"Could not debug session `{ark_session_id}`: {report.error}",
                 case="cannot_fix",
                 ark_session_id=ark_session_id,
+                scout=_scout_dict(report),
             ).to_ask_dict(),
         }
+        return
+
+    if session_succeeded(report):
+        yield {"type": "progress", "step": "timeline", "message": "Building session summary…"}
+        result = _completed_result(report, ark_session_id=ark_session_id)
+        yield {"type": "done", **result.to_ask_dict()}
         return
 
     yield {"type": "progress", "step": "timeline", "message": "Building diagnosis timeline…"}

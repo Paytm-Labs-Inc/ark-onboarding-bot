@@ -7,12 +7,13 @@ from unittest.mock import patch
 
 from src.scout import ScoutReport
 from src.session_changelog_evidence import (
+    _error_needle,
     apply_already_fixed_gate,
     find_strong_changelog_match,
 )
-from src.session_classifier import DebugVerdict
 from src.session_enrichers import CHANGELOG_UNAVAILABLE, EnrichmentBundle
 from src.session_handlers import handle_already_fixed
+from src.session_verdict import DebugVerdict
 
 
 class ChangelogEvidenceTests(unittest.TestCase):
@@ -56,7 +57,7 @@ class ChangelogEvidenceTests(unittest.TestCase):
             report,
             EnrichmentBundle(changelog_note=CHANGELOG_UNAVAILABLE),
         )
-        self.assertNotEqual(gated.case, "already_fixed")
+        self.assertEqual(gated.case, "needs_fix")
         self.assertIn("Changelog evidence unavailable", gated.evidence[0])
 
     def test_no_match_downgrades_already_fixed(self) -> None:
@@ -75,15 +76,56 @@ class ChangelogEvidenceTests(unittest.TestCase):
             matching_fix_ref="abc",
         )
         gated = apply_already_fixed_gate(verdict, report, EnrichmentBundle())
-        self.assertNotEqual(gated.case, "already_fixed")
+        self.assertEqual(gated.case, "needs_fix")
         self.assertIn("No strong changelog match", gated.evidence[0])
+
+    def test_generic_needle_rejected_before_min_length(self) -> None:
+        self.assertEqual(_error_needle("Error: unknown"), "")
+        self.assertEqual(_error_needle("fatal: not found"), "")
+
+    def test_weak_needle_after_prefix_strip_rejected(self) -> None:
+        report = ScoutReport(
+            session_id="s-abc1234567",
+            found=True,
+            error="Error: failed",
+            stage="verify",
+        )
+        enrichment = EnrichmentBundle(
+            changelog_hits=[
+                {
+                    "ref": "deadbeef",
+                    "subject": "fix unrelated failed deploy",
+                    "date": "2026-01-01",
+                }
+            ]
+        )
+        self.assertIsNone(find_strong_changelog_match(report, enrichment))
+
+    def test_rejected_already_fixed_becomes_needs_fix(self) -> None:
+        report = ScoutReport(
+            session_id="s-abc1234567",
+            found=True,
+            error="some unrelated timeout",
+            stage="verify",
+        )
+        verdict = DebugVerdict(
+            case="already_fixed",
+            confidence=0.9,
+            summary="Looks fixed",
+            root_cause="timeout",
+            evidence=["llm guess"],
+            matching_fix_ref="abc",
+        )
+        gated = apply_already_fixed_gate(verdict, report, EnrichmentBundle())
+        self.assertEqual(gated.case, "needs_fix")
 
     def test_handler_leads_with_live_failure(self) -> None:
         report = ScoutReport(
             session_id="s-abc1234567",
             found=True,
             error="AssertionError in tests/test_foo.py",
-            stage="verify",
+            stage="implement",
+            failed_stage="verify",
         )
         verdict = DebugVerdict(
             case="already_fixed",
@@ -95,6 +137,7 @@ class ChangelogEvidenceTests(unittest.TestCase):
         )
         text = handle_already_fixed(report, verdict, EnrichmentBundle())
         self.assertIn("What failed (this session):", text)
+        self.assertIn("Stage: verify", text)
         self.assertIn("AssertionError", text)
         self.assertIn("still failed", text.lower())
 

@@ -86,29 +86,29 @@ ACTION_SPECS: dict[str, dict[str, Any]] = {
 _ACTION_PROMPTS = {
     "slack": """Write a Slack message for #foundry-users about a failed Ark session.
 Include session id, stage, error, summary, and what help is needed. Keep it concise and copy-paste ready.
-Respond JSON only: {{"title": "short subject line", "body": "full message text"}}""",
+Respond JSON only: {"title": "short subject line", "body": "full message text"}""",
     "rerun": """The fix may already be on main but this session still failed.
 Write step-by-step instructions to verify deployment and re-run the same Ark session safely.
-Respond JSON only: {{"title": "short heading", "body": "numbered steps"}}""",
+Respond JSON only: {"title": "short heading", "body": "numbered steps"}""",
     "explain_fix": """Explain the changelog-matched fix in plain English for a developer who hit this error.
-Respond JSON only: {{"title": "short heading", "body": "plain-English explanation"}}""",
+Respond JSON only: {"title": "short heading", "body": "plain-English explanation"}""",
     "simplify_plan": """Explain the proposed code fix plan in simple, non-jargony language for a reviewer.
-Respond JSON only: {{"title": "short heading", "body": "simple explanation"}}""",
+Respond JSON only: {"title": "short heading", "body": "simple explanation"}""",
     "test_checklist": """Create a verification checklist after the proposed fix is merged.
-Respond JSON only: {{"title": "short heading", "body": "checklist items"}}""",
+Respond JSON only: {"title": "short heading", "body": "checklist items"}""",
     "ticket": """Draft an infra/platform ticket for a failed Ark session.
 Include title, impact, reproduction steps, session id, error, and suggested owner team.
-Respond JSON only: {{"title": "ticket title", "body": "full ticket description"}}""",
+Respond JSON only: {"title": "ticket title", "body": "full ticket description"}""",
     "credentials": """Draft a credentials/permissions troubleshooting guide for this Ark session failure.
 List secrets to check, scopes needed, and where to set them in Foundry.
-Respond JSON only: {{"title": "short heading", "body": "checklist and steps"}}""",
+Respond JSON only: {"title": "short heading", "body": "checklist and steps"}""",
     "feature_request": """Draft a feature request ticket — this is out of scope for auto-fix.
 Include user goal, gap, session id, and suggested product area.
-Respond JSON only: {{"title": "ticket title", "body": "full description"}}""",
+Respond JSON only: {"title": "ticket title", "body": "full description"}""",
     "scope_breakdown": """The task was too large for one session. Break it into 3–5 smaller Ark sessions the user can run sequentially.
-Respond JSON only: {{"title": "short heading", "body": "numbered sub-tasks with dispatch prompts"}}""",
+Respond JSON only: {"title": "short heading", "body": "numbered sub-tasks with dispatch prompts"}""",
     "follow_up": """Draft a smaller follow-up session prompt the user can paste into Ark to retry with reduced scope.
-Respond JSON only: {{"title": "one-line goal", "body": "full dispatch prompt with narrowed scope"}}""",
+Respond JSON only: {"title": "one-line goal", "body": "full dispatch prompt with narrowed scope"}""",
 }
 
 

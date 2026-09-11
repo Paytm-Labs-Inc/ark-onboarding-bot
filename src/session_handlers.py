@@ -15,7 +15,7 @@ def handle_already_fixed(
     verdict: DebugVerdict,
     enrichment: EnrichmentBundle,
 ) -> str:
-    stage = report.stage or "unknown"
+    stage = report.failed_stage or report.stage or "unknown"
     error = report.error or verdict.root_cause or "unknown error"
     fix_ref = verdict.matching_fix_ref or ""
 
@@ -65,6 +65,26 @@ def handle_needs_fix(
         plan.display_text(),
     ]
     lines.extend(action_intro_lines("needs_fix", menu))
+    return "\n".join(lines)
+
+
+def handle_completed(report: ScoutReport) -> str:
+    stage = report.stage or "unknown"
+    lines = [
+        "This session completed successfully — there is nothing to debug.",
+        f"Final stage: {stage}",
+    ]
+    if report.session_summary:
+        lines.append(f"Task: {report.session_summary}")
+    if report.gather_errors:
+        lines.extend(
+            [
+                "",
+                "Note: some optional debug data could not be fetched "
+                "(this does not change the session outcome):",
+            ]
+        )
+        lines.extend(f"  • {err}" for err in report.gather_errors[:4])
     return "\n".join(lines)
 
 

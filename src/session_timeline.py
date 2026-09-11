@@ -85,6 +85,13 @@ def _as_dict_list(value: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _event_data_field(event: dict[str, Any], key: str) -> str:
+    data = event.get("data")
+    if isinstance(data, dict):
+        return str(data.get(key) or "").strip()
+    return ""
+
+
 def _event_detail(event: dict[str, Any]) -> str:
     parts: list[str] = []
     for key in ("message", "reason", "error", "detail"):
@@ -102,7 +109,7 @@ def _event_detail(event: dict[str, Any]) -> str:
 
 def _format_event(event: dict[str, Any]) -> str:
     kind = str(event.get("type") or event.get("event") or "event")
-    stage = str(event.get("stage") or event.get("data", {}).get("stage") or "").strip()
+    stage = str(event.get("stage") or _event_data_field(event, "stage") or "").strip()
     at = str(event.get("at") or event.get("timestamp") or event.get("created_at") or "").strip()
     detail = _event_detail(event)
     label = kind.replace("_", " ")

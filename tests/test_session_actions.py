@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from src.scout import ScoutReport
 from src.session_actions import (
+    _ACTION_PROMPTS,
     action_intro_lines,
     action_menu,
     create_action_gate,
@@ -95,6 +96,12 @@ class SessionActionsTests(unittest.TestCase):
         self.assertIn("scope_breakdown", ids)
         self.assertIn("follow_up_prompt", ids)
         self.assertNotIn("infra_ticket", ids)
+
+    def test_action_prompts_use_single_json_braces(self) -> None:
+        for prompt in _ACTION_PROMPTS.values():
+            self.assertNotIn("{{", prompt)
+            self.assertNotIn("}}", prompt)
+            self.assertIn('{"title":', prompt)
 
     @patch("src.session_actions.completion_json")
     def test_run_action_generates_slack_message(self, mock_json: MagicMock) -> None:
