@@ -46,12 +46,12 @@ def _error_needle(error: str) -> str:
     for prefix in ("ResolveMessage:", "Error:", "fatal:"):
         if cleaned.lower().startswith(prefix.lower()):
             cleaned = cleaned[len(prefix) :].strip()
+    lowered = cleaned.lower()
+    if lowered in _GENERIC_NEEDLES:
+        return ""
     if len(cleaned) < 12:
         return ""
-    needle = cleaned[:120].lower()
-    if needle in _GENERIC_NEEDLES:
-        return ""
-    return needle
+    return lowered[:120]
 
 
 def find_strong_changelog_match(

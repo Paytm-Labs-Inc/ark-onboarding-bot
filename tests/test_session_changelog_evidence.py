@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from src.scout import ScoutReport
 from src.session_changelog_evidence import (
+    _error_needle,
     apply_already_fixed_gate,
     find_strong_changelog_match,
 )
@@ -76,6 +77,10 @@ class ChangelogEvidenceTests(unittest.TestCase):
         gated = apply_already_fixed_gate(verdict, report, EnrichmentBundle())
         self.assertEqual(gated.case, "needs_fix")
         self.assertIn("No strong changelog match", gated.evidence[0])
+
+    def test_generic_needle_rejected_before_min_length(self) -> None:
+        self.assertEqual(_error_needle("Error: unknown"), "")
+        self.assertEqual(_error_needle("fatal: not found"), "")
 
     def test_weak_needle_after_prefix_strip_rejected(self) -> None:
         report = ScoutReport(
