@@ -18,6 +18,7 @@ from src.session_store import (
     StoredTurn,
     TITLE_MAX_LEN,
     _parse_iso,
+    REDIS_SOCKET_TIMEOUT_SECONDS,
     archive_after_days,
     extract_ark_session_id,
     max_stored_turns,
@@ -563,3 +564,54 @@ class SessionStoreHealthTests(unittest.TestCase):
         health = session_store_health()
         self.assertFalse(health["ok"])
         self.assertEqual(health["error"], "ConnectionError")
+
+
+class RedisClientHasTimeoutsTests(unittest.TestCase):
+    """An unreachable Redis must FAIL the probe, not block it.
+
+    health() exists to surface a broken store. Without socket timeouts a
+    blackholed REDIS_URL leaves ping() waiting indefinitely, which hangs /ready
+    on the shared probe limiter -- so kubelet marks the pod unready and pulls a
+    working assistant out of the load balancer. The probe would have caused the
+    outage it was written to report.
+    """
+
+    def test_the_client_is_built_with_connect_and_read_timeouts(self) -> None:
+        import redis
+
+        captured: dict[str, object] = {}
+
+        def capturing_from_url(url, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        # Patch the real constructor: __init__ calls redis.Redis.from_url, so a
+        # stand-in module has to have that exact shape and a wrong guess here
+        # would pass for the wrong reason.
+        with patch.object(redis.Redis, "from_url", staticmethod(capturing_from_url)):
+            RedisSessionStore("redis://example:6379/0")
+
+        self.assertEqual(captured.get("socket_connect_timeout"), REDIS_SOCKET_TIMEOUT_SECONDS)
+        self.assertEqual(captured.get("socket_timeout"), REDIS_SOCKET_TIMEOUT_SECONDS)
+        # A timeout that is None or absent is the bug; assert it is a real number.
+        self.assertIsInstance(REDIS_SOCKET_TIMEOUT_SECONDS, float)
+        self.assertGreater(REDIS_SOCKET_TIMEOUT_SECONDS, 0)
+
+    def test_a_timing_out_ping_reports_rather_than_propagating(self) -> None:
+        # redis-py raises TimeoutError once the socket timeout fires; health()
+        # has to turn that into ok: false like any other failure.
+        from src.chat import session_store_health
+
+        class TimingOut:
+            def ping(self):
+                raise TimeoutError("Timeout reading from socket")
+
+        store = RedisSessionStore.__new__(RedisSessionStore)
+        store._client = TimingOut()
+        reset_session_store(store)
+        try:
+            health = session_store_health()
+        finally:
+            reset_session_store(None)
+        self.assertFalse(health["ok"])
+        self.assertEqual(health["error"], "TimeoutError")

@@ -123,6 +123,10 @@ def session_ttl_seconds() -> int | None:
 
 DEFAULT_SIDEBAR_PAGE_SIZE = 50
 
+# Applied to both connect and read. See RedisSessionStore.__init__ for why a
+# missing timeout turns the readiness probe into the outage it reports on.
+REDIS_SOCKET_TIMEOUT_SECONDS = 2.0
+
 
 def sidebar_page_size() -> int:
     """How many threads one sidebar list returns.
@@ -431,7 +435,23 @@ class RedisSessionStore:
     def __init__(self, url: str) -> None:
         import redis
 
-        self._client = redis.Redis.from_url(url, decode_responses=True)
+        # Timeouts, because without them an unreachable host BLOCKS rather than
+        # failing. A blackholed REDIS_URL, dropped packets or a Service with no
+        # endpoints leaves the socket waiting indefinitely, and health() then
+        # hangs /ready on the shared probe limiter -- so kubelet readiness fails
+        # and a working assistant is pulled from the load balancer. That is the
+        # exact outcome the store probe exists to prevent, so the probe must not
+        # be the thing that causes it.
+        #
+        # Short on purpose: this is a pod-local Redis over the cluster network,
+        # where a healthy round trip is sub-millisecond. Two seconds is already
+        # far past "slow" and well inside the readiness period.
+        self._client = redis.Redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+            socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+        )
 
     def _body_key(self, session_id: str) -> str:
         return f"{SESSION_KEY_PREFIX}session:{session_id}"
