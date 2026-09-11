@@ -10,9 +10,8 @@ from src.session_changelog_evidence import (
     apply_already_fixed_gate,
     find_strong_changelog_match,
 )
-from src.session_classifier import DebugVerdict
 from src.session_enrichers import CHANGELOG_UNAVAILABLE, EnrichmentBundle
-from src.session_handlers import handle_already_fixed
+from src.session_verdict import DebugVerdict
 
 
 class ChangelogEvidenceTests(unittest.TestCase):
@@ -56,7 +55,7 @@ class ChangelogEvidenceTests(unittest.TestCase):
             report,
             EnrichmentBundle(changelog_note=CHANGELOG_UNAVAILABLE),
         )
-        self.assertNotEqual(gated.case, "already_fixed")
+        self.assertEqual(gated.case, "needs_fix")
         self.assertIn("Changelog evidence unavailable", gated.evidence[0])
 
     def test_no_match_downgrades_already_fixed(self) -> None:
@@ -75,28 +74,44 @@ class ChangelogEvidenceTests(unittest.TestCase):
             matching_fix_ref="abc",
         )
         gated = apply_already_fixed_gate(verdict, report, EnrichmentBundle())
-        self.assertNotEqual(gated.case, "already_fixed")
+        self.assertEqual(gated.case, "needs_fix")
         self.assertIn("No strong changelog match", gated.evidence[0])
 
-    def test_handler_leads_with_live_failure(self) -> None:
+    def test_weak_needle_after_prefix_strip_rejected(self) -> None:
         report = ScoutReport(
             session_id="s-abc1234567",
             found=True,
-            error="AssertionError in tests/test_foo.py",
+            error="Error: failed",
+            stage="verify",
+        )
+        enrichment = EnrichmentBundle(
+            changelog_hits=[
+                {
+                    "ref": "deadbeef",
+                    "subject": "fix unrelated failed deploy",
+                    "date": "2026-01-01",
+                }
+            ]
+        )
+        self.assertIsNone(find_strong_changelog_match(report, enrichment))
+
+    def test_rejected_already_fixed_becomes_needs_fix(self) -> None:
+        report = ScoutReport(
+            session_id="s-abc1234567",
+            found=True,
+            error="some unrelated timeout",
             stage="verify",
         )
         verdict = DebugVerdict(
             case="already_fixed",
             confidence=0.9,
-            summary="Fixed on main",
-            root_cause="bad assertion",
-            evidence=["deadbeef: fix test_foo (matched file_path: tests/test_foo.py)"],
-            matching_fix_ref="deadbeef",
+            summary="Looks fixed",
+            root_cause="timeout",
+            evidence=["llm guess"],
+            matching_fix_ref="abc",
         )
-        text = handle_already_fixed(report, verdict, EnrichmentBundle())
-        self.assertIn("What failed (this session):", text)
-        self.assertIn("AssertionError", text)
-        self.assertIn("still failed", text.lower())
+        gated = apply_already_fixed_gate(verdict, report, EnrichmentBundle())
+        self.assertEqual(gated.case, "needs_fix")
 
     @patch.dict("os.environ", {}, clear=True)
     def test_argocd_skipped_when_unconfigured(self) -> None:

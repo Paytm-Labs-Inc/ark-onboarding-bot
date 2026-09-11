@@ -38,15 +38,20 @@ def _paths_from_text(text: str) -> list[str]:
     )
 
 
+_GENERIC_NEEDLES = frozenset({"failed", "not found", "error", "unknown"})
+
+
 def _error_needle(error: str) -> str:
     cleaned = re.sub(r"\s+", " ", error.strip())
-    if len(cleaned) < 12:
-        return ""
-    # Prefer a distinctive slice — skip very generic prefixes.
     for prefix in ("ResolveMessage:", "Error:", "fatal:"):
         if cleaned.lower().startswith(prefix.lower()):
             cleaned = cleaned[len(prefix) :].strip()
-    return cleaned[:120].lower()
+    if len(cleaned) < 12:
+        return ""
+    needle = cleaned[:120].lower()
+    if needle in _GENERIC_NEEDLES:
+        return ""
+    return needle
 
 
 def find_strong_changelog_match(
@@ -102,7 +107,7 @@ def apply_already_fixed_gate(
         return verdict
 
     if enrichment.changelog_note:
-        fallback_case = "needs_fix" if verdict.proposed_fix else "cannot_fix"
+        fallback_case = "needs_fix"
         evidence = [enrichment.changelog_note, *verdict.evidence]
         return DebugVerdict(
             case=fallback_case,  # type: ignore[arg-type]
@@ -130,7 +135,7 @@ def apply_already_fixed_gate(
         )
 
     # No strong match — do not tell the user "already fixed".
-    fallback_case = "needs_fix" if verdict.proposed_fix else "cannot_fix"
+    fallback_case = "needs_fix"
     evidence = list(verdict.evidence)
     evidence.insert(
         0,
