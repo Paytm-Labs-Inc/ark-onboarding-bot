@@ -9,7 +9,7 @@ so the wrong config cannot ship green. Returns nothing on success.
 */}}
 {{- define "ark-onboarding-bot.guards" -}}
 {{- if not .Values.image.tag -}}
-{{- fail "image.tag is required: argocd-image-updater writes it into the overlay after the first ECR publish. A chart with no tag would deploy nothing anyone chose." -}}
+{{- fail "image.tag is required, and on this cluster it is HAND-MAINTAINED: argocd-image-updater is deliberately not wired here (it needs a per-repository write credential this cluster does not have), so a release bumps the tag in the overlay by PR. A chart with no tag would deploy nothing anyone chose." -}}
 {{- end -}}
 {{- if and .Values.ingress.enabled (not .Values.web.forwardedAllowIps) -}}
 {{- fail "web.forwardedAllowIps is required when ingress.enabled: set it to the nginx-ingress controller CIDR. Without it the rate limit is per-ingress and the login cookie loses Secure behind TLS termination." -}}
