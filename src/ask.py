@@ -13,9 +13,11 @@ from collections.abc import Iterator
 from typing import IO, Any
 
 from src.answer import REFUSAL_PHRASE, answer, is_non_answer, stream_answer
+from src.intent_router import resolve_intent
 from src.query_log import log_query
 from src.retrieve import RetrievalResult, retrieve_scored
 from src.scope_router import named_team_missing_from_chunks, refusal_result, should_refuse
+from src.session_debug import debug_session, debug_session_stream
 
 try:
     from src.retriever import DEFAULT_TOP_K
@@ -246,6 +248,18 @@ def _result_from_retrieval(
     return result
 
 
+def _debug_target_session_id(
+    question: str,
+    *,
+    debug_thread: bool,
+    linked_ark_session_id: str | None,
+) -> str | None:
+    intent, ark_session_id = resolve_intent(question, debug_thread=debug_thread)
+    if intent != "session_debug":
+        return None
+    return ark_session_id or linked_ark_session_id
+
+
 def ask_stream(
     question: str,
     *,
@@ -254,6 +268,8 @@ def ask_stream(
     channel: str = "cli",
     session_id: str | None = None,
     log: bool = True,
+    debug_thread: bool = False,
+    linked_ark_session_id: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Retrieve relevant chunks, then stream a grounded answer."""
     started = time.perf_counter()
@@ -280,6 +296,29 @@ def ask_stream(
                 duration_ms=_elapsed_ms(started), request_id=request_id,
             )
         yield done
+        return
+
+    debug_target = _debug_target_session_id(
+        question,
+        debug_thread=debug_thread,
+        linked_ark_session_id=linked_ark_session_id,
+    )
+    if debug_target:
+        for event in debug_session_stream(debug_target):
+            if event.get("type") == "done":
+                done = {**event, "stream_mode": "none"}
+                if log:
+                    _log_ask_result(
+                        question,
+                        done,
+                        channel=channel,
+                        session_id=session_id,
+                        duration_ms=_elapsed_ms(started),
+                        request_id=request_id,
+                    )
+                yield done
+            else:
+                yield event
         return
 
     top_k = _default_top_k() if k is None else k
@@ -350,6 +389,8 @@ def ask(
     channel: str = "cli",
     session_id: str | None = None,
     log: bool = True,
+    debug_thread: bool = False,
+    linked_ark_session_id: str | None = None,
 ) -> dict[str, Any]:
     """Retrieve relevant chunks, then generate a grounded answer."""
     started = time.perf_counter()
@@ -370,6 +411,24 @@ def ask(
             _log_ask_result(
                 question, result, channel=channel, session_id=session_id,
                 duration_ms=_elapsed_ms(started), request_id=request_id,
+            )
+        return result
+
+    debug_target = _debug_target_session_id(
+        question,
+        debug_thread=debug_thread,
+        linked_ark_session_id=linked_ark_session_id,
+    )
+    if debug_target:
+        result = debug_session(debug_target).to_ask_dict()
+        if log:
+            _log_ask_result(
+                question,
+                result,
+                channel=channel,
+                session_id=session_id,
+                duration_ms=_elapsed_ms(started),
+                request_id=request_id,
             )
         return result
 
@@ -416,6 +475,10 @@ def run_question(
     question = question.strip()
     if not question:
         return ask("", channel=channel, session_id=session_id)
+
+    intent, ark_session_id = resolve_intent(question)
+    if intent == "session_debug" and ark_session_id:
+        return ask(question, history=history, channel=channel, session_id=session_id)
 
     if should_refuse(question):
         result = refusal_result()

@@ -348,6 +348,26 @@
     }
     .status.error { color: var(--ark-danger); }
 
+    .debug-badge {
+      display: inline-block; font-size: var(--ark-text-xs); font-weight: 600;
+      letter-spacing: var(--ark-tracking-caps); text-transform: uppercase;
+      padding: var(--ark-space-1) var(--ark-space-2); border-radius: var(--ark-radius-sm);
+      margin-bottom: var(--ark-space-2);
+    }
+    .debug-badge.completed { background: rgba(34, 197, 94, 0.15); color: var(--ark-success); }
+    .debug-badge.already_fixed { background: rgba(34, 197, 94, 0.15); color: var(--ark-success); }
+    .debug-badge.needs_fix { background: rgba(167, 148, 234, 0.2); color: var(--ark-violet-400); }
+    .debug-badge.cannot_fix { background: rgba(239, 68, 68, 0.12); color: var(--ark-danger); }
+    .gate-actions { display: flex; gap: var(--ark-space-2); margin-top: var(--ark-space-3); flex-wrap: wrap; }
+    .debug-action-link {
+      color: var(--ark-violet-400); cursor: pointer; text-decoration: underline;
+      background: none; border: none; padding: 0; font: inherit;
+    }
+    .debug-action-link:disabled {
+      opacity: .5; cursor: not-allowed; pointer-events: none;
+    }
+    .answer-text code { font-family: var(--ark-font-mono, monospace); font-size: 0.92em; }
+
     @media (max-width: 900px) {
       .sidebar { display: none; }
     }
@@ -397,7 +417,7 @@
     <div id="chat"></div>
 
     <form id="ask-form">
-      <textarea id="question" placeholder="Ask an onboarding question..." rows="2"></textarea>
+      <textarea id="question" placeholder="Ask an onboarding question, or paste s-... to debug a session..." rows="2"></textarea>
       <button type="submit" class="primary" id="submit-btn">Ask</button>
     </form>
     <div class="status" id="status"></div>
@@ -411,6 +431,7 @@
     // result if it changed, so abandoning a running answer cannot write the
     // turn back into a store the user just cleared.
     let chatGeneration = 0;
+    let debugActionInFlight = false;
     const chat = document.getElementById("chat");
     const form = document.getElementById("ask-form");
     const questionEl = document.getElementById("question");
@@ -426,7 +447,7 @@
     const MAX_STORED_TURNS = 30;
 
     const EMPTY_TEXT =
-      "Ask how to set up Cursor, enroll compute, fix a stuck session, and more.";
+      "Ask how to set up Cursor, enroll compute, fix a stuck session — or paste an Ark session id (s-...) to debug a failure.";
 
     function chatStorageKey() {
       const base = document.querySelector("base")?.getAttribute("href") || "/";
@@ -482,6 +503,90 @@
       writeStoredChat(stored);
     }
 
+    function updatePersistedTurn(question, answer, sources, meta, generation) {
+      if (generation !== undefined && generation !== chatGeneration) {
+        return;
+      }
+      const stored = readStoredChat();
+      if (!stored || !Array.isArray(stored.turns) || !stored.turns.length) {
+        return;
+      }
+      for (let i = stored.turns.length - 1; i >= 0; i -= 1) {
+        if (stored.turns[i].question !== question) continue;
+        const existing = stored.turns[i];
+        const priorMeta = existing.meta && typeof existing.meta === "object" ? existing.meta : {};
+        const mergedSources = (sources && sources.length)
+          ? sources
+          : (existing.sources || priorMeta.sources || []);
+        const mergedMeta = {
+          ...priorMeta,
+          ...meta,
+          sources: meta.sources || priorMeta.sources || mergedSources,
+          retrieved_sources:
+            meta.retrieved_sources || priorMeta.retrieved_sources || [],
+        };
+        stored.sessionId = meta.session_id || sessionId;
+        stored.turns[i] = { question, answer, sources: mergedSources, meta: mergedMeta };
+        writeStoredChat(stored);
+        return;
+      }
+    }
+
+    function syncComposerDisabled() {
+      submitBtn.disabled = Boolean(
+        submitBtn.dataset.askBusy || submitBtn.dataset.debugBusy
+      );
+    }
+
+    function resetComposerBusyState() {
+      debugActionInFlight = false;
+      delete submitBtn.dataset.askBusy;
+      delete submitBtn.dataset.debugBusy;
+      for (const btn of chat.querySelectorAll(".debug-action-link")) {
+        btn.disabled = false;
+      }
+      syncComposerDisabled();
+    }
+
+    function setAskBusy(busy, generation) {
+      if (busy) {
+        submitBtn.dataset.askBusy = "1";
+        syncComposerDisabled();
+        return;
+      }
+      if (generation !== undefined && generation !== chatGeneration) {
+        delete submitBtn.dataset.askBusy;
+        syncComposerDisabled();
+        return;
+      }
+      delete submitBtn.dataset.askBusy;
+      syncComposerDisabled();
+    }
+
+    function setDebugActionBusy(busy, generation) {
+      if (busy) {
+        debugActionInFlight = true;
+        for (const btn of chat.querySelectorAll(".debug-action-link")) {
+          btn.disabled = true;
+        }
+        submitBtn.dataset.debugBusy = "1";
+        syncComposerDisabled();
+        return;
+      }
+      if (generation !== undefined && generation !== chatGeneration) {
+        debugActionInFlight = false;
+        delete submitBtn.dataset.debugBusy;
+        syncComposerDisabled();
+        return;
+      }
+      debugActionInFlight = false;
+      for (const btn of chat.querySelectorAll(".debug-action-link")) {
+        btn.disabled = false;
+      }
+      delete submitBtn.dataset.debugBusy;
+      syncComposerDisabled();
+    }
+
     function setStatus(message, isError = false) {
       statusEl.textContent = message || "";
       statusEl.classList.toggle("error", isError);
@@ -515,6 +620,176 @@
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;");
     }
+
+    function formatMarkdownToHtml(text) {
+      let html = escapeHtml(text);
+      html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+      html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+      html = html.replace(/^- (.+)$/gm, "• $1");
+      return html.replace(/\n/g, "<br>");
+    }
+
+    const ACTION_MARKER = /\[\[action:([a-z0-9_]+)\|([^\]]+)\]\]/gi;
+
+    function renderAnswerText(text) {
+      const parts = [];
+      let last = 0;
+      let match;
+      ACTION_MARKER.lastIndex = 0;
+      while ((match = ACTION_MARKER.exec(text)) !== null) {
+        if (match.index > last) {
+          parts.push(formatMarkdownToHtml(text.slice(last, match.index)));
+        }
+        const id = match[1];
+        const label = match[2];
+        parts.push(
+          `<button type="button" class="debug-action-link" data-action="${escapeHtml(id)}">${escapeHtml(label)}</button>`
+        );
+        last = match.index + match[0].length;
+      }
+      if (last < text.length) {
+        parts.push(formatMarkdownToHtml(text.slice(last)));
+      }
+      return parts.join("");
+    }
+
+    function debugBadgeLabel(meta) {
+      if (!meta || !meta.case) return "Session debug";
+      if (meta.case === "completed") return "Completed";
+      if (meta.case === "already_fixed") return "Already fixed";
+      if (meta.case === "needs_fix") return "Needs fix";
+      if (meta.case === "cannot_fix") {
+        const reason =
+          meta.cannot_fix_reason
+          || (meta.verdict && meta.verdict.cannot_fix_reason)
+          || "unknown";
+        const byReason = {
+          infra: "Platform issue",
+          new_feature: "Out of scope",
+          permissions: "Credentials issue",
+          too_large: "Too large",
+          unknown: "Cannot fix",
+        };
+        return byReason[reason] || "Cannot fix";
+      }
+      return "Session debug";
+    }
+
+    function renderHelperActionButtons(row, actions) {
+      if (!actions || !actions.length) return;
+      for (const item of actions) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "debug-action-link gate-action";
+        btn.dataset.action = item.id;
+        btn.textContent = item.label;
+        row.appendChild(btn);
+      }
+    }
+
+    function renderGateControls(container, meta) {
+      if (!meta || !meta.gate_id) return;
+      const hasHelpers = meta.gate_actions && meta.gate_actions.length;
+      if (!hasHelpers) return;
+      const row = document.createElement("div");
+      row.className = "gate-actions";
+      renderHelperActionButtons(row, meta.gate_actions);
+      container.appendChild(row);
+    }
+
+    function storeDiagnosis(turn, answer) {
+      if (turn && answer && !turn.dataset.diagnosis) {
+        turn.dataset.diagnosis = answer;
+      }
+    }
+
+    function applyDebugPayload(turn, answerBlock, payload, { append = false } = {}) {
+      const textEl = answerBlock.querySelector(".answer-text");
+      if (!textEl) return;
+      if (append && turn && turn.dataset.diagnosis) {
+        const chunk = payload.answer || "";
+        const prior = turn.dataset.artifacts || "";
+        turn.dataset.artifacts = prior ? `${prior}\n\n---\n\n${chunk}` : chunk;
+        const combined = `${turn.dataset.diagnosis}\n\n---\n\n${turn.dataset.artifacts}`;
+        textEl.innerHTML = renderAnswerText(combined);
+      } else {
+        storeDiagnosis(turn, payload.answer || "");
+        textEl.innerHTML = renderAnswerText(payload.answer || "");
+      }
+      answerBlock.querySelector(".gate-actions")?.remove();
+      renderGateControls(answerBlock, payload);
+      const badge = answerBlock.querySelector(".debug-badge");
+      if (badge && payload.case) {
+        badge.className = `debug-badge ${payload.case}`;
+        badge.textContent = debugBadgeLabel(payload);
+      }
+    }
+
+    async function postDebugAction(gateId, action, answerBlock) {
+      if (debugActionInFlight || submitBtn.dataset.askBusy) return;
+      const generation = chatGeneration;
+      const turn = answerBlock.closest(".turn");
+      const question = turn?.querySelector(".question")?.textContent || "";
+      setDebugActionBusy(true);
+      setStatus("Working…");
+      try {
+        const response = await fetch("api/session-debug/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            gate_id: gateId,
+            action,
+            session_id: sessionId,
+            question,
+          }),
+        });
+        if (response.status === 401) {
+          window.location = "login";
+          return;
+        }
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || "Request failed");
+        if (generation !== chatGeneration) {
+          return;
+        }
+        applyDebugPayload(turn, answerBlock, payload, { append: true });
+        if (payload.gate_id && turn) {
+          turn.dataset.gateId = payload.gate_id;
+        }
+        const combined = turn?.dataset.diagnosis
+          ? (turn.dataset.artifacts
+            ? `${turn.dataset.diagnosis}\n\n---\n\n${turn.dataset.artifacts}`
+            : turn.dataset.diagnosis)
+          : (payload.answer || "");
+        const meta = {
+          question,
+          answer: combined,
+          session_id: sessionId,
+          debug: true,
+          case: payload.case,
+          gate_id: payload.gate_id,
+          gate_pending: payload.gate_pending,
+          gate_actions: payload.gate_actions || [],
+          cannot_fix_reason: payload.cannot_fix_reason || null,
+          verdict: payload.verdict || null,
+        };
+        updatePersistedTurn(question, combined, null, meta, generation);
+        setStatus("");
+      } catch (error) {
+        setStatus(error.message || "Action failed.", true);
+      } finally {
+        setDebugActionBusy(false, generation);
+      }
+    }
+
+    chat.addEventListener("click", (event) => {
+      const btn = event.target.closest(".debug-action-link");
+      if (!btn || btn.disabled || debugActionInFlight || submitBtn.dataset.askBusy) return;
+      const turn = btn.closest(".turn");
+      const gateId = turn?.dataset.gateId;
+      if (!gateId) return;
+      postDebugAction(gateId, btn.dataset.action, turn.querySelector(".answer"));
+    });
 
     async function sendFeedback(meta, rating, upBtn, downBtn) {
       upBtn.disabled = true;
@@ -560,20 +835,32 @@
       turn.appendChild(row);
     }
 
+    function appendDebugChrome(answerBlock, meta) {
+      if (!meta || !meta.debug) return;
+      const badge = document.createElement("div");
+      badge.className = `debug-badge ${meta.case || "cannot_fix"}`;
+      badge.textContent = debugBadgeLabel(meta);
+      answerBlock.insertBefore(badge, answerBlock.firstChild);
+      renderGateControls(answerBlock, meta);
+    }
+
     function renderCompletedTurn(question, answer, sources, meta, { scroll = true } = {}) {
       const empty = document.getElementById("empty-state");
       if (empty) empty.remove();
 
       const turn = document.createElement("div");
       turn.className = "turn";
+      if (meta && meta.gate_id) turn.dataset.gateId = meta.gate_id;
+      if (meta && meta.debug && answer) turn.dataset.diagnosis = answer;
       turn.innerHTML = `
         <div class="question">${escapeHtml(question)}</div>
         <div class="answer">
           <div class="answer-label">Answer</div>
-          <div class="answer-text">${escapeHtml(answer)}</div>
+          <div class="answer-text">${renderAnswerText(answer)}</div>
         </div>
       `;
       const answerBlock = turn.querySelector(".answer");
+      appendDebugChrome(answerBlock, meta);
       if (meta && meta.handoff) {
         answerBlock.insertAdjacentHTML("beforeend",
           '<p class="degraded-note">If this is a live issue, post in <strong>#foundry-users</strong> '
@@ -627,6 +914,12 @@
 
     function finishStreamingTurn(turn, answerEl, sources, meta) {
       const answerBlock = turn.querySelector(".answer");
+      if (meta && meta.gate_id) turn.dataset.gateId = meta.gate_id;
+      if (answerEl && meta && meta.answer) {
+        answerEl.innerHTML = renderAnswerText(meta.answer);
+        if (meta.debug) turn.dataset.diagnosis = meta.answer;
+      }
+      appendDebugChrome(answerBlock, meta);
       if (meta && meta.handoff) {
         answerBlock.insertAdjacentHTML("beforeend",
           '<p class="degraded-note">If this is a live issue, post in <strong>#foundry-users</strong> '
@@ -795,6 +1088,9 @@
     }
 
     function metaFromTurn(turn, sid) {
+      if (turn.meta && typeof turn.meta === "object") {
+        return { ...turn.meta, session_id: sid || turn.meta.session_id };
+      }
       return {
         question: turn.question,
         answer: turn.answer,
@@ -846,8 +1142,10 @@
 
     async function openSession(sid) {
       if (!sid || sid === sessionId) return;
-      setStatus("Loading chat…");
+      chatGeneration += 1;
+      resetComposerBusyState();
       const generation = chatGeneration;
+      setStatus("Loading chat…");
       try {
         const response = await fetch(`api/session/${encodeURIComponent(sid)}`);
         if (response.status === 401) {
@@ -863,14 +1161,9 @@
           return;
         }
         sessionId = payload.session_id;
-        chatGeneration += 1;
-        // Capture AFTER the bump and pass the captured value, the way
-        // bootstrapChat does. Passing `chatGeneration` itself compared the
-        // variable to itself, so the staleness guard inside could never fire.
-        const opened = chatGeneration;
         renderThreadFromPayload(payload);
         updateLinkedArkSessionDisplay(payload.linked_ark_session_id || null);
-        persistThreadFromPayload(payload, opened);
+        persistThreadFromPayload(payload, generation);
         setStatus("");
         loadSidebarLists();
       } catch (error) {
@@ -889,6 +1182,7 @@
             answer: turn.answer,
             citations: (turn.meta && turn.meta.sources) || turn.sources || [],
             retrieved_sources: (turn.meta && turn.meta.retrieved_sources) || [],
+            meta: turn.meta || null,
           })) },
           { scroll: false },
         );
@@ -954,7 +1248,7 @@
       showEmptyState();
       questionEl.value = "";
       setStatus("");
-      submitBtn.disabled = false;
+      resetComposerBusyState();
       questionEl.focus();
       loadSidebarLists();
     }
@@ -979,7 +1273,9 @@
             const raw = line.slice(6).trim();
             if (!raw) continue;
             payload = JSON.parse(raw);
-            if (payload.type === "delta" && payload.text) {
+            if (payload.type === "progress" && payload.message) {
+              setStatus(payload.message);
+            } else if (payload.type === "delta" && payload.text) {
               answerEl.textContent += payload.text;
               turn.scrollIntoView({ behavior: "smooth", block: "end" });
             } else if (payload.type === "error") {
@@ -1004,7 +1300,7 @@
         return;
       }
 
-      submitBtn.disabled = true;
+      setAskBusy(true);
       setStatus("Thinking…");
       const generation = chatGeneration;
 
@@ -1048,9 +1344,17 @@
           session_id: payload.session_id,
           degraded: payload.degraded || null,
           handoff: Boolean(payload.handoff),
+          debug: Boolean(payload.debug),
+          case: payload.case || null,
+          gate_id: payload.gate_id || null,
+          gate_pending: Boolean(payload.gate_pending),
+          gate_kind: payload.gate_kind || null,
+          gate_actions: payload.gate_actions || [],
+          cannot_fix_reason: payload.cannot_fix_reason || null,
+          verdict: payload.verdict || null,
         };
         if (payload.answer && answerEl.textContent !== payload.answer) {
-          answerEl.textContent = payload.answer;
+          answerEl.innerHTML = renderAnswerText(payload.answer);
         }
         finishStreamingTurn(liveTurn, answerEl, payload.sources, meta);
         persistCompletedTurn(question, payload.answer, payload.sources, meta);
@@ -1064,7 +1368,7 @@
         if (liveTurn) liveTurn.remove();
         setStatus(error.message || "Something went wrong.", true);
       } finally {
-        submitBtn.disabled = false;
+        setAskBusy(false, generation);
         questionEl.focus();
       }
     });

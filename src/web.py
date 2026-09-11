@@ -31,12 +31,15 @@ from src.auth import (
     token_valid,
 )
 from src.chat import (
+    append_debug_artifact_to_session,
     ask_in_session,
     ask_in_session_stream,
+    enrich_citations,
     list_user_sessions,
     load_session_payload,
     reset_session,
 )
+from src.session_debug import run_debug_action
 from src.feedback import append_feedback, read_feedback
 from src.warmup import check_retrieval_ready, warm_services
 
@@ -290,6 +293,13 @@ class ResetRequest(BaseModel):
     session_id: str
 
 
+class DebugActionRequest(BaseModel):
+    gate_id: str = Field(min_length=1, max_length=64)
+    action: str = Field(min_length=1, max_length=64)
+    session_id: Optional[str] = None
+    question: Optional[str] = Field(default=None, max_length=2000)
+
+
 class FeedbackRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     answer: str = Field(max_length=8000)
@@ -495,46 +505,12 @@ def api_ask_stream(
 
 @app.get("/api/sessions")
 def api_list_sessions(request: Request, archived: bool = False) -> dict[str, object]:
-    # Scoped by current_user_id(), which prefers the SSO identity and falls back
-    # to the per-browser cookie from #98. Until the oauth2-proxy gate is flipped
-    # that means "private per browser", not "private per person".
-    #
-    # Shipping on the cookie is a deliberate product call, not an oversight. The
-    # WRITE path already keys on exactly this id -- /api/ask, /api/ask/stream and
-    # /api/reset all call current_user_id() -- so threads are already stored per
-    # browser today. The earlier gate refused only to LIST them, which hid the
-    # feature without changing what was stored or who could reach it.
-    #
-    # The case that gate named cannot arise: current_user_id() raises rather than
-    # returning a shared "anonymous" bucket, so there is no pile of everyone's
-    # chats behind one id.
-    #
-    # Residual risk, accepted knowingly: two people sharing one browser, where
-    # the first does not sign out. #90 clears the cached chat on sign-out.
-    #
-    # sso_identity() wins the moment the ingress gate is on, so NEW threads key
-    # to the person with no code change here. Existing ones do NOT re-key: the
-    # stored user_id keeps the browser id forever. Verified against the running
-    # app -- same browser, same cookie, then send the SSO header, and this
-    # endpoint returns [] while the thread that listed a second earlier 404s.
-    # (An earlier version of this comment claimed the opposite. It was wrong.)
-    #
-    # So the cutover day empties every sidebar unless it carries a backfill
-    # keyed on the old cookie. That is a decision for the SSO rollout with
-    # Bhurva, not something to slip in here: adoption would let anyone holding
-    # a browser id bind those threads to their own account, which is the same
-    # capability the id already grants but a different and more durable claim.
-    # test_the_sso_cutover_does_not_re_key_existing_threads pins today's
-    # behaviour so the choice is made deliberately rather than discovered.
     user_id = current_user_id(request)
     return {"sessions": list_user_sessions(user_id, archived=archived)}
 
 
 @app.get("/api/session/{session_id}")
 def api_get_session(request: Request, session_id: str) -> dict[str, object]:
-    # Same scoping as /api/sessions above. A thread belonging to another id is a
-    # 404 rather than a 403: the id is the capability, and distinguishing "not
-    # yours" from "does not exist" would confirm the thread exists.
     payload = load_session_payload(session_id, user_id=current_user_id(request))
     if payload is None:
         raise HTTPException(status_code=404, detail="Session not found.")
@@ -547,6 +523,53 @@ def api_reset(request: Request, body: ResetRequest) -> dict[str, bool]:
     if not ok:
         raise HTTPException(status_code=404, detail="Session not found.")
     return {"ok": True}
+
+
+def _session_debug_response(result) -> dict:
+    payload = result.to_ask_dict()
+    payload["sources"] = enrich_citations(payload.get("citations", []))
+    payload["handoff"] = False
+    return payload
+
+
+def _run_session_debug(handler):
+    try:
+        return _session_debug_response(handler())
+    except ValueError as exc:
+        _log_upstream_failure(exc)
+        raise HTTPException(status_code=400, detail=BAD_REQUEST_MESSAGE) from exc
+    except TimeoutError as exc:
+        _log_upstream_failure(exc)
+        raise HTTPException(status_code=504, detail=TIMEOUT_MESSAGE) from exc
+    except PiAtCapacity as exc:
+        raise HTTPException(status_code=503, detail=BUSY_MESSAGE, headers={"Retry-After": "10"}) from exc
+    except RuntimeError as exc:
+        _log_upstream_failure(exc)
+        raise HTTPException(status_code=502, detail=UNAVAILABLE_MESSAGE) from exc
+
+
+@app.post("/api/session-debug/action")
+def api_session_debug_action(
+    request: Request,
+    body: DebugActionRequest,
+    _limit: None = Depends(enforce_ask_rate_limit),
+) -> dict:
+    gate_id = body.gate_id.strip()
+    action = body.action.strip()
+    user_id = current_user_id(request)
+
+    def _handler():
+        result = run_debug_action(gate_id, action)
+        if body.session_id:
+            append_debug_artifact_to_session(
+                body.session_id.strip(),
+                artifact=str(result.answer),
+                question=body.question.strip() if body.question else None,
+                user_id=user_id,
+            )
+        return result
+
+    return _run_session_debug(_handler)
 
 
 @app.post("/api/feedback")
