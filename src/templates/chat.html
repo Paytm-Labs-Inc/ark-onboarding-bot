@@ -363,6 +363,9 @@
       color: var(--ark-violet-400); cursor: pointer; text-decoration: underline;
       background: none; border: none; padding: 0; font: inherit;
     }
+    .debug-action-link:disabled {
+      opacity: .5; cursor: not-allowed; pointer-events: none;
+    }
     .answer-text code { font-family: var(--ark-font-mono, monospace); font-size: 0.92em; }
 
     @media (max-width: 900px) {
@@ -428,6 +431,7 @@
     // result if it changed, so abandoning a running answer cannot write the
     // turn back into a store the user just cleared.
     let chatGeneration = 0;
+    let debugActionInFlight = false;
     const chat = document.getElementById("chat");
     const form = document.getElementById("ask-form");
     const questionEl = document.getElementById("question");
@@ -509,10 +513,38 @@
       }
       for (let i = stored.turns.length - 1; i >= 0; i -= 1) {
         if (stored.turns[i].question !== question) continue;
+        const existing = stored.turns[i];
+        const priorMeta = existing.meta && typeof existing.meta === "object" ? existing.meta : {};
+        const mergedSources = (sources && sources.length)
+          ? sources
+          : (existing.sources || priorMeta.sources || []);
+        const mergedMeta = {
+          ...priorMeta,
+          ...meta,
+          sources: meta.sources || priorMeta.sources || mergedSources,
+          retrieved_sources:
+            meta.retrieved_sources || priorMeta.retrieved_sources || [],
+        };
         stored.sessionId = meta.session_id || sessionId;
-        stored.turns[i] = { question, answer, sources: sources || [], meta };
+        stored.turns[i] = { question, answer, sources: mergedSources, meta: mergedMeta };
         writeStoredChat(stored);
         return;
+      }
+    }
+
+    function setDebugActionBusy(busy) {
+      debugActionInFlight = busy;
+      for (const btn of chat.querySelectorAll(".debug-action-link")) {
+        btn.disabled = busy;
+      }
+      if (busy) {
+        if (!submitBtn.disabled) {
+          submitBtn.dataset.debugBusy = "1";
+          submitBtn.disabled = true;
+        }
+      } else if (submitBtn.dataset.debugBusy) {
+        delete submitBtn.dataset.debugBusy;
+        submitBtn.disabled = false;
       }
     }
 
@@ -655,9 +687,11 @@
     }
 
     async function postDebugAction(gateId, action, answerBlock) {
+      if (debugActionInFlight) return;
       const generation = chatGeneration;
       const turn = answerBlock.closest(".turn");
       const question = turn?.querySelector(".question")?.textContent || "";
+      setDebugActionBusy(true);
       setStatus("Working…");
       try {
         const response = await fetch("api/session-debug/action", {
@@ -700,16 +734,18 @@
           cannot_fix_reason: payload.cannot_fix_reason || null,
           verdict: payload.verdict || null,
         };
-        updatePersistedTurn(question, combined, [], meta, generation);
+        updatePersistedTurn(question, combined, null, meta, generation);
         setStatus("");
       } catch (error) {
         setStatus(error.message || "Action failed.", true);
+      } finally {
+        setDebugActionBusy(false);
       }
     }
 
     chat.addEventListener("click", (event) => {
       const btn = event.target.closest(".debug-action-link");
-      if (!btn) return;
+      if (!btn || btn.disabled || debugActionInFlight) return;
       const turn = btn.closest(".turn");
       const gateId = turn?.dataset.gateId;
       if (!gateId) return;
