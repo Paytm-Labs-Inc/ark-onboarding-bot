@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from pathlib import Path
@@ -235,6 +236,110 @@ class SessionApiTests(unittest.TestCase):
         response = self.client.post("/api/reset", json={"session_id": "missing"})
         self.assertEqual(response.status_code, 404)
 
+    def test_archive_moves_session_to_archived_list(self) -> None:
+        from src.session_store import (
+            MemorySessionStore,
+            StoredSession,
+            StoredTurn,
+            reset_session_store,
+            title_from_question,
+        )
+
+        browser_id = self.client.cookies.get(auth.BROWSER_ID_COOKIE)
+        if not browser_id:
+            self.client.get("/")
+            browser_id = self.client.cookies[auth.BROWSER_ID_COOKIE]
+        store = MemorySessionStore()
+        store.save(
+            StoredSession(
+                session_id="sess-archive",
+                user_id=browser_id,
+                title=title_from_question("what is ark?"),
+                turns=[StoredTurn("what is ark?", "Ark is...", [], [])],
+            )
+        )
+        reset_session_store(store)
+
+        response = self.client.post("/api/session/sess-archive/archive")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+
+        active = self.client.get("/api/sessions?archived=false").json()["sessions"]
+        archived = self.client.get("/api/sessions?archived=true").json()["sessions"]
+        self.assertEqual([item["session_id"] for item in active], [])
+        self.assertEqual([item["session_id"] for item in archived], ["sess-archive"])
+
+    def test_unarchive_moves_session_back_to_recent(self) -> None:
+        from src.session_store import (
+            MemorySessionStore,
+            StoredSession,
+            StoredTurn,
+            reset_session_store,
+            title_from_question,
+        )
+
+        browser_id = self.client.cookies.get(auth.BROWSER_ID_COOKIE)
+        if not browser_id:
+            self.client.get("/")
+            browser_id = self.client.cookies[auth.BROWSER_ID_COOKIE]
+        store = MemorySessionStore()
+        store.save(
+            StoredSession(
+                session_id="sess-unarchive",
+                user_id=browser_id,
+                title=title_from_question("how to enroll?"),
+                turns=[StoredTurn("how to enroll?", "Run ark host enroll.", [], [])],
+                archived=True,
+                archived_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 2 * 86400)),
+            )
+        )
+        reset_session_store(store)
+
+        response = self.client.post("/api/session/sess-unarchive/unarchive")
+        self.assertEqual(response.status_code, 200)
+
+        active = self.client.get("/api/sessions?archived=false").json()["sessions"]
+        archived = self.client.get("/api/sessions?archived=true").json()["sessions"]
+        self.assertEqual([item["session_id"] for item in active], ["sess-unarchive"])
+        self.assertEqual(archived, [])
+
+    def test_archive_missing_session_404(self) -> None:
+        response = self.client.post("/api/session/missing/archive")
+        self.assertEqual(response.status_code, 404)
+
+    def test_expired_archived_session_get_404s(self) -> None:
+        from src.session_store import (
+            MemorySessionStore,
+            StoredSession,
+            StoredTurn,
+            reset_session_store,
+            title_from_question,
+        )
+
+        browser_id = self.client.cookies.get(auth.BROWSER_ID_COOKIE)
+        if not browser_id:
+            self.client.get("/")
+            browser_id = self.client.cookies[auth.BROWSER_ID_COOKIE]
+        old_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 8 * 86400))
+        store = MemorySessionStore()
+        store.save(
+            StoredSession(
+                session_id="sess-expired",
+                user_id=browser_id,
+                title=title_from_question("old thread"),
+                turns=[StoredTurn("old thread", "gone", [], [])],
+                archived=True,
+                archived_at=old_time,
+                created_at=old_time,
+                updated_at=old_time,
+            ),
+            touch_activity=False,
+        )
+        reset_session_store(store)
+
+        response = self.client.get("/api/session/sess-expired")
+        self.assertEqual(response.status_code, 404)
+
 
 class FeedbackWriteFailureTests(unittest.TestCase):
     @patch("src.web.append_feedback", side_effect=OSError("disk full"))
@@ -441,6 +546,110 @@ class SignOutClearsTheStoredChatTests(unittest.TestCase):
         key = "ark-onboarding-bot:chat:${base}"
         self.assertIn(key, chat, "chat.html no longer builds the expected key")
         self.assertIn(key, login, "login.html clears a different key than chat.html writes")
+
+
+class ArchiveHeaderShowsLoadFailureTests(unittest.TestCase):
+    """A failed archive fetch must not read as an empty archive.
+
+    The count/hint live on the always-visible <summary>. Feeding it 0 on
+    HTTP/network failure wrote "No archived chats" on the header while
+    "Could not load archive" sat inside the collapsed <details>.
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_failed_archive_fetch_updates_the_visible_hint(self) -> None:
+        chat = (self.ROOT / "src" / "templates" / "chat.html").read_text(encoding="utf-8")
+        fn_start = chat.index("function updateArchiveCount")
+        fn = chat[fn_start : fn_start + 700]
+        self.assertIn("loadFailed", fn)
+        self.assertIn("Could not load archive", fn)
+        self.assertIn("updateArchiveCount(0, { loadFailed: true })", chat)
+        self.assertNotIn(
+            "updateArchiveCount(0);",
+            chat,
+            "a bare count of 0 on failure still paints the header as empty",
+        )
+
+
+class SidebarTitleOverflowTests(unittest.TestCase):
+    """A long unbroken title must shrink inside the rail, not scroll it.
+
+    Flex items default to min-width: auto, so the row cannot shrink below its
+    text and the title ellipsis never engages. Production showed 283px of row
+    in a 255px sidebar.
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_session_row_can_shrink_below_its_text(self) -> None:
+        chat = (self.ROOT / "src" / "templates" / "chat.html").read_text(encoding="utf-8")
+        list_css = chat[chat.index(".session-list {") : chat.index(".session-item {")]
+        self.assertIn("overflow-x: hidden", list_css)
+        item_css = chat[chat.index(".session-item {") : chat.index(".session-item:hover")]
+        self.assertIn("min-width: 0", item_css)
+        li_css = chat[chat.index(".session-list li {") : chat.index(".session-archive,")]
+        self.assertIn("min-width: 0", li_css)
+        title_css = chat[chat.index(".session-title {") : chat.index(".session-meta {")]
+        self.assertIn("width: 100%", title_css)
+        self.assertIn("text-overflow: ellipsis", title_css)
+        meta_css = chat[chat.index(".session-meta {") : chat.index(".session-empty {")]
+        self.assertIn("width: 100%", meta_css)
+        self.assertIn("text-overflow: ellipsis", meta_css)
+        archive_css = chat[chat.index(".session-archive,") : chat.index(".session-archive svg,")]
+        self.assertIn("flex: none", archive_css)
+        self.assertIn("min-width: 24px", archive_css)
+
+
+class ArchiveUnarchiveControlTests(unittest.TestCase):
+    """Archived rows need a way back to Recent, not only the 5-second toast.
+
+    Opening an archived chat does not unarchive it. Without a control on the
+    row, Undo was the only restore after the toast vanished.
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_archived_list_wires_an_unarchive_control(self) -> None:
+        chat = (self.ROOT / "src" / "templates" / "chat.html").read_text(encoding="utf-8")
+        self.assertIn("showUnarchiveButton: true", chat)
+        self.assertIn("Unarchive chat:", chat)
+        self.assertIn("session-unarchive", chat)
+
+    def test_undo_toast_sits_at_the_bottom(self) -> None:
+        chat = (self.ROOT / "src" / "templates" / "chat.html").read_text(encoding="utf-8")
+        toast = chat[chat.index(".archive-toast {") : chat.index(".archive-toast.hidden")]
+        self.assertIn("bottom:", toast)
+        self.assertIn("left: 50%", toast)
+        self.assertNotIn("top: 50%", toast)
+
+
+class BootstrapClearsPurgedSessionTests(unittest.TestCase):
+    """A 404 on the stored session id must not keep that id for the next ask.
+
+    Retention deletes an archived thread inside load(), so GET /api/session
+    404s. bootstrapChat used to leave sessionId and the painted transcript;
+    the next ask sent the dead id and get_session minted a new UUID.
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_bootstrap_clears_on_session_404(self) -> None:
+        chat = (self.ROOT / "src" / "templates" / "chat.html").read_text(encoding="utf-8")
+        start = chat.index("async function bootstrapChat()")
+        bootstrap = chat[start : chat.index("async function archiveSession(")]
+        not_ok = bootstrap[bootstrap.index("response.status === 404") :]
+        self.assertIn("clearStoredChat()", not_ok)
+        self.assertIn("showEmptyState()", not_ok)
+        self.assertIn("sessionId = null", not_ok)
+        # An in-flight ask captured the old generation. Wiping without keeping
+        # the live turn dropped the streaming answer. If the ask already
+        # adopted a new id, this 404 must not undo that. Do not bump
+        # chatGeneration here: that discarded an in-flight openSession.
+        self.assertIn("sessionId !== bootstrappedId", not_ok)
+        self.assertIn("submitBtn.disabled", not_ok)
+        self.assertIn("chat.appendChild(live)", not_ok)
+        self.assertNotIn("chatGeneration += 1", not_ok)
 
 
 class ReadyReportsWhatItVerifiedTests(unittest.TestCase):
