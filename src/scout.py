@@ -13,6 +13,8 @@ _MAX_TEXT = 8000
 
 
 def _truncate(value: Any, limit: int = _MAX_TEXT) -> str:
+    if value is None:
+        return ""
     text = value if isinstance(value, str) else json.dumps(value, default=str)
     if len(text) <= limit:
         return text
