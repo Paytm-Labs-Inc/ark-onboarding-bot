@@ -555,6 +555,8 @@
         return;
       }
       if (generation !== undefined && generation !== chatGeneration) {
+        delete submitBtn.dataset.askBusy;
+        syncComposerDisabled();
         return;
       }
       delete submitBtn.dataset.askBusy;
@@ -573,6 +575,8 @@
       }
       if (generation !== undefined && generation !== chatGeneration) {
         debugActionInFlight = false;
+        delete submitBtn.dataset.debugBusy;
+        syncComposerDisabled();
         return;
       }
       debugActionInFlight = false;
@@ -1138,8 +1142,10 @@
 
     async function openSession(sid) {
       if (!sid || sid === sessionId) return;
-      setStatus("Loading chat…");
+      chatGeneration += 1;
+      resetComposerBusyState();
       const generation = chatGeneration;
+      setStatus("Loading chat…");
       try {
         const response = await fetch(`api/session/${encodeURIComponent(sid)}`);
         if (response.status === 401) {
@@ -1155,14 +1161,9 @@
           return;
         }
         sessionId = payload.session_id;
-        chatGeneration += 1;
-        // Capture AFTER the bump and pass the captured value, the way
-        // bootstrapChat does. Passing `chatGeneration` itself compared the
-        // variable to itself, so the staleness guard inside could never fire.
-        const opened = chatGeneration;
         renderThreadFromPayload(payload);
         updateLinkedArkSessionDisplay(payload.linked_ark_session_id || null);
-        persistThreadFromPayload(payload, opened);
+        persistThreadFromPayload(payload, generation);
         setStatus("");
         loadSidebarLists();
       } catch (error) {
