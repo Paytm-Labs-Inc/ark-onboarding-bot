@@ -13,16 +13,26 @@ from src.citations import parse_citation
 from src.session_store import (
     StoredSession,
     StoredTurn,
-    compile_history_summary,
     extract_ark_session_id,
     get_session_store,
-    history_summary_max_chars,
     max_history_turns,
     stored_to_payload,
     title_from_question,
 )
 
 ANONYMOUS_USER = "anonymous"
+
+_DEBUG_META_KEYS = (
+    "debug",
+    "case",
+    "cannot_fix_reason",
+    "ark_session_id",
+    "gate_id",
+    "gate_pending",
+    "gate_kind",
+    "gate_actions",
+    "fix_plan",
+)
 
 
 @dataclass
@@ -31,6 +41,8 @@ class ChatTurn:
     answer: str
     citations: list[str]
     retrieved_sources: list[str]
+    debug: bool = False
+    gate_id: str | None = None
 
 
 @dataclass
@@ -43,33 +55,13 @@ class ChatSession:
     updated_at: str = ""
     archived: bool = False
     archived_at: str | None = None
-    history_summary: str = ""
     turns: list[ChatTurn] = field(default_factory=list)
+    debug_thread: bool = False
 
     def history_for_prompt(self) -> list[dict[str, str]]:
         cap = max_history_turns()
-        if cap <= 0:
-            recent = self.turns
-        else:
-            recent = self.turns[-cap:]
-            # Length, not membership: `self.turns[0] not in recent` is a value
-            # comparison on a dataclass, so a user who repeats their opening
-            # question verbatim matches a later turn and silently loses the pin.
-            # It also deep-compares every turn in the window to ask a question
-            # the length already answers.
-            if len(self.turns) > cap:
-                recent = [self.turns[0], *recent]
-        history = [{"question": turn.question, "answer": turn.answer} for turn in recent]
-        summary = self.history_summary.strip()
-        if summary:
-            history = [
-                {
-                    "question": "(Earlier conversation summary)",
-                    "answer": summary,
-                },
-                *history,
-            ]
-        return history
+        recent = self.turns if cap <= 0 else self.turns[-cap:]
+        return [{"question": turn.question, "answer": turn.answer} for turn in recent]
 
     def add_turn(
         self,
@@ -77,6 +69,9 @@ class ChatSession:
         answer: str,
         citations: list[str],
         retrieved_sources: list[str],
+        *,
+        debug: bool = False,
+        gate_id: str | None = None,
     ) -> None:
         if not self.title:
             self.title = title_from_question(question)
@@ -89,20 +84,11 @@ class ChatSession:
                 answer=answer,
                 citations=citations,
                 retrieved_sources=retrieved_sources,
+                debug=debug,
+                gate_id=gate_id,
             )
         )
-
-
-def refresh_history_summary(session: ChatSession) -> None:
-    cap = max_history_turns()
-    if cap <= 0:
-        session.history_summary = ""
-        return
-    session.history_summary = compile_history_summary(
-        session.turns,
-        verbatim_cap=cap,
-        max_chars=history_summary_max_chars(),
-    )
+        self.debug_thread = debug or self.debug_thread
 
 
 def _turn_to_stored(turn: ChatTurn) -> StoredTurn:
@@ -133,9 +119,9 @@ def _session_from_stored(stored: StoredSession) -> ChatSession:
         updated_at=stored.updated_at,
         archived=stored.archived,
         archived_at=stored.archived_at,
-        history_summary=stored.history_summary,
     )
     session.turns = [_stored_to_turn(turn) for turn in stored.turns]
+    session.debug_thread = bool(stored.linked_ark_session_id)
     return session
 
 
@@ -149,7 +135,6 @@ def _session_to_stored(session: ChatSession) -> StoredSession:
         updated_at=session.updated_at,
         archived=session.archived,
         archived_at=session.archived_at,
-        history_summary=session.history_summary,
         turns=[_turn_to_stored(turn) for turn in session.turns],
     )
 
@@ -170,7 +155,6 @@ def get_session(session_id: str | None, user_id: str = ANONYMOUS_USER) -> tuple[
 
 
 def save_session(session: ChatSession) -> None:
-    refresh_history_summary(session)
     get_session_store().save(_session_to_stored(session))
 
 
@@ -199,6 +183,16 @@ def enrich_citations(citations: list[str]) -> list[dict[str, str]]:
     return [parse_citation(source) for source in citations]
 
 
+def _debug_meta(result: dict[str, Any]) -> dict[str, Any]:
+    meta = {key: result[key] for key in _DEBUG_META_KEYS if key in result}
+    verdict = result.get("verdict")
+    if isinstance(verdict, dict):
+        reason = verdict.get("cannot_fix_reason")
+        if reason and not meta.get("cannot_fix_reason"):
+            meta["cannot_fix_reason"] = reason
+    return meta
+
+
 def ask_in_session(
     session_id: str | None, question: str, user_id: str = ANONYMOUS_USER
 ) -> dict[str, Any]:
@@ -208,11 +202,19 @@ def ask_in_session(
         history=session.history_for_prompt(),
         channel="web",
         session_id=sid,
+        debug_thread=session.debug_thread,
     )
     answer_text = str(result.get("answer", ""))
     citations = [str(item) for item in result.get("citations", [])]
     retrieved_sources = [str(item) for item in result.get("retrieved_sources", [])]
-    session.add_turn(question, answer_text, citations, retrieved_sources)
+    session.add_turn(
+        question,
+        answer_text,
+        citations,
+        retrieved_sources,
+        debug=bool(result.get("debug")),
+        gate_id=result.get("gate_id"),
+    )
     save_session(session)
     payload: dict[str, Any] = {
         "session_id": sid,
@@ -220,8 +222,9 @@ def ask_in_session(
         "citations": citations,
         "retrieved_sources": retrieved_sources,
         "sources": enrich_citations(citations),
-        "handoff": is_non_answer(answer_text),
+        "handoff": is_non_answer(answer_text) and not result.get("debug"),
     }
+    payload.update(_debug_meta(result))
     if session.linked_ark_session_id:
         payload["linked_ark_session_id"] = session.linked_ark_session_id
     return payload
@@ -230,7 +233,7 @@ def ask_in_session(
 def ask_in_session_stream(
     session_id: str | None, question: str, user_id: str = ANONYMOUS_USER
 ) -> Iterator[dict[str, Any]]:
-    """Like ask_in_session, but yields delta events then a final done payload."""
+    """Like ask_in_session, but yields progress/delta events then a final done payload."""
     sid, session = get_session(session_id, user_id=user_id)
 
     for event in ask_stream(
@@ -238,6 +241,7 @@ def ask_in_session_stream(
         history=session.history_for_prompt(),
         channel="web",
         session_id=sid,
+        debug_thread=session.debug_thread,
     ):
         if event.get("type") == "done":
             answer_text = str(event.get("answer", ""))
@@ -245,7 +249,14 @@ def ask_in_session_stream(
             retrieved_sources = [
                 str(item) for item in event.get("retrieved_sources", [])
             ]
-            session.add_turn(question, answer_text, citations, retrieved_sources)
+            session.add_turn(
+                question,
+                answer_text,
+                citations,
+                retrieved_sources,
+                debug=bool(event.get("debug")),
+                gate_id=event.get("gate_id"),
+            )
             save_session(session)
             final: dict[str, Any] = {
                 "type": "done",
@@ -259,7 +270,8 @@ def ask_in_session_stream(
                 final["linked_ark_session_id"] = session.linked_ark_session_id
             if event.get("degraded"):
                 final["degraded"] = event["degraded"]
-            final["handoff"] = is_non_answer(answer_text)
+            final["handoff"] = is_non_answer(answer_text) and not event.get("debug")
+            final.update(_debug_meta(event))
             yield final
         else:
             yield event

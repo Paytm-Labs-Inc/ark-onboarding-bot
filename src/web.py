@@ -23,7 +23,6 @@ from src.auth import (
     BROWSER_ID_COOKIE,
     COOKIE_NAME,
     browser_identity,
-    current_identity,
     new_browser_id,
     PUBLIC_PATHS,
     auth_enabled,
@@ -33,10 +32,10 @@ from src.auth import (
 from src.chat import (
     ask_in_session,
     ask_in_session_stream,
-    list_user_sessions,
-    load_session_payload,
+    enrich_citations,
     reset_session,
 )
+from src.session_debug import run_debug_action
 from src.feedback import append_feedback, read_feedback
 from src.warmup import check_retrieval_ready, warm_services
 
@@ -46,20 +45,6 @@ LOGIN_TEMPLATE_PATH = TEMPLATE_DIR / "login.html"
 
 # 12 hours; a shared team token doesn't need long-lived sessions.
 SESSION_MAX_AGE = 12 * 60 * 60
-
-
-def current_user_id(request: Request) -> str:
-    """Storage key for this browser/user. Never the shared literal 'anonymous'."""
-    identity = current_identity(request)
-    if identity:
-        return identity
-    assigned = getattr(request.state, "browser_id", None)
-    if assigned:
-        return assigned
-    raise HTTPException(
-        status_code=500,
-        detail="Browser identity missing; issue_browser_id middleware must run first.",
-    )
 
 
 def base_path() -> str:
@@ -185,15 +170,11 @@ async def issue_browser_id(request: Request, call_next):
     session cookie's own logic rather than being hardcoded, so local http still
     works.
     """
-    assigned = None
-    if current_identity(request) is None:
-        assigned = new_browser_id()
-        request.state.browser_id = assigned
     response = await call_next(request)
-    if assigned is not None:
+    if browser_identity(request) is None:
         response.set_cookie(
             BROWSER_ID_COOKIE,
-            assigned,
+            new_browser_id(),
             max_age=60 * 60 * 24 * 365,
             httponly=True,
             samesite="lax",
@@ -288,6 +269,11 @@ class AskRequest(BaseModel):
 
 class ResetRequest(BaseModel):
     session_id: str
+
+
+class DebugActionRequest(BaseModel):
+    gate_id: str = Field(min_length=1, max_length=64)
+    action: str = Field(min_length=1, max_length=64)
 
 
 class FeedbackRequest(BaseModel):
@@ -421,17 +407,13 @@ async def ready() -> dict[str, object] | JSONResponse:
 
 
 @app.post("/api/ask")
-def api_ask(
-    request: Request,
-    body: AskRequest,
-    _limit: None = Depends(enforce_ask_rate_limit),
-) -> dict:
+def api_ask(body: AskRequest, _limit: None = Depends(enforce_ask_rate_limit)) -> dict:
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     try:
-        return ask_in_session(body.session_id, question, user_id=current_user_id(request))
+        return ask_in_session(body.session_id, question)
     except ValueError as exc:
         # Config errors surface as ValueError too (a missing key, bad
         # PI_EXTRA_PARAMS) and their text names the config; log it, say
@@ -453,11 +435,9 @@ def _sse_event(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _ask_stream_events(
-    session_id: str | None, question: str, user_id: str
-) -> Iterator[str]:
+def _ask_stream_events(session_id: str | None, question: str) -> Iterator[str]:
     try:
-        for event in ask_in_session_stream(session_id, question, user_id=user_id):
+        for event in ask_in_session_stream(session_id, question):
             yield _sse_event(event)
     except ValueError as exc:
         _log_upstream_failure(exc)
@@ -474,17 +454,14 @@ def _ask_stream_events(
 
 @app.post("/api/ask/stream")
 def api_ask_stream(
-    request: Request,
-    body: AskRequest,
-    _limit: None = Depends(enforce_ask_rate_limit),
+    body: AskRequest, _limit: None = Depends(enforce_ask_rate_limit)
 ) -> StreamingResponse:
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
-    user_id = current_user_id(request)
     return StreamingResponse(
-        _ask_stream_events(body.session_id, question, user_id),
+        _ask_stream_events(body.session_id, question),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -493,60 +470,40 @@ def api_ask_stream(
     )
 
 
-@app.get("/api/sessions")
-def api_list_sessions(request: Request, archived: bool = False) -> dict[str, object]:
-    # Scoped by current_user_id(), which prefers the SSO identity and falls back
-    # to the per-browser cookie from #98. Until the oauth2-proxy gate is flipped
-    # that means "private per browser", not "private per person".
-    #
-    # Shipping on the cookie is a deliberate product call, not an oversight. The
-    # WRITE path already keys on exactly this id -- /api/ask, /api/ask/stream and
-    # /api/reset all call current_user_id() -- so threads are already stored per
-    # browser today. The earlier gate refused only to LIST them, which hid the
-    # feature without changing what was stored or who could reach it.
-    #
-    # The case that gate named cannot arise: current_user_id() raises rather than
-    # returning a shared "anonymous" bucket, so there is no pile of everyone's
-    # chats behind one id.
-    #
-    # Residual risk, accepted knowingly: two people sharing one browser, where
-    # the first does not sign out. #90 clears the cached chat on sign-out.
-    #
-    # sso_identity() wins the moment the ingress gate is on, so NEW threads key
-    # to the person with no code change here. Existing ones do NOT re-key: the
-    # stored user_id keeps the browser id forever. Verified against the running
-    # app -- same browser, same cookie, then send the SSO header, and this
-    # endpoint returns [] while the thread that listed a second earlier 404s.
-    # (An earlier version of this comment claimed the opposite. It was wrong.)
-    #
-    # So the cutover day empties every sidebar unless it carries a backfill
-    # keyed on the old cookie. That is a decision for the SSO rollout with
-    # Bhurva, not something to slip in here: adoption would let anyone holding
-    # a browser id bind those threads to their own account, which is the same
-    # capability the id already grants but a different and more durable claim.
-    # test_the_sso_cutover_does_not_re_key_existing_threads pins today's
-    # behaviour so the choice is made deliberately rather than discovered.
-    user_id = current_user_id(request)
-    return {"sessions": list_user_sessions(user_id, archived=archived)}
+@app.post("/api/reset")
+def api_reset(body: ResetRequest) -> dict[str, bool]:
+    reset_session(body.session_id)
+    return {"ok": True}
 
 
-@app.get("/api/session/{session_id}")
-def api_get_session(request: Request, session_id: str) -> dict[str, object]:
-    # Same scoping as /api/sessions above. A thread belonging to another id is a
-    # 404 rather than a 403: the id is the capability, and distinguishing "not
-    # yours" from "does not exist" would confirm the thread exists.
-    payload = load_session_payload(session_id, user_id=current_user_id(request))
-    if payload is None:
-        raise HTTPException(status_code=404, detail="Session not found.")
+def _session_debug_response(result) -> dict:
+    payload = result.to_ask_dict()
+    payload["sources"] = enrich_citations(payload.get("citations", []))
+    payload["handoff"] = False
     return payload
 
 
-@app.post("/api/reset")
-def api_reset(request: Request, body: ResetRequest) -> dict[str, bool]:
-    ok = reset_session(body.session_id, user_id=current_user_id(request))
-    if not ok:
-        raise HTTPException(status_code=404, detail="Session not found.")
-    return {"ok": True}
+def _run_session_debug(handler):
+    try:
+        return _session_debug_response(handler())
+    except ValueError as exc:
+        _log_upstream_failure(exc)
+        raise HTTPException(status_code=400, detail=BAD_REQUEST_MESSAGE) from exc
+    except TimeoutError as exc:
+        _log_upstream_failure(exc)
+        raise HTTPException(status_code=504, detail=TIMEOUT_MESSAGE) from exc
+    except PiAtCapacity as exc:
+        raise HTTPException(status_code=503, detail=BUSY_MESSAGE, headers={"Retry-After": "10"}) from exc
+    except RuntimeError as exc:
+        _log_upstream_failure(exc)
+        raise HTTPException(status_code=502, detail=UNAVAILABLE_MESSAGE) from exc
+
+
+@app.post("/api/session-debug/action")
+def api_session_debug_action(body: DebugActionRequest) -> dict:
+    gate_id = body.gate_id.strip()
+    action = body.action.strip()
+    return _run_session_debug(lambda: run_debug_action(gate_id, action))
 
 
 @app.post("/api/feedback")
