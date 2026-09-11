@@ -6,13 +6,29 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from src.session_classifier import DebugVerdict
-from src.session_debug import debug_session
+from src.session_debug import debug_session, debug_session_stream
 from src.session_dispatch import FixPlan
 from src.scout import ScoutReport
 from src.session_enrichers import EnrichmentBundle
 
 
 class SessionDebugTests(unittest.TestCase):
+    @patch("src.session_debug.gather_scout_report")
+    def test_debug_session_stream_includes_scout_on_miss(
+        self,
+        mock_gather: MagicMock,
+    ) -> None:
+        mock_gather.return_value = ScoutReport(
+            session_id="s-missing123",
+            found=False,
+            error="Session s-missing123 not found.",
+        )
+        events = list(debug_session_stream("s-missing123"))
+        done = events[-1]
+        self.assertEqual(done["type"], "done")
+        self.assertFalse(done["scout"]["found"])
+        self.assertIn("not found", done["scout"]["error"].lower())
+
     @patch("src.session_debug.classify_session")
     @patch("src.session_debug.enrich_report")
     @patch("src.session_debug.gather_scout_report")

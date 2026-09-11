@@ -239,6 +239,7 @@ def debug_session_stream(ark_session_id: str) -> Iterator[dict[str, Any]]:
                 answer=f"Could not debug session `{ark_session_id}`: {report.error}",
                 case="cannot_fix",
                 ark_session_id=ark_session_id,
+                scout=_scout_dict(report),
             ).to_ask_dict(),
         }
         return
