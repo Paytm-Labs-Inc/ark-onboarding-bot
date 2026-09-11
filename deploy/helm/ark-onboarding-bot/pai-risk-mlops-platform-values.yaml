@@ -22,7 +22,7 @@ image:
   # first sync -- and nothing recovers it, since there is no image-updater.
   # The floor is 59, not 58: `90000000000058-47883f6-arm64` is a published image
   # that still raises SystemExit on "*".
-  tag: "90000000000113-194d2b2-arm64"   # main @ 194d2b2; bump on release
+  tag: "90000000000115-23b4f15-arm64"   # main @ 23b4f15; bump on release
 
 web:
   # Interim per platform (Bhurva, 2026-08-28): the Service is ClusterIP-only, so
