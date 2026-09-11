@@ -5,18 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
-from src.ark_client import ArkError
 from src.codegraph_client import is_foundry_codebase, project_path
 from src.scout import ScoutReport, gather_scout_report
 from src.session_classifier import DebugVerdict, classify_session
-from src.session_dispatch import (
-    create_pending_plan,
-    dispatch_fix,
-    generate_fix_plan,
-    get_pending,
-    poll_and_create_pr,
-    reject_pending,
-)
+from src.session_dispatch import generate_fix_plan
 from src.session_actions import (
     action_menu,
     create_action_gate,
@@ -42,8 +34,6 @@ class DebugResult:
     gate_pending: bool = False
     gate_kind: str | None = None
     gate_actions: list[dict[str, str]] = field(default_factory=list)
-    dispatch_session_id: str | None = None
-    pr_url: str | None = None
     verdict: dict[str, Any] | None = None
     fix_plan: dict[str, Any] | None = None
     scout: dict[str, Any] | None = None
@@ -65,8 +55,6 @@ class DebugResult:
             "gate_pending": self.gate_pending,
             "gate_kind": self.gate_kind,
             "gate_actions": self.gate_actions,
-            "dispatch_session_id": self.dispatch_session_id,
-            "pr_url": self.pr_url,
             "verdict": self.verdict,
             "fix_plan": self.fix_plan,
             "scout": self.scout,
@@ -132,6 +120,39 @@ def _finish_debug_result(
     )
 
 
+def _needs_fix_result(
+    report: ScoutReport,
+    *,
+    ark_session_id: str,
+    verdict: DebugVerdict,
+    enrichment: EnrichmentBundle,
+    sources: list[str],
+    plan,
+) -> DebugResult:
+    action_gate = create_action_gate(
+        report,
+        verdict,
+        enrichment,
+        case="needs_fix",
+        fix_plan=plan,
+    )
+    menu = action_menu("needs_fix", verdict)
+    return _finish_debug_result(
+        report,
+        answer=handle_needs_fix(report, verdict, plan),
+        case="needs_fix",
+        ark_session_id=ark_session_id,
+        verdict=verdict,
+        sources=sources,
+        gate_id=action_gate.gate_id,
+        gate_pending=bool(menu),
+        gate_kind="next_steps" if menu else None,
+        gate_actions=menu,
+        fix_plan=plan.to_dict(),
+        enrichment=enrichment,
+    )
+
+
 def debug_session(ark_session_id: str) -> DebugResult:
     """Run the full session debug pipeline for one Ark session id."""
     report = gather_scout_report(ark_session_id)
@@ -168,29 +189,13 @@ def debug_session(ark_session_id: str) -> DebugResult:
 
     if verdict.case == "needs_fix":
         plan = generate_fix_plan(report, enrichment, verdict)
-        pending = create_pending_plan(report, enrichment, verdict, plan)
-        create_action_gate(
+        return _needs_fix_result(
             report,
-            verdict,
-            enrichment,
-            case="needs_fix",
-            gate_id=pending.plan_id,
-            fix_plan=plan,
-        )
-        menu = action_menu("needs_fix", verdict)
-        return _finish_debug_result(
-            report,
-            answer=handle_needs_fix(report, verdict, plan, pending),
-            case="needs_fix",
             ark_session_id=ark_session_id,
             verdict=verdict,
-            sources=sources,
-            gate_id=pending.plan_id,
-            gate_pending=True,
-            gate_kind="fix_plan",
-            gate_actions=menu,
-            fix_plan=plan.to_dict(),
             enrichment=enrichment,
+            sources=sources,
+            plan=plan,
         )
 
     action_gate = create_action_gate(report, verdict, enrichment, case="cannot_fix")
@@ -208,91 +213,6 @@ def debug_session(ark_session_id: str) -> DebugResult:
         gate_actions=menu,
         enrichment=enrichment,
     )
-
-
-def approve_plan(plan_id: str) -> DebugResult:
-    """Run dispatch after the user approves a Case 2 fix plan."""
-    pending = get_pending(plan_id)
-    if not pending:
-        return DebugResult(
-            answer=(
-                f"No pending fix plan found for id {plan_id}. "
-                "It may have expired or already been handled."
-            ),
-            case="needs_fix",
-            gate_id=plan_id,
-        )
-
-    try:
-        dispatch = dispatch_fix(pending)
-    except ArkError as exc:
-        return DebugResult(
-            answer=f"Dispatch failed: {exc}",
-            case="needs_fix",
-            gate_id=plan_id,
-            ark_session_id=pending.ark_session_id,
-            fix_plan=pending.plan.to_dict(),
-        )
-
-    dispatch_id = str(dispatch.get("dispatch_session_id") or "")
-    try:
-        pr_info = poll_and_create_pr(dispatch_id)
-    except Exception as exc:  # noqa: BLE001 — dispatch already started; never 500 here
-        pr_info = {
-            "pr_url": None,
-            "message": (
-                f"Fix session {dispatch_id or '(unknown)'} started, but PR status "
-                f"could not be checked: {exc}"
-            ),
-        }
-    pr_url = pr_info.get("pr_url")
-
-    lines = [
-        "Fix plan approved — Ark fix session started.",
-        f"Fix session: {dispatch_id or '(unknown)'}",
-        f"Original failed session: {pending.ark_session_id}",
-    ]
-    if pr_url:
-        lines.append(f"PR: {pr_url}")
-    else:
-        lines.append(
-            str(pr_info.get("message") or "PR not ready yet — check Ark when the session completes.")
-        )
-
-    return DebugResult(
-        answer="\n".join(lines),
-        case="needs_fix",
-        ark_session_id=pending.ark_session_id,
-        dispatch_session_id=dispatch_id or None,
-        pr_url=str(pr_url) if pr_url else None,
-        verdict=pending.verdict.to_dict(),
-        fix_plan=pending.plan.to_dict(),
-    )
-
-
-def reject_plan(plan_id: str) -> DebugResult:
-    pending = get_pending(plan_id)
-    if pending:
-        reject_pending(plan_id)
-        return DebugResult(
-            answer=(
-                f"Fix plan rejected for session {pending.ark_session_id}. "
-                "No fix session was started."
-            ),
-            case="needs_fix",
-            gate_id=plan_id,
-            ark_session_id=pending.ark_session_id,
-            fix_plan=pending.plan.to_dict(),
-        )
-    return DebugResult(
-        answer=f"No pending fix plan found for id {plan_id}.",
-        gate_id=plan_id,
-    )
-
-
-# Backward-compatible aliases for existing API routes.
-approve_dispatch = approve_plan
-reject_dispatch = reject_plan
 
 
 def debug_session_stream(ark_session_id: str) -> Iterator[dict[str, Any]]:
@@ -322,29 +242,13 @@ def debug_session_stream(ark_session_id: str) -> Iterator[dict[str, Any]]:
     if verdict.case == "needs_fix":
         yield {"type": "progress", "step": "plan", "message": "Drafting fix plan…"}
         plan = generate_fix_plan(report, enrichment, verdict)
-        pending = create_pending_plan(report, enrichment, verdict, plan)
-        create_action_gate(
+        result = _needs_fix_result(
             report,
-            verdict,
-            enrichment,
-            case="needs_fix",
-            gate_id=pending.plan_id,
-            fix_plan=plan,
-        )
-        menu = action_menu("needs_fix", verdict)
-        result = _finish_debug_result(
-            report,
-            answer=handle_needs_fix(report, verdict, plan, pending),
-            case="needs_fix",
             ark_session_id=ark_session_id,
             verdict=verdict,
-            sources=sources,
-            gate_id=pending.plan_id,
-            gate_pending=True,
-            gate_kind="fix_plan",
-            gate_actions=menu,
-            fix_plan=plan.to_dict(),
             enrichment=enrichment,
+            sources=sources,
+            plan=plan,
         )
     elif verdict.case == "already_fixed":
         action_gate = create_action_gate(
@@ -393,15 +297,7 @@ def run_debug_action(gate_id: str, action: str) -> DebugResult:
         return DebugResult(answer=answer, gate_id=gate_id)
 
     left = remaining_actions(pending)
-    plan_still_pending = pending.case == "needs_fix" and get_pending(gate_id) is not None
     has_helpers = bool(left)
-    if plan_still_pending:
-        gate_kind: str | None = "fix_plan"
-    elif has_helpers:
-        gate_kind = "next_steps"
-    else:
-        gate_kind = None
-
     body = answer
     if left:
         body = "\n".join([answer, *action_intro_lines(pending.case, left)])
@@ -412,8 +308,8 @@ def run_debug_action(gate_id: str, action: str) -> DebugResult:
         cannot_fix_reason=pending.verdict.cannot_fix_reason,
         ark_session_id=pending.ark_session_id,
         gate_id=gate_id,
-        gate_pending=plan_still_pending or has_helpers,
-        gate_kind=gate_kind,
+        gate_pending=has_helpers,
+        gate_kind="next_steps" if has_helpers else None,
         gate_actions=left,
         verdict=pending.verdict.to_dict(),
         fix_plan=pending.fix_plan.to_dict() if pending.fix_plan else None,

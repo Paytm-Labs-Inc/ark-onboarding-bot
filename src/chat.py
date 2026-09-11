@@ -32,8 +32,6 @@ _DEBUG_META_KEYS = (
     "gate_kind",
     "gate_actions",
     "fix_plan",
-    "dispatch_session_id",
-    "pr_url",
 )
 
 

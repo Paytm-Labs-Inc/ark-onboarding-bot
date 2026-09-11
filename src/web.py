@@ -35,11 +35,7 @@ from src.chat import (
     enrich_citations,
     reset_session,
 )
-from src.session_debug import (
-    approve_plan,
-    reject_plan,
-    run_debug_action,
-)
+from src.session_debug import run_debug_action
 from src.feedback import append_feedback, read_feedback
 from src.warmup import check_retrieval_ready, warm_services
 
@@ -275,10 +271,6 @@ class ResetRequest(BaseModel):
     session_id: str
 
 
-class GateActionRequest(BaseModel):
-    gate_id: str = Field(min_length=1, max_length=64)
-
-
 class DebugActionRequest(BaseModel):
     gate_id: str = Field(min_length=1, max_length=64)
     action: str = Field(min_length=1, max_length=64)
@@ -505,18 +497,6 @@ def _run_session_debug(handler):
     except RuntimeError as exc:
         _log_upstream_failure(exc)
         raise HTTPException(status_code=502, detail=UNAVAILABLE_MESSAGE) from exc
-
-
-@app.post("/api/session-debug/approve")
-def api_session_debug_approve(body: GateActionRequest) -> dict:
-    gate_id = body.gate_id.strip()
-    return _run_session_debug(lambda: approve_plan(gate_id))
-
-
-@app.post("/api/session-debug/reject")
-def api_session_debug_reject(body: GateActionRequest) -> dict:
-    gate_id = body.gate_id.strip()
-    return _run_session_debug(lambda: reject_plan(gate_id))
 
 
 @app.post("/api/session-debug/action")

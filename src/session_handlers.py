@@ -6,7 +6,7 @@ from src.argocd_client import format_deployment_status
 from src.scout import ScoutReport
 from src.session_actions import action_intro_lines, action_menu
 from src.session_classifier import DebugVerdict
-from src.session_dispatch import FixPlan, PendingFixPlan
+from src.session_dispatch import FixPlan
 from src.session_enrichers import EnrichmentBundle
 
 
@@ -56,17 +56,13 @@ def handle_needs_fix(
     report: ScoutReport,
     verdict: DebugVerdict,
     plan: FixPlan,
-    pending: PendingFixPlan,
 ) -> str:
     menu = action_menu("needs_fix", verdict)
     lines = [
-        "This looks like a code bug Ask Ark can help fix.",
+        "This looks like a code bug that may need a fix.",
         "",
-        "Fix plan (review before approving):",
+        "Suggested fix plan:",
         plan.display_text(),
-        "",
-        "If this plan looks right, click Approve plan to start an Ark fix session and open a PR.",
-        "Click Reject plan to stop here — nothing runs until you approve.",
     ]
     lines.extend(action_intro_lines("needs_fix", menu))
     return "\n".join(lines)

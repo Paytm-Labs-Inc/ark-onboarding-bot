@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from src.scout import ScoutReport
 from src.session_classifier import DebugVerdict
-from src.session_dispatch import FixPlan, dispatch_fix, generate_fix_plan
+from src.session_dispatch import FixPlan, generate_fix_plan
 from src.session_enrichers import EnrichmentBundle
 
 

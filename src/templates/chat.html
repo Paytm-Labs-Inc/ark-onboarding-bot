@@ -192,7 +192,6 @@
     .debug-badge.needs_fix { background: rgba(167, 148, 234, 0.2); color: var(--ark-violet-400); }
     .debug-badge.cannot_fix { background: rgba(239, 68, 68, 0.12); color: var(--ark-danger); }
     .gate-actions { display: flex; gap: var(--ark-space-2); margin-top: var(--ark-space-3); flex-wrap: wrap; }
-    .gate-actions button.approve { background: var(--ark-violet-500); border-color: var(--ark-violet-500); color: #fff; }
     .debug-action-link {
       color: var(--ark-violet-400); cursor: pointer; text-decoration: underline;
       background: none; border: none; padding: 0; font: inherit;
@@ -409,25 +408,10 @@
 
     function renderGateControls(container, meta) {
       if (!meta || !meta.gate_id) return;
-      const hasPlan = meta.gate_pending && meta.gate_kind === "fix_plan";
       const hasHelpers = meta.gate_actions && meta.gate_actions.length;
-      if (!hasPlan && !hasHelpers) return;
+      if (!hasHelpers) return;
       const row = document.createElement("div");
       row.className = "gate-actions";
-      if (hasPlan) {
-        const approve = document.createElement("button");
-        approve.type = "button";
-        approve.className = "approve";
-        approve.textContent = "Approve plan";
-        approve.addEventListener("click", () => postGateAction("approve", meta.gate_id, container));
-        const reject = document.createElement("button");
-        reject.type = "button";
-        reject.className = "secondary";
-        reject.textContent = "Reject plan";
-        reject.addEventListener("click", () => postGateAction("reject", meta.gate_id, container));
-        row.appendChild(approve);
-        row.appendChild(reject);
-      }
       renderHelperActionButtons(row, meta.gate_actions);
       container.appendChild(row);
     }
@@ -457,28 +441,6 @@
       if (badge && payload.case) {
         badge.className = `debug-badge ${payload.case}`;
         badge.textContent = debugBadgeLabel(payload);
-      }
-    }
-
-    async function postGateAction(kind, gateId, answerBlock) {
-      setStatus(kind === "approve" ? "Starting fix session…" : "Rejecting plan…");
-      try {
-        const response = await fetch(`api/session-debug/${kind}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ gate_id: gateId }),
-        });
-        if (response.status === 401) {
-          window.location = "login";
-          return;
-        }
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.detail || "Request failed");
-        const turn = answerBlock.closest(".turn");
-        applyDebugPayload(turn, answerBlock, payload);
-        setStatus("");
-      } catch (error) {
-        setStatus(error.message || "Gate action failed.", true);
       }
     }
 
