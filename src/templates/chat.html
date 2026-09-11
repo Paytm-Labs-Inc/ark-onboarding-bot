@@ -1176,6 +1176,14 @@
           renderThreadFromPayload(payload, { scroll: false });
           updateLinkedArkSessionDisplay(payload.linked_ark_session_id || null);
           persistThreadFromPayload(payload, generation);
+        } else if (response.status === 404) {
+          // Retention deleted the archived thread. Leaving sessionId in place
+          // would paint the old transcript while the next ask mints a new UUID.
+          if (generation !== chatGeneration) return;
+          sessionId = null;
+          updateLinkedArkSessionDisplay(null);
+          clearStoredChat();
+          showEmptyState();
         }
       } catch (_err) {
         // Keep localStorage paint when the server is unreachable.

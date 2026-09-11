@@ -307,6 +307,39 @@ class SessionApiTests(unittest.TestCase):
         response = self.client.post("/api/session/missing/archive")
         self.assertEqual(response.status_code, 404)
 
+    def test_expired_archived_session_get_404s(self) -> None:
+        from src.session_store import (
+            MemorySessionStore,
+            StoredSession,
+            StoredTurn,
+            reset_session_store,
+            title_from_question,
+        )
+
+        browser_id = self.client.cookies.get(auth.BROWSER_ID_COOKIE)
+        if not browser_id:
+            self.client.get("/")
+            browser_id = self.client.cookies[auth.BROWSER_ID_COOKIE]
+        old_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 8 * 86400))
+        store = MemorySessionStore()
+        store.save(
+            StoredSession(
+                session_id="sess-expired",
+                user_id=browser_id,
+                title=title_from_question("old thread"),
+                turns=[StoredTurn("old thread", "gone", [], [])],
+                archived=True,
+                archived_at=old_time,
+                created_at=old_time,
+                updated_at=old_time,
+            ),
+            touch_activity=False,
+        )
+        reset_session_store(store)
+
+        response = self.client.get("/api/session/sess-expired")
+        self.assertEqual(response.status_code, 404)
+
 
 class FeedbackWriteFailureTests(unittest.TestCase):
     @patch("src.web.append_feedback", side_effect=OSError("disk full"))
@@ -589,6 +622,26 @@ class ArchiveUnarchiveControlTests(unittest.TestCase):
         self.assertIn("bottom:", toast)
         self.assertIn("left: 50%", toast)
         self.assertNotIn("top: 50%", toast)
+
+
+class BootstrapClearsPurgedSessionTests(unittest.TestCase):
+    """A 404 on the stored session id must not keep that id for the next ask.
+
+    Retention deletes an archived thread inside load(), so GET /api/session
+    404s. bootstrapChat used to leave sessionId and the painted transcript;
+    the next ask sent the dead id and get_session minted a new UUID.
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_bootstrap_clears_on_session_404(self) -> None:
+        chat = (self.ROOT / "src" / "templates" / "chat.html").read_text(encoding="utf-8")
+        start = chat.index("async function bootstrapChat()")
+        bootstrap = chat[start : chat.index("async function archiveSession(")]
+        not_ok = bootstrap[bootstrap.index("response.status === 404") :]
+        self.assertIn("clearStoredChat()", not_ok)
+        self.assertIn("showEmptyState()", not_ok)
+        self.assertIn("sessionId = null", not_ok)
 
 
 class ReadyReportsWhatItVerifiedTests(unittest.TestCase):
