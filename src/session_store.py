@@ -451,8 +451,9 @@ class RedisSessionStore:
         # be the thing that causes it.
         #
         # Short on purpose: this is a pod-local Redis over the cluster network,
-        # where a healthy round trip is sub-millisecond. Two seconds is already
-        # far past "slow" and well inside the readiness period.
+        # where a healthy round trip is sub-millisecond. Half a second is already
+        # far past "slow", and it has to stay under the probe budget -- see
+        # REDIS_SOCKET_TIMEOUT_SECONDS for why that is the number that sets it.
         self._client = redis.Redis.from_url(
             url,
             decode_responses=True,

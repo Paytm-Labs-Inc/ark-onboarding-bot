@@ -664,6 +664,38 @@ class SocketTimeoutFitsTheProbeBudgetTests(unittest.TestCase):
                     f"{name} probe's {timeout}s budget",
                 )
 
+    def test_the_gateway_probe_also_fits_the_budget(self) -> None:
+        # /ready makes TWO outbound calls and both sit under the same kubelet
+        # timeout, so pinning only the Redis one leaves the identical failure
+        # a single call up the same handler. This defaulted to 5s against a 3s
+        # probe budget.
+        from src.answer import READY_PROBE_TIMEOUT_SECONDS
+
+        for name, timeout in self._probe_timeouts().items():
+            with self.subTest(probe=name):
+                self.assertLess(
+                    READY_PROBE_TIMEOUT_SECONDS,
+                    timeout,
+                    f"gateway probe timeout {READY_PROBE_TIMEOUT_SECONDS}s must be under "
+                    f"the {name} probe's {timeout}s budget",
+                )
+
+    def test_both_probes_together_fit_the_budget(self) -> None:
+        # They run in sequence on the same request, so the budget has to cover
+        # the SUM, not each in isolation. This is what the chart comment claims
+        # when it says there is room for the gateway check beside the store one.
+        from src.answer import READY_PROBE_TIMEOUT_SECONDS
+
+        worst_case = REDIS_SOCKET_TIMEOUT_SECONDS + READY_PROBE_TIMEOUT_SECONDS
+        for name, timeout in self._probe_timeouts().items():
+            with self.subTest(probe=name):
+                self.assertLessEqual(
+                    worst_case,
+                    timeout,
+                    f"store {REDIS_SOCKET_TIMEOUT_SECONDS}s + gateway "
+                    f"{READY_PROBE_TIMEOUT_SECONDS}s exceeds the {name} probe's {timeout}s",
+                )
+
     def test_it_also_holds_under_a_chart_we_do_not_own(self) -> None:
         # The app is deployed by other charts too, where timeoutSeconds may be
         # left at kubelet's 1s default. The client has to be safe there as well,

@@ -120,6 +120,14 @@ PI_DEFAULT_MODEL = "llama-3.3-70b-versatile"
 # facts; at 2000 it loses none. The models that fit in 800 are unaffected.
 PI_DEFAULT_MAX_TOKENS = 2000
 
+# The gateway check on the /ready path, and the budget is the probe's, not this
+# call's. It defaulted to 5s against a kubelet httpGet that this chart caps at
+# 3s, so on an uncached miss to a slow or blackholed gateway httpx waited five
+# seconds and the probe was cut at three -- the same failure class as the Redis
+# ping, one call up the same handler: readiness fails INSTEAD of reporting why.
+# Overridable, because a different deployment may set a different probe budget.
+READY_PROBE_TIMEOUT_SECONDS = 2.0
+
 # Request parameters certain models need. Qwen3 is a hybrid reasoning model:
 # without these it spends the token budget on a <think> block and never emits
 # the JSON payload. Setting them also cuts output tokens ~30x.
@@ -329,7 +337,7 @@ def unusable_backend_model(*, now: float | None = None) -> str | None:
         resp = httpx.get(
             f"{base_url}/v1/models",
             headers={"Authorization": f"Bearer {api_key}"},
-            timeout=float(os.environ.get("PI_READY_TIMEOUT_SECONDS", "5")),
+            timeout=float(os.environ.get("PI_READY_TIMEOUT_SECONDS", str(READY_PROBE_TIMEOUT_SECONDS))),
         )
         if resp.status_code in (401, 403):
             reason = f"gateway rejected the credential (HTTP {resp.status_code})"
