@@ -83,7 +83,8 @@ class ChangelogEvidenceTests(unittest.TestCase):
             session_id="s-abc1234567",
             found=True,
             error="AssertionError in tests/test_foo.py",
-            stage="verify",
+            stage="implement",
+            failed_stage="verify",
         )
         verdict = DebugVerdict(
             case="already_fixed",
@@ -95,6 +96,7 @@ class ChangelogEvidenceTests(unittest.TestCase):
         )
         text = handle_already_fixed(report, verdict, EnrichmentBundle())
         self.assertIn("What failed (this session):", text)
+        self.assertIn("Stage: verify", text)
         self.assertIn("AssertionError", text)
         self.assertIn("still failed", text.lower())
 

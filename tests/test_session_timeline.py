@@ -92,6 +92,23 @@ class SessionTimelineTests(unittest.TestCase):
         self.assertIn("wsr-0ed4b765", markdown)
         self.assertNotIn('"session": {', markdown)
 
+    def test_malformed_event_data_does_not_crash(self) -> None:
+        report = ScoutReport(
+            session_id="s-abc1234567",
+            found=True,
+            status="failed",
+            stage="verify",
+            failed_stage="verify",
+            error="boom",
+            raw_events=[
+                {"type": "stage_failed", "data": None},
+                {"type": "session_failed", "data": "not-a-dict", "stage": "verify"},
+            ],
+        )
+        markdown = timeline_to_markdown(build_timeline(report))
+        self.assertIn("stage failed", markdown.lower())
+        self.assertIn("session failed", markdown.lower())
+
     def test_timeline_dict_shape(self) -> None:
         from src.session_timeline import timeline_to_dict
 

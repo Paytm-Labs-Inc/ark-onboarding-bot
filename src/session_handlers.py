@@ -15,7 +15,7 @@ def handle_already_fixed(
     verdict: DebugVerdict,
     enrichment: EnrichmentBundle,
 ) -> str:
-    stage = report.stage or "unknown"
+    stage = report.failed_stage or report.stage or "unknown"
     error = report.error or verdict.root_cause or "unknown error"
     fix_ref = verdict.matching_fix_ref or ""
 
