@@ -15,7 +15,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-_CALLER_COMPUTE="${CASE2_COMPUTE:-${ARK_DEFAULT_COMPUTE:-picom-ark-machine}}"
+# Capture explicit shell overrides only; read .env defaults after sourcing.
+_CALLER_COMPUTE="${CASE2_COMPUTE:-}"
 _CALLER_WORKSPACE="${ARK_DEFAULT_WORKSPACE:-}"
 _CALLER_FLOW="${ARK_FIX_FLOW:-}"
 

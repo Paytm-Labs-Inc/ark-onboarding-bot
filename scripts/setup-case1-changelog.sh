@@ -19,9 +19,10 @@ if [[ "$branch" != "main" ]]; then
 fi
 
 git commit --allow-empty -m "$(cat <<'EOF'
-fix: Intentional Case 2 probe failure resolved on main for session debug Case 1
+fix: Intentional Case 2 probe failure — fix this for the demo
 
-The probe test failure text is matched by Ask Ark changelog evidence.
+Empty commit on main so Ask Ark Case 1 can match the probe error string
+via changelog evidence (subject must contain the session failure text).
 EOF
 )"
 

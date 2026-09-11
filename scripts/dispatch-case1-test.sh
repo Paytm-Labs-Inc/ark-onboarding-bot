@@ -6,7 +6,7 @@
 #   - main branch git log contains a commit whose subject matches that error
 #
 # Setup (once):
-#   1. Merge a fix to main with subject containing "Intentional Case 2 probe failure"
+#   1. Run ./scripts/setup-case1-changelog.sh on main (subject includes full probe error)
 #   2. Keep session-debug/case1-test branch with the probe still failing (CASE2_PROBE_FAIL=1)
 #
 # Usage:
@@ -15,7 +15,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-_CALLER_COMPUTE="${CASE2_COMPUTE:-${ARK_DEFAULT_COMPUTE:-picom-ark-machine}}"
+# Capture explicit shell overrides only; read .env defaults after sourcing.
+_CALLER_COMPUTE="${CASE2_COMPUTE:-}"
 _CALLER_WORKSPACE="${ARK_DEFAULT_WORKSPACE:-}"
 
 if [[ -f .env ]]; then
