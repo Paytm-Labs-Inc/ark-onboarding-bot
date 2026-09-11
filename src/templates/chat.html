@@ -244,20 +244,18 @@
     .archive-toast-undo {
       flex: none;
       border: 0;
-      background: var(--ark-violet-500, #6d28d9);
-      color: #fff;
+      background: transparent;
+      color: var(--ark-violet-500, #6d28d9);
       font: inherit;
-      font-size: var(--ark-text-sm);
       font-weight: 600;
       cursor: pointer;
-      padding: var(--ark-space-2) var(--ark-space-4);
-      border-radius: var(--ark-radius-sm);
+      padding: 0;
     }
-    .archive-toast-undo:hover { filter: brightness(1.08); }
-    .archive-toast-undo:active { filter: brightness(0.94); }
+    .archive-toast-undo:hover { text-decoration: underline; }
     .archive-toast-undo:focus-visible {
       outline: none;
       box-shadow: var(--ark-focus-ring);
+      border-radius: var(--ark-radius-sm);
     }
     /* Keyboard users get a visible target. :focus-visible only, so a mouse
        click does not leave a ring behind. */
