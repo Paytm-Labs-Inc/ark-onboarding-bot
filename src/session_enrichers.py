@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.codegraph_client import explore_report, project_path
+from src.codegraph_client import explore_report, is_foundry_codebase, project_path
 from src.retrieve import retrieve_scored
 from src.scout import ScoutReport
 
@@ -143,7 +143,7 @@ def enrich_report(report: ScoutReport, *, top_k: int = 6) -> EnrichmentBundle:
     if not bundle.code_chunks:
         bundle.code_chunks = _grep_codebase(query, root)
     paths = _files_from_worktree(report)
-    if git_repo_ready(root):
+    if git_repo_ready(root) and is_foundry_codebase(root):
         bundle.changelog_hits = _recent_commits(root, paths=paths or None)
     else:
         bundle.changelog_note = CHANGELOG_UNAVAILABLE
