@@ -248,6 +248,18 @@ def _result_from_retrieval(
     return result
 
 
+def _debug_target_session_id(
+    question: str,
+    *,
+    debug_thread: bool,
+    linked_ark_session_id: str | None,
+) -> str | None:
+    intent, ark_session_id = resolve_intent(question, debug_thread=debug_thread)
+    if intent != "session_debug":
+        return None
+    return ark_session_id or linked_ark_session_id
+
+
 def ask_stream(
     question: str,
     *,
@@ -257,6 +269,7 @@ def ask_stream(
     session_id: str | None = None,
     log: bool = True,
     debug_thread: bool = False,
+    linked_ark_session_id: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Retrieve relevant chunks, then stream a grounded answer."""
     started = time.perf_counter()
@@ -285,9 +298,13 @@ def ask_stream(
         yield done
         return
 
-    intent, ark_session_id = resolve_intent(question, debug_thread=debug_thread)
-    if intent == "session_debug" and ark_session_id:
-        for event in debug_session_stream(ark_session_id):
+    debug_target = _debug_target_session_id(
+        question,
+        debug_thread=debug_thread,
+        linked_ark_session_id=linked_ark_session_id,
+    )
+    if debug_target:
+        for event in debug_session_stream(debug_target):
             if event.get("type") == "done":
                 done = {**event, "stream_mode": "none"}
                 if log:
@@ -373,6 +390,7 @@ def ask(
     session_id: str | None = None,
     log: bool = True,
     debug_thread: bool = False,
+    linked_ark_session_id: str | None = None,
 ) -> dict[str, Any]:
     """Retrieve relevant chunks, then generate a grounded answer."""
     started = time.perf_counter()
@@ -396,9 +414,13 @@ def ask(
             )
         return result
 
-    intent, ark_session_id = resolve_intent(question, debug_thread=debug_thread)
-    if intent == "session_debug" and ark_session_id:
-        result = debug_session(ark_session_id).to_ask_dict()
+    debug_target = _debug_target_session_id(
+        question,
+        debug_thread=debug_thread,
+        linked_ark_session_id=linked_ark_session_id,
+    )
+    if debug_target:
+        result = debug_session(debug_target).to_ask_dict()
         if log:
             _log_ask_result(
                 question,

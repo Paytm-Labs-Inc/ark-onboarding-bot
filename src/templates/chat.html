@@ -188,6 +188,7 @@
       padding: var(--ark-space-1) var(--ark-space-2); border-radius: var(--ark-radius-sm);
       margin-bottom: var(--ark-space-2);
     }
+    .debug-badge.completed { background: rgba(34, 197, 94, 0.15); color: var(--ark-success); }
     .debug-badge.already_fixed { background: rgba(34, 197, 94, 0.15); color: var(--ark-success); }
     .debug-badge.needs_fix { background: rgba(167, 148, 234, 0.2); color: var(--ark-violet-400); }
     .debug-badge.cannot_fix { background: rgba(239, 68, 68, 0.12); color: var(--ark-danger); }
@@ -375,6 +376,7 @@
 
     function debugBadgeLabel(meta) {
       if (!meta || !meta.case) return "Session debug";
+      if (meta.case === "completed") return "Completed";
       if (meta.case === "already_fixed") return "Already fixed";
       if (meta.case === "needs_fix") return "Needs fix";
       if (meta.case === "cannot_fix") {

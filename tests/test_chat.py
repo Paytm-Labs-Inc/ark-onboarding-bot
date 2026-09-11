@@ -107,6 +107,25 @@ class HandoffFlagTests(unittest.TestCase):
         self.assertFalse(self._done("Run ark host enroll.")["handoff"])
 
 
+class DebugFollowUpTests(unittest.TestCase):
+    @patch("src.chat.ask")
+    def test_debug_follow_up_passes_linked_session(self, mock_ask) -> None:
+        mock_ask.return_value = {
+            "answer": "Session failed at verify.",
+            "citations": [],
+            "retrieved_sources": [],
+            "debug": True,
+            "case": "needs_fix",
+        }
+        first = ask_in_session(None, "debug s-abc1234567")
+        ask_in_session(first["session_id"], "why did it fail?")
+        self.assertEqual(
+            mock_ask.call_args.kwargs["linked_ark_session_id"],
+            "s-abc1234567",
+        )
+        self.assertTrue(mock_ask.call_args.kwargs["debug_thread"])
+
+
 class NonStreamHandoffTests(unittest.TestCase):
     def test_ask_in_session_carries_handoff(self) -> None:
         from src.answer import REFUSAL_PHRASE

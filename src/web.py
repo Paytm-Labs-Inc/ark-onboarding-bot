@@ -23,6 +23,7 @@ from src.auth import (
     BROWSER_ID_COOKIE,
     COOKIE_NAME,
     browser_identity,
+    current_identity,
     new_browser_id,
     PUBLIC_PATHS,
     auth_enabled,
@@ -33,6 +34,8 @@ from src.chat import (
     ask_in_session,
     ask_in_session_stream,
     enrich_citations,
+    list_user_sessions,
+    load_session_payload,
     reset_session,
 )
 from src.session_debug import run_debug_action
@@ -45,6 +48,20 @@ LOGIN_TEMPLATE_PATH = TEMPLATE_DIR / "login.html"
 
 # 12 hours; a shared team token doesn't need long-lived sessions.
 SESSION_MAX_AGE = 12 * 60 * 60
+
+
+def current_user_id(request: Request) -> str:
+    """Storage key for this browser/user. Never the shared literal 'anonymous'."""
+    identity = current_identity(request)
+    if identity:
+        return identity
+    assigned = getattr(request.state, "browser_id", None)
+    if assigned:
+        return assigned
+    raise HTTPException(
+        status_code=500,
+        detail="Browser identity missing; issue_browser_id middleware must run first.",
+    )
 
 
 def base_path() -> str:
@@ -170,11 +187,15 @@ async def issue_browser_id(request: Request, call_next):
     session cookie's own logic rather than being hardcoded, so local http still
     works.
     """
+    assigned = None
+    if current_identity(request) is None:
+        assigned = new_browser_id()
+        request.state.browser_id = assigned
     response = await call_next(request)
-    if browser_identity(request) is None:
+    if assigned is not None:
         response.set_cookie(
             BROWSER_ID_COOKIE,
-            new_browser_id(),
+            assigned,
             max_age=60 * 60 * 24 * 365,
             httponly=True,
             samesite="lax",
@@ -407,13 +428,17 @@ async def ready() -> dict[str, object] | JSONResponse:
 
 
 @app.post("/api/ask")
-def api_ask(body: AskRequest, _limit: None = Depends(enforce_ask_rate_limit)) -> dict:
+def api_ask(
+    request: Request,
+    body: AskRequest,
+    _limit: None = Depends(enforce_ask_rate_limit),
+) -> dict:
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     try:
-        return ask_in_session(body.session_id, question)
+        return ask_in_session(body.session_id, question, user_id=current_user_id(request))
     except ValueError as exc:
         # Config errors surface as ValueError too (a missing key, bad
         # PI_EXTRA_PARAMS) and their text names the config; log it, say
@@ -435,9 +460,11 @@ def _sse_event(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _ask_stream_events(session_id: str | None, question: str) -> Iterator[str]:
+def _ask_stream_events(
+    session_id: str | None, question: str, user_id: str
+) -> Iterator[str]:
     try:
-        for event in ask_in_session_stream(session_id, question):
+        for event in ask_in_session_stream(session_id, question, user_id=user_id):
             yield _sse_event(event)
     except ValueError as exc:
         _log_upstream_failure(exc)
@@ -454,14 +481,17 @@ def _ask_stream_events(session_id: str | None, question: str) -> Iterator[str]:
 
 @app.post("/api/ask/stream")
 def api_ask_stream(
-    body: AskRequest, _limit: None = Depends(enforce_ask_rate_limit)
+    request: Request,
+    body: AskRequest,
+    _limit: None = Depends(enforce_ask_rate_limit),
 ) -> StreamingResponse:
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
+    user_id = current_user_id(request)
     return StreamingResponse(
-        _ask_stream_events(body.session_id, question),
+        _ask_stream_events(body.session_id, question, user_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -470,9 +500,25 @@ def api_ask_stream(
     )
 
 
+@app.get("/api/sessions")
+def api_list_sessions(request: Request, archived: bool = False) -> dict[str, object]:
+    user_id = current_user_id(request)
+    return {"sessions": list_user_sessions(user_id, archived=archived)}
+
+
+@app.get("/api/session/{session_id}")
+def api_get_session(request: Request, session_id: str) -> dict[str, object]:
+    payload = load_session_payload(session_id, user_id=current_user_id(request))
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return payload
+
+
 @app.post("/api/reset")
-def api_reset(body: ResetRequest) -> dict[str, bool]:
-    reset_session(body.session_id)
+def api_reset(request: Request, body: ResetRequest) -> dict[str, bool]:
+    ok = reset_session(body.session_id, user_id=current_user_id(request))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found.")
     return {"ok": True}
 
 
