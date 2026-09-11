@@ -223,26 +223,21 @@
     .archive-toast {
       position: fixed;
       left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
+      bottom: var(--ark-space-6);
+      transform: translateX(-50%);
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: var(--ark-space-5);
-      min-width: min(22rem, calc(100vw - 2rem));
-      max-width: min(28rem, calc(100vw - 2rem));
-      padding: var(--ark-space-5) var(--ark-space-6);
+      gap: var(--ark-space-3);
+      padding: var(--ark-space-3) var(--ark-space-4);
       background: var(--ark-panel);
       border: 1px solid var(--ark-line);
       border-radius: var(--ark-radius-md);
-      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
-      font-size: var(--ark-text-base);
-      line-height: 1.4;
-      z-index: 30;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+      font-size: var(--ark-text-sm);
+      z-index: 20;
     }
     .archive-toast.hidden { display: none; }
     .archive-toast-undo {
-      flex: none;
       border: 0;
       background: transparent;
       color: var(--ark-violet-500, #6d28d9);

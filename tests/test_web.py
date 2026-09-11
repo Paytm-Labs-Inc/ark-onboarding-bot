@@ -583,13 +583,12 @@ class ArchiveUnarchiveControlTests(unittest.TestCase):
         self.assertIn("Unarchive chat:", chat)
         self.assertIn("session-unarchive", chat)
 
-    def test_undo_toast_sits_in_the_centre(self) -> None:
+    def test_undo_toast_sits_at_the_bottom(self) -> None:
         chat = (self.ROOT / "src" / "templates" / "chat.html").read_text(encoding="utf-8")
         toast = chat[chat.index(".archive-toast {") : chat.index(".archive-toast.hidden")]
-        self.assertIn("top: 50%", toast)
+        self.assertIn("bottom:", toast)
         self.assertIn("left: 50%", toast)
-        self.assertIn("translate(-50%, -50%)", toast)
-        self.assertNotIn("bottom:", toast)
+        self.assertNotIn("top: 50%", toast)
 
 
 class ReadyReportsWhatItVerifiedTests(unittest.TestCase):
