@@ -45,7 +45,12 @@
       flex: 1;
       min-height: 0;
     }
-    .sidebar-section-archive { flex: none; }
+    .sidebar-section-archive {
+      flex: none;
+      margin-bottom: var(--ark-space-2);
+      padding-bottom: var(--ark-space-3);
+      border-bottom: 1px solid var(--ark-line);
+    }
     .sidebar-label {
       font-size: var(--ark-text-xs);
       font-weight: 600;
@@ -98,7 +103,7 @@
       transition: opacity var(--ark-duration-1) var(--ark-ease),
                   background var(--ark-duration-1) var(--ark-ease),
                   color var(--ark-duration-1) var(--ark-ease);
-      opacity: 0;
+      opacity: 0.45;
     }
     .session-archive svg {
       width: 16px;
@@ -118,9 +123,11 @@
     }
     .session-archive:active { color: var(--ark-fg); background: var(--ark-line); }
     .archive-dropdown {
-      border: 0;
+      border: 1px solid var(--ark-line);
+      border-radius: var(--ark-radius-sm);
+      background: var(--ark-bg);
       margin: 0;
-      padding: 0;
+      padding: var(--ark-space-2);
     }
     .archive-summary {
       display: flex;
@@ -129,36 +136,74 @@
       gap: var(--ark-space-2);
       list-style: none;
       cursor: pointer;
+      user-select: none;
+    }
+    .archive-summary::-webkit-details-marker { display: none; }
+    .archive-summary-label {
+      display: flex;
+      align-items: center;
+      gap: var(--ark-space-2);
+      min-width: 0;
+      flex: 1;
+    }
+    .archive-summary-icon {
+      flex: none;
+      width: 16px;
+      height: 16px;
+      color: var(--ark-fg-muted);
+    }
+    .archive-summary-icon svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.75;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .archive-summary-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .archive-summary-title {
       font-size: var(--ark-text-xs);
       font-weight: 600;
       letter-spacing: var(--ark-tracking-caps);
       text-transform: uppercase;
       color: var(--ark-fg-muted);
-      padding: var(--ark-space-1) 0;
-      user-select: none;
     }
-    .archive-summary::-webkit-details-marker { display: none; }
-    .archive-summary::after {
-      content: "";
+    .archive-empty-hint {
+      font-size: var(--ark-text-xs);
+      color: var(--ark-fg-muted);
+      letter-spacing: normal;
+      text-transform: none;
+      font-weight: 400;
+    }
+    .archive-summary-chevron {
+      flex: none;
       width: 0.45rem;
       height: 0.45rem;
-      border-right: 1.5px solid currentColor;
-      border-bottom: 1.5px solid currentColor;
+      border-right: 1.5px solid var(--ark-fg-muted);
+      border-bottom: 1.5px solid var(--ark-fg-muted);
       transform: rotate(45deg);
       transition: transform var(--ark-duration-1) var(--ark-ease);
-      flex: none;
     }
-    .archive-dropdown[open] .archive-summary::after {
+    .archive-dropdown[open] .archive-summary-chevron {
       transform: rotate(-135deg);
     }
     .archive-count {
-      font-weight: 500;
+      font-weight: 600;
       letter-spacing: normal;
       text-transform: none;
+      color: var(--ark-fg);
     }
     .archive-dropdown .session-list {
       max-height: 180px;
-      margin-top: var(--ark-space-1);
+      margin-top: var(--ark-space-2);
+      padding-top: var(--ark-space-2);
+      border-top: 1px solid var(--ark-line);
     }
     .archive-toast {
       position: fixed;
@@ -454,8 +499,23 @@
       <div class="sidebar-section sidebar-section-archive">
         <details class="archive-dropdown" id="archive-dropdown">
           <summary class="archive-summary">
-            <span>Archive</span>
-            <span class="archive-count" id="archive-count"></span>
+            <span class="archive-summary-label">
+              <span class="archive-summary-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false">
+                  <path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"></path>
+                  <path d="M1 3h22v5H1z"></path>
+                  <path d="M12 12v6"></path>
+                  <path d="M9 15h6"></path>
+                </svg>
+              </span>
+              <span class="archive-summary-text">
+                <span class="archive-summary-title">
+                  Archive <span class="archive-count" id="archive-count"></span>
+                </span>
+                <span class="archive-empty-hint" id="archive-empty-hint">No archived chats</span>
+              </span>
+            </span>
+            <span class="archive-summary-chevron" aria-hidden="true"></span>
           </summary>
           <ul class="session-list" id="archived-sessions"></ul>
         </details>
@@ -515,6 +575,7 @@
     const activeSessionsEl = document.getElementById("active-sessions");
     const archivedSessionsEl = document.getElementById("archived-sessions");
     const archiveCountEl = document.getElementById("archive-count");
+    const archiveEmptyHintEl = document.getElementById("archive-empty-hint");
     const archiveDropdownEl = document.getElementById("archive-dropdown");
     const archiveToastEl = document.getElementById("archive-toast");
     const archiveToastTextEl = document.getElementById("archive-toast-text");
@@ -523,11 +584,10 @@
 
     const ARCHIVE_ICON =
       '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
-      '<path d="M3 7h18"></path>' +
-      '<path d="M5 7l1 12h12l1-12"></path>' +
-      '<path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>' +
-      '<path d="M12 11v4"></path>' +
-      '<path d="M10 13h4"></path>' +
+      '<path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"></path>' +
+      '<path d="M1 3h22v5H1z"></path>' +
+      '<path d="M12 12v6"></path>' +
+      '<path d="M9 15h6"></path>' +
       "</svg>";
 
     let archiveToastTimer = null;
@@ -801,8 +861,13 @@
     }
 
     function updateArchiveCount(count) {
-      if (!archiveCountEl) return;
-      archiveCountEl.textContent = count > 0 ? `(${count})` : "";
+      if (archiveCountEl) {
+        archiveCountEl.textContent = count > 0 ? `(${count})` : "";
+      }
+      if (archiveEmptyHintEl) {
+        archiveEmptyHintEl.textContent = count > 0 ? "" : "No archived chats";
+        archiveEmptyHintEl.hidden = count > 0;
+      }
     }
 
     function hideArchiveToast() {
