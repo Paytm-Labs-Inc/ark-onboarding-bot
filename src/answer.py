@@ -487,7 +487,7 @@ def _call_pi_inference(prompt: str, *, model: str | None = None) -> str:
     body: dict[str, Any] = {
         "model": chosen,
         "max_tokens": int(os.environ.get("PI_MAX_TOKENS", str(PI_DEFAULT_MAX_TOKENS))),
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": _messages_for(prompt),
     }
     body.update(_pi_request_params(chosen))
 
@@ -858,6 +858,31 @@ _SYNTHESIS_QUESTION = re.compile(
 def _needs_synthesized_answer(question: str) -> bool:
     """True for documented Ark questions the model otherwise declines as 4(a)/4(b)."""
     return bool(_SYNTHESIS_QUESTION.search(question))
+
+
+def _messages_for(prompt: str) -> list[dict[str, str]]:
+    """Split the composed prompt into a system message and a user message.
+
+    Everything -- the rules, the retrieved chunks, the history and the question
+    -- was being sent as a single user-role string. That is why the persona and
+    continuation attacks land: with no system message there is no privileged
+    channel, so "ignore your instructions" is addressed to text of exactly the
+    same standing as itself, and "complete this sentence" has the rules sitting
+    in the same buffer it is asked to continue.
+
+    Splitting is not a fix for prompt injection on its own -- nothing is -- but
+    it restores the distinction the model was trained to respect, and it costs
+    nothing.
+
+    Falls back to a lone user message when the prompt was not composed here, so
+    the Cursor backend and any caller passing its own string are unaffected.
+    """
+    if prompt.startswith(SYSTEM_PROMPT):
+        return [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt[len(SYSTEM_PROMPT) :].lstrip()},
+        ]
+    return [{"role": "user", "content": prompt}]
 
 
 def _build_user_content(
@@ -1255,7 +1280,7 @@ def _stream_pi_inference(prompt: str, *, model: str | None = None) -> Iterator[s
     body: dict[str, Any] = {
         "model": chosen,
         "max_tokens": int(os.environ.get("PI_MAX_TOKENS", str(PI_DEFAULT_MAX_TOKENS))),
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": _messages_for(prompt),
         "stream": True,
     }
     params = _pi_request_params(chosen)
