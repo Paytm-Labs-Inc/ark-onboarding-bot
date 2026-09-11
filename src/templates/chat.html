@@ -499,6 +499,23 @@
       writeStoredChat(stored);
     }
 
+    function updatePersistedTurn(question, answer, sources, meta, generation) {
+      if (generation !== undefined && generation !== chatGeneration) {
+        return;
+      }
+      const stored = readStoredChat();
+      if (!stored || !Array.isArray(stored.turns) || !stored.turns.length) {
+        return;
+      }
+      for (let i = stored.turns.length - 1; i >= 0; i -= 1) {
+        if (stored.turns[i].question !== question) continue;
+        stored.sessionId = meta.session_id || sessionId;
+        stored.turns[i] = { question, answer, sources: sources || [], meta };
+        writeStoredChat(stored);
+        return;
+      }
+    }
+
     function setStatus(message, isError = false) {
       statusEl.textContent = message || "";
       statusEl.classList.toggle("error", isError);
@@ -638,12 +655,20 @@
     }
 
     async function postDebugAction(gateId, action, answerBlock) {
+      const generation = chatGeneration;
+      const turn = answerBlock.closest(".turn");
+      const question = turn?.querySelector(".question")?.textContent || "";
       setStatus("Working…");
       try {
         const response = await fetch("api/session-debug/action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ gate_id: gateId, action }),
+          body: JSON.stringify({
+            gate_id: gateId,
+            action,
+            session_id: sessionId,
+            question,
+          }),
         });
         if (response.status === 401) {
           window.location = "login";
@@ -651,15 +676,21 @@
         }
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || "Request failed");
-        const turn = answerBlock.closest(".turn");
+        if (generation !== chatGeneration) {
+          return;
+        }
         applyDebugPayload(turn, answerBlock, payload, { append: true });
-        const question = turn?.querySelector(".question")?.textContent || "";
+        if (payload.gate_id && turn) {
+          turn.dataset.gateId = payload.gate_id;
+        }
         const combined = turn?.dataset.diagnosis
           ? (turn.dataset.artifacts
             ? `${turn.dataset.diagnosis}\n\n---\n\n${turn.dataset.artifacts}`
             : turn.dataset.diagnosis)
           : (payload.answer || "");
         const meta = {
+          question,
+          answer: combined,
           session_id: sessionId,
           debug: true,
           case: payload.case,
@@ -669,7 +700,7 @@
           cannot_fix_reason: payload.cannot_fix_reason || null,
           verdict: payload.verdict || null,
         };
-        persistCompletedTurn(question, combined, [], meta);
+        updatePersistedTurn(question, combined, [], meta, generation);
         setStatus("");
       } catch (error) {
         setStatus(error.message || "Action failed.", true);

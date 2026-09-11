@@ -31,6 +31,7 @@ from src.auth import (
     token_valid,
 )
 from src.chat import (
+    append_debug_artifact_to_session,
     ask_in_session,
     ask_in_session_stream,
     enrich_citations,
@@ -295,6 +296,8 @@ class ResetRequest(BaseModel):
 class DebugActionRequest(BaseModel):
     gate_id: str = Field(min_length=1, max_length=64)
     action: str = Field(min_length=1, max_length=64)
+    session_id: Optional[str] = None
+    question: Optional[str] = Field(default=None, max_length=2000)
 
 
 class FeedbackRequest(BaseModel):
@@ -547,12 +550,26 @@ def _run_session_debug(handler):
 
 @app.post("/api/session-debug/action")
 def api_session_debug_action(
+    request: Request,
     body: DebugActionRequest,
     _limit: None = Depends(enforce_ask_rate_limit),
 ) -> dict:
     gate_id = body.gate_id.strip()
     action = body.action.strip()
-    return _run_session_debug(lambda: run_debug_action(gate_id, action))
+    user_id = current_user_id(request)
+
+    def _handler():
+        result = run_debug_action(gate_id, action)
+        if body.session_id:
+            append_debug_artifact_to_session(
+                body.session_id.strip(),
+                artifact=str(result.answer),
+                question=body.question.strip() if body.question else None,
+                user_id=user_id,
+            )
+        return result
+
+    return _run_session_debug(_handler)
 
 
 @app.post("/api/feedback")

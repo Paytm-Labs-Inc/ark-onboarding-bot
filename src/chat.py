@@ -200,6 +200,37 @@ def reset_session(session_id: str, user_id: str = ANONYMOUS_USER) -> bool:
     return True
 
 
+def append_debug_artifact_to_session(
+    session_id: str,
+    *,
+    artifact: str,
+    question: str | None = None,
+    user_id: str = ANONYMOUS_USER,
+) -> bool:
+    """Append a helper-action artifact to an existing turn, not a new one."""
+    chunk = artifact.strip()
+    if not chunk:
+        return False
+    store = get_session_store()
+    stored = store.load(session_id)
+    if stored is None or stored.user_id != user_id or not stored.turns:
+        return False
+    idx = len(stored.turns) - 1
+    if question:
+        for i in range(len(stored.turns) - 1, -1, -1):
+            if stored.turns[i].question == question:
+                idx = i
+                break
+    turn = stored.turns[idx]
+    if turn.answer.strip():
+        turn.answer = f"{turn.answer}\n\n---\n\n{chunk}"
+    else:
+        turn.answer = chunk
+    session = _session_from_stored(stored)
+    save_session(session)
+    return True
+
+
 def load_session_payload(session_id: str, user_id: str = ANONYMOUS_USER) -> dict[str, Any] | None:
     stored = get_session_store().load(session_id)
     if stored is None or stored.user_id != user_id:

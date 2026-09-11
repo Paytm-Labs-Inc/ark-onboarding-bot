@@ -6,7 +6,13 @@ import os
 import unittest
 from unittest.mock import patch
 
-from src.chat import ChatSession, ask_in_session, ask_in_session_stream, refresh_history_summary
+from src.chat import (
+    ChatSession,
+    append_debug_artifact_to_session,
+    ask_in_session,
+    ask_in_session_stream,
+    refresh_history_summary,
+)
 
 
 class ChatSessionTests(unittest.TestCase):
@@ -124,6 +130,34 @@ class DebugFollowUpTests(unittest.TestCase):
             "s-abc1234567",
         )
         self.assertTrue(mock_ask.call_args.kwargs["debug_thread"])
+
+
+class DebugArtifactPersistenceTests(unittest.TestCase):
+    @patch("src.chat.ask")
+    def test_append_debug_artifact_updates_existing_turn(self, mock_ask) -> None:
+        mock_ask.return_value = {
+            "answer": "Initial diagnosis.",
+            "citations": [],
+            "retrieved_sources": [],
+            "debug": True,
+            "case": "needs_fix",
+        }
+        first = ask_in_session(None, "debug s-abc1234567")
+        sid = first["session_id"]
+        ok = append_debug_artifact_to_session(
+            sid,
+            artifact="Ticket draft.",
+            question="debug s-abc1234567",
+        )
+        self.assertTrue(ok)
+        from src.chat import load_session_payload
+
+        stored = load_session_payload(sid)
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        self.assertEqual(len(stored["turns"]), 1)
+        self.assertIn("Initial diagnosis.", stored["turns"][0]["answer"])
+        self.assertIn("Ticket draft.", stored["turns"][0]["answer"])
 
 
 class NonStreamHandoffTests(unittest.TestCase):
