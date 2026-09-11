@@ -31,11 +31,13 @@ from src.auth import (
     token_valid,
 )
 from src.chat import (
+    archive_session,
     ask_in_session,
     ask_in_session_stream,
     list_user_sessions,
     load_session_payload,
     reset_session,
+    unarchive_session,
 )
 from src.feedback import append_feedback, read_feedback
 from src.warmup import check_retrieval_ready, warm_services
@@ -544,6 +546,22 @@ def api_get_session(request: Request, session_id: str) -> dict[str, object]:
 @app.post("/api/reset")
 def api_reset(request: Request, body: ResetRequest) -> dict[str, bool]:
     ok = reset_session(body.session_id, user_id=current_user_id(request))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return {"ok": True}
+
+
+@app.post("/api/session/{session_id}/archive")
+def api_archive_session(request: Request, session_id: str) -> dict[str, bool]:
+    ok = archive_session(session_id, user_id=current_user_id(request))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return {"ok": True}
+
+
+@app.post("/api/session/{session_id}/unarchive")
+def api_unarchive_session(request: Request, session_id: str) -> dict[str, bool]:
+    ok = unarchive_session(session_id, user_id=current_user_id(request))
     if not ok:
         raise HTTPException(status_code=404, detail="Session not found.")
     return {"ok": True}

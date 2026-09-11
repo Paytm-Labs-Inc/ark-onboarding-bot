@@ -235,6 +235,77 @@ class SessionApiTests(unittest.TestCase):
         response = self.client.post("/api/reset", json={"session_id": "missing"})
         self.assertEqual(response.status_code, 404)
 
+    def test_archive_moves_session_to_archived_list(self) -> None:
+        from src.session_store import (
+            MemorySessionStore,
+            StoredSession,
+            StoredTurn,
+            reset_session_store,
+            title_from_question,
+        )
+
+        browser_id = self.client.cookies.get(auth.BROWSER_ID_COOKIE)
+        if not browser_id:
+            self.client.get("/")
+            browser_id = self.client.cookies[auth.BROWSER_ID_COOKIE]
+        store = MemorySessionStore()
+        store.save(
+            StoredSession(
+                session_id="sess-archive",
+                user_id=browser_id,
+                title=title_from_question("what is ark?"),
+                turns=[StoredTurn("what is ark?", "Ark is...", [], [])],
+            )
+        )
+        reset_session_store(store)
+
+        response = self.client.post("/api/session/sess-archive/archive")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+
+        active = self.client.get("/api/sessions?archived=false").json()["sessions"]
+        archived = self.client.get("/api/sessions?archived=true").json()["sessions"]
+        self.assertEqual([item["session_id"] for item in active], [])
+        self.assertEqual([item["session_id"] for item in archived], ["sess-archive"])
+
+    def test_unarchive_moves_session_back_to_recent(self) -> None:
+        from src.session_store import (
+            MemorySessionStore,
+            StoredSession,
+            StoredTurn,
+            reset_session_store,
+            title_from_question,
+        )
+
+        browser_id = self.client.cookies.get(auth.BROWSER_ID_COOKIE)
+        if not browser_id:
+            self.client.get("/")
+            browser_id = self.client.cookies[auth.BROWSER_ID_COOKIE]
+        store = MemorySessionStore()
+        store.save(
+            StoredSession(
+                session_id="sess-unarchive",
+                user_id=browser_id,
+                title=title_from_question("how to enroll?"),
+                turns=[StoredTurn("how to enroll?", "Run ark host enroll.", [], [])],
+                archived=True,
+                archived_at="2026-09-01T10:00:00Z",
+            )
+        )
+        reset_session_store(store)
+
+        response = self.client.post("/api/session/sess-unarchive/unarchive")
+        self.assertEqual(response.status_code, 200)
+
+        active = self.client.get("/api/sessions?archived=false").json()["sessions"]
+        archived = self.client.get("/api/sessions?archived=true").json()["sessions"]
+        self.assertEqual([item["session_id"] for item in active], ["sess-unarchive"])
+        self.assertEqual(archived, [])
+
+    def test_archive_missing_session_404(self) -> None:
+        response = self.client.post("/api/session/missing/archive")
+        self.assertEqual(response.status_code, 404)
+
 
 class FeedbackWriteFailureTests(unittest.TestCase):
     @patch("src.web.append_feedback", side_effect=OSError("disk full"))

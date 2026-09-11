@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass, field
 from collections.abc import Iterator
@@ -180,6 +181,31 @@ def reset_session(session_id: str, user_id: str = ANONYMOUS_USER) -> bool:
     if stored is None or stored.user_id != user_id:
         return False
     store.delete(session_id)
+    return True
+
+
+def archive_session(session_id: str, user_id: str = ANONYMOUS_USER) -> bool:
+    store = get_session_store()
+    stored = store.load(session_id)
+    if stored is None or stored.user_id != user_id:
+        return False
+    if not stored.archived:
+        stored.archived = True
+        stored.archived_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        store.save(stored, touch_activity=False)
+    return True
+
+
+def unarchive_session(session_id: str, user_id: str = ANONYMOUS_USER) -> bool:
+    store = get_session_store()
+    stored = store.load(session_id)
+    if stored is None or stored.user_id != user_id:
+        return False
+    if not stored.archived:
+        return True
+    stored.archived = False
+    stored.archived_at = None
+    store.save(stored)
     return True
 
 
