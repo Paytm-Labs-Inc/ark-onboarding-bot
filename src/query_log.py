@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.answer import is_non_answer
+from src.jsonl_purge import purge_session_records
 
 QUERY_LOG_PATH = Path(__file__).resolve().parent.parent / "eval" / "query_log.jsonl"
 LOW_CONFIDENCE_THRESHOLD = float(os.environ.get("QUERY_LOG_LOW_CONFIDENCE", "0.35"))
@@ -109,3 +110,18 @@ def append_query_log(record: dict[str, Any]) -> None:
 def log_query(**kwargs: Any) -> None:
     """Build and append a query log record."""
     append_query_log(build_record(**kwargs))
+
+
+def purge_session(session_id: str) -> int:
+    """Erase this session's records, as part of a user delete.
+
+    The log keeps the question verbatim, so a deleted chat whose questions stay
+    here is the "delete erases everywhere" rule violated on a surface nobody
+    was looking at.
+    """
+    return purge_session_records(
+        QUERY_LOG_PATH,
+        session_id,
+        lock=_WRITE_LOCK,
+        lock_timeout=_WRITE_LOCK_TIMEOUT_SECONDS,
+    )

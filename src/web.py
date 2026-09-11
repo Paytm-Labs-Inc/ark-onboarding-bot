@@ -543,7 +543,17 @@ def api_get_session(request: Request, session_id: str) -> dict[str, object]:
 
 @app.post("/api/reset")
 def api_reset(request: Request, body: ResetRequest) -> dict[str, bool]:
-    ok = reset_session(body.session_id, user_id=current_user_id(request))
+    try:
+        ok = reset_session(body.session_id, user_id=current_user_id(request))
+    except OSError as exc:
+        # The logs could not be erased, so the thread was deliberately left in
+        # place. Say the delete failed rather than 404 ("no such session") or
+        # 500 ("we have no idea") -- both would tell the user their chat is
+        # gone when the only honest answer is "retry".
+        print(f"delete could not erase the logs: {exc}", flush=True)
+        raise HTTPException(
+            status_code=503, detail="Chat could not be deleted right now."
+        ) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="Session not found.")
     return {"ok": True}
