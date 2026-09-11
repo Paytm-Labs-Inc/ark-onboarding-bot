@@ -957,6 +957,41 @@ class RoadmapPromiseCarriesNoDateTests(unittest.TestCase):
         out = _finalize_parsed({"answer": answer, "chunks_used": [1]}, self.CHUNKS)
         self.assertEqual(out["answer"], answer)
 
+    def test_a_grounded_dated_answer_that_also_promises_keeps_the_answer(self) -> None:
+        """The case the first version of this guard destroyed.
+
+        Prompt rule 19 asks the model to give a ship date when a chunk dates the
+        named feature. If it also tacks the 4(b) line on, replacing the whole
+        answer with the bare promise throws away the corpus-sourced date --
+        wiping exactly the answers the rule asks for. The promise is stripped
+        and the answer kept, which is what _finalize_parsed already does to a
+        promise tacked onto a real answer.
+        """
+        from src.answer import ROADMAP_PHRASE, _finalize_parsed
+
+        answer = (
+            "Slack alert delivery is listed in the Week of Aug 10, 2026 section. "
+            + ROADMAP_PHRASE
+        )
+        out = _finalize_parsed({"answer": answer, "chunks_used": [1]}, self.CHUNKS)
+        self.assertIn("Week of Aug 10, 2026", out["answer"])
+        self.assertNotIn(ROADMAP_PHRASE, out["answer"])
+
+    def test_promise_plus_only_filler_and_a_date_is_still_stripped(self) -> None:
+        # Connective words around an invented date must not read as content.
+        from src.answer import ROADMAP_PHRASE, _finalize_parsed
+
+        for tail in (
+            " It is slated for the week of Sep 7, 2026.",
+            " Targeting Q3.",
+            " Expected to ship in two weeks.",
+        ):
+            with self.subTest(tail=tail):
+                out = _finalize_parsed(
+                    {"answer": ROADMAP_PHRASE + tail, "chunks_used": [1]}, self.CHUNKS
+                )
+                self.assertEqual(out["answer"], ROADMAP_PHRASE)
+
     def test_the_date_shapes_the_regex_must_catch(self) -> None:
         from src.answer import ROADMAP_PHRASE, decline_states_a_date
 

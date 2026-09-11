@@ -65,6 +65,41 @@ _DATE_TOKEN_RE = re.compile(
 )
 
 
+# Connective words that can sit between the promise and an invented date without
+# making the result a real answer. Deliberately small: anything outside this set
+# counts as content, so the test errs toward KEEPING an answer.
+_DATE_FILLER = frozenset(
+    "it is are was we the a an and or to for be been will would ship ships shipping "
+    "shipped slated expected expect targeting target due planned plan eta around "
+    "about approximately roughly by on in of at from live launch release".split()
+)
+
+
+def _is_only_promise_and_date(text: str) -> bool:
+    """True when nothing survives removing the decline phrase and the date.
+
+    The two cases have to be told apart, because they want opposite handling:
+
+      "<promise> It is slated for the week of Sep 7, 2026."
+          a 4(b) decline that invented a date -> the date must go.
+
+      "Slack alert delivery is in the Week of Aug 10 section. <promise>"
+          a real answer that also tacked the promise on -> the ANSWER must
+          survive. Prompt rule 19 asks for exactly this when a chunk dates the
+          named feature, so wiping it would destroy the answers the prompt asks
+          for, and _finalize_parsed already strips a tacked-on promise rather
+          than dropping the answer under it.
+    """
+    residue = _normalise_decline(text)
+    for phrase in (ROADMAP_PHRASE, REFUSAL_PHRASE):
+        residue = residue.replace(_normalise_decline(phrase), " ")
+    residue = _DATE_TOKEN_RE.sub(" ", residue)
+    return not [
+        word for word in residue.split()
+        if word not in _DATE_FILLER and not word.isdigit()
+    ]
+
+
 def decline_states_a_date(text: str) -> bool:
     """True when a decline ALSO asserts a ship date.
 
@@ -1019,11 +1054,17 @@ def _finalize_parsed(
     if ROADMAP_NORMALISED in _normalise_decline(answer_text) and decline_states_a_date(
         answer_text
     ):
-        roadmap_source = _first_roadmap_source(chunks)
-        return {
-            "answer": ROADMAP_PHRASE,
-            "citations": [roadmap_source] if roadmap_source else [],
-        }
+        if _is_only_promise_and_date(answer_text):
+            roadmap_source = _first_roadmap_source(chunks)
+            return {
+                "answer": ROADMAP_PHRASE,
+                "citations": [roadmap_source] if roadmap_source else [],
+            }
+        # A promise tacked onto a REAL answer: strip the promise and keep the
+        # answer, which is the treatment the unbacked path above already gives
+        # it. Replacing the whole answer here dropped a corpus-sourced ship
+        # date whenever the model also used the 4(b) line.
+        answer_text = answer_text.replace(ROADMAP_PHRASE, "").strip()
 
     return {"answer": answer_text or REFUSAL_PHRASE, "citations": citations}
 
