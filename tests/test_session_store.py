@@ -142,6 +142,37 @@ class MemorySessionStoreTests(unittest.TestCase):
         self.assertEqual([item.session_id for item in archived_list], ["idle-1"])
         os.environ.pop("SESSION_ARCHIVE_AFTER_DAYS", None)
 
+    def test_expired_archived_sessions_are_deleted_on_list(self) -> None:
+        os.environ["SESSION_ARCHIVE_RETAIN_DAYS"] = "7"
+        old_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 8 * 86400))
+        recent_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 2 * 86400))
+        expired = StoredSession(
+            session_id="expired-arch",
+            user_id="user-a",
+            title="Expired",
+            created_at=old_time,
+            updated_at=old_time,
+            archived=True,
+            archived_at=old_time,
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        kept = StoredSession(
+            session_id="fresh-arch",
+            user_id="user-a",
+            title="Fresh",
+            created_at=recent_time,
+            updated_at=recent_time,
+            archived=True,
+            archived_at=recent_time,
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        self.store.save(expired, touch_activity=False)
+        self.store.save(kept, touch_activity=False)
+        archived_list = self.store.list_for_user("user-a", archived=True)
+        self.assertEqual([item.session_id for item in archived_list], ["fresh-arch"])
+        self.assertIsNone(self.store.load("expired-arch"))
+        os.environ.pop("SESSION_ARCHIVE_RETAIN_DAYS", None)
+
     def test_parse_iso_treats_timestamps_as_utc(self) -> None:
         stamp = "2026-01-01T12:00:00Z"
         expected = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
@@ -272,6 +303,53 @@ class RedisSessionStoreTests(unittest.TestCase):
         self.assertEqual(self.store.list_for_user("user-z", archived=False), [])
         archived = self.store.list_for_user("user-z", archived=True)
         self.assertEqual([item.session_id for item in archived], ["redis-arch"])
+
+    def test_turn_save_does_not_clobber_unarchive(self) -> None:
+        stored = StoredSession(
+            session_id="redis-undo",
+            user_id="user-z",
+            title="Undo",
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        self.store.save(stored)
+        stored.archived = True
+        stored.archived_at = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 2 * 86400)
+        )
+        self.store.save(stored, touch_activity=False, overwrite_archive=True)
+
+        live = self.store.load("redis-undo")
+        assert live is not None
+        live.archived = False
+        live.archived_at = None
+        self.store.save(live, overwrite_archive=True)
+
+        stored.turns.append(StoredTurn("follow", "up", [], []))
+        self.store.save(stored, overwrite_archive=False)
+
+        loaded = self.store.load("redis-undo")
+        assert loaded is not None
+        self.assertFalse(loaded.archived)
+        self.assertEqual(loaded.turns[-1].question, "follow")
+
+    def test_expired_archived_sessions_are_deleted_on_list(self) -> None:
+        os.environ["SESSION_ARCHIVE_RETAIN_DAYS"] = "7"
+        old_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 8 * 86400))
+        stored = StoredSession(
+            session_id="redis-expired",
+            user_id="user-z",
+            title="Expired",
+            created_at=old_time,
+            updated_at=old_time,
+            archived=True,
+            archived_at=old_time,
+            turns=[StoredTurn("q", "a", [], [])],
+        )
+        self.store.save(stored, touch_activity=False)
+        archived = self.store.list_for_user("user-z", archived=True)
+        self.assertEqual(archived, [])
+        self.assertIsNone(self.store.load("redis-expired"))
+        os.environ.pop("SESSION_ARCHIVE_RETAIN_DAYS", None)
 
     def test_delete_removes_all_keys(self) -> None:
         stored = StoredSession(

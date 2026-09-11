@@ -13,6 +13,7 @@ from src.chat import (
     ask_in_session_stream,
     refresh_history_summary,
     save_session,
+    unarchive_session,
 )
 
 
@@ -191,6 +192,31 @@ class ArchiveRaceTests(unittest.TestCase):
         self.assertIsNotNone(reloaded)
         self.assertTrue(reloaded.archived)
         self.assertEqual(reloaded.turns[-1].answer, "More about Ark.")
+
+    def test_save_after_undo_does_not_rearchive(self) -> None:
+        session = ChatSession(session_id="sess-undo", user_id="anonymous", title="what is ark?")
+        session.add_turn("what is ark?", "Ark is...", [], [])
+        save_session(session)
+        self.assertTrue(archive_session("sess-undo"))
+
+        in_flight = ChatSession(
+            session_id="sess-undo",
+            user_id="anonymous",
+            title="what is ark?",
+            archived=True,
+            archived_at="2026-09-11T06:00:00Z",
+        )
+        in_flight.add_turn("what is ark?", "Ark is...", [], [])
+        in_flight.add_turn("follow up?", "More Ark.", [], [])
+
+        self.assertTrue(unarchive_session("sess-undo"))
+        save_session(in_flight)
+
+        reloaded = self.store.load("sess-undo")
+        self.assertIsNotNone(reloaded)
+        self.assertFalse(reloaded.archived)
+        self.assertIsNone(reloaded.archived_at)
+        self.assertEqual(reloaded.turns[-1].question, "follow up?")
 
 
 if __name__ == "__main__":

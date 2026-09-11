@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from pathlib import Path
@@ -289,7 +290,7 @@ class SessionApiTests(unittest.TestCase):
                 title=title_from_question("how to enroll?"),
                 turns=[StoredTurn("how to enroll?", "Run ark host enroll.", [], [])],
                 archived=True,
-                archived_at="2026-09-01T10:00:00Z",
+                archived_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 2 * 86400)),
             )
         )
         reset_session_store(store)
@@ -536,6 +537,35 @@ class ArchiveHeaderShowsLoadFailureTests(unittest.TestCase):
             chat,
             "a bare count of 0 on failure still paints the header as empty",
         )
+
+
+class SidebarTitleOverflowTests(unittest.TestCase):
+    """A long unbroken title must shrink inside the rail, not scroll it.
+
+    Flex items default to min-width: auto, so the row cannot shrink below its
+    text and the title ellipsis never engages. Production showed 283px of row
+    in a 255px sidebar.
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_session_row_can_shrink_below_its_text(self) -> None:
+        chat = (self.ROOT / "src" / "templates" / "chat.html").read_text(encoding="utf-8")
+        list_css = chat[chat.index(".session-list {") : chat.index(".session-item {")]
+        self.assertIn("overflow-x: hidden", list_css)
+        item_css = chat[chat.index(".session-item {") : chat.index(".session-item:hover")]
+        self.assertIn("min-width: 0", item_css)
+        li_css = chat[chat.index(".session-list li {") : chat.index(".session-archive {")]
+        self.assertIn("min-width: 0", li_css)
+        title_css = chat[chat.index(".session-title {") : chat.index(".session-meta {")]
+        self.assertIn("width: 100%", title_css)
+        self.assertIn("text-overflow: ellipsis", title_css)
+        meta_css = chat[chat.index(".session-meta {") : chat.index(".session-empty {")]
+        self.assertIn("width: 100%", meta_css)
+        self.assertIn("text-overflow: ellipsis", meta_css)
+        archive_css = chat[chat.index(".session-archive {") : chat.index(".session-archive svg {")]
+        self.assertIn("flex: none", archive_css)
+        self.assertIn("min-width: 24px", archive_css)
 
 
 class ReadyReportsWhatItVerifiedTests(unittest.TestCase):
