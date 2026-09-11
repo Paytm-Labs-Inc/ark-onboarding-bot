@@ -1160,8 +1160,9 @@
       if (!sessionId) return;
 
       const generation = chatGeneration;
+      const bootstrappedId = sessionId;
       try {
-        const response = await fetch(`api/session/${encodeURIComponent(sessionId)}`);
+        const response = await fetch(`api/session/${encodeURIComponent(bootstrappedId)}`);
         if (response.status === 401) {
           window.location = "login";
           return;
@@ -1180,9 +1181,25 @@
           // Retention deleted the archived thread. Leaving sessionId in place
           // would paint the old transcript while the next ask mints a new UUID.
           if (generation !== chatGeneration) return;
+          if (sessionId !== bootstrappedId) return;
           sessionId = null;
           updateLinkedArkSessionDisplay(null);
           clearStoredChat();
+          loadSidebarLists();
+          // Submit does not bump chatGeneration. Emptying the pane here would
+          // wipe an in-flight turn, then the completion would still match and
+          // persist onto a detached node — the answer never appears. Keep that
+          // turn (the server mints a new UUID for the dead id) and only bump
+          // when nothing is streaming, the same way startNewChat does.
+          if (submitBtn.disabled) {
+            const live = chat.lastElementChild;
+            chat.replaceChildren();
+            if (live && live.classList.contains("turn")) {
+              chat.appendChild(live);
+            }
+            return;
+          }
+          chatGeneration += 1;
           showEmptyState();
         }
       } catch (_err) {

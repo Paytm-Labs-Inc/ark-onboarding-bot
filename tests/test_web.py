@@ -642,6 +642,17 @@ class BootstrapClearsPurgedSessionTests(unittest.TestCase):
         self.assertIn("clearStoredChat()", not_ok)
         self.assertIn("showEmptyState()", not_ok)
         self.assertIn("sessionId = null", not_ok)
+        # An in-flight ask captured the old generation. Wiping without a bump
+        # dropped the streaming turn and still adopted the minted session.
+        # Keep the live turn when submit is running; bump only on the idle path.
+        # If the ask already adopted a new id, this 404 must not undo that.
+        self.assertIn("sessionId !== bootstrappedId", not_ok)
+        disabled_at = not_ok.index("submitBtn.disabled")
+        bump_at = not_ok.index("chatGeneration += 1")
+        empty_at = not_ok.index("showEmptyState()")
+        self.assertLess(disabled_at, bump_at)
+        self.assertLess(bump_at, empty_at)
+        self.assertIn("chat.appendChild(live)", not_ok)
 
 
 class ReadyReportsWhatItVerifiedTests(unittest.TestCase):
