@@ -15,6 +15,12 @@ pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }
 fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
 render() { OUT="$(helm template bot "$CHART" "$@" 2>&1)"; RC=$?; }
 BASE=(-f "$CHART/pai-risk-mlops-platform-values.yaml" --set image.tag=90000000000001-abcdef0-arm64 --set web.forwardedAllowIps=10.42.0.0/16)
+# The overlay now enables Redis, because chat threads must outlive a deploy.
+# Cases below that assert CHART-level behaviour (redis is opt-in; the guard
+# fires without SESSION_STORE) have to say so explicitly, or they would be
+# reading production's decision back as if it were the default and quietly
+# stop testing anything.
+NOREDIS=("${BASE[@]}" --set redis.enabled=false)
 
 echo "== A: defaults with no overlay -- must FAIL (image.tag required) =="
 render; { [ "$RC" -ne 0 ] && grep -q 'image.tag is required' <<<"$OUT"; } && pass "no tag rejected" || fail "rendered without an image tag"
@@ -55,8 +61,10 @@ render "${BASE[@]}" --set ingress.authGate.enabled=true --set ingress.authGate.a
 [ "$RC" -eq 0 ] && grep -q 'auth-url: "http://oauth2-proxy' <<<"$OUT" && grep -q 'X-Auth-Request-Email' <<<"$OUT" && pass "gate renders with auth-url + identity headers" || fail "gate render wrong (rc=$RC)"
 
 echo "== F: slack.enabled -- worker + its secret keys =="
-render "${BASE[@]}" --set slack.enabled=true
+render "${NOREDIS[@]}" --set slack.enabled=true
 [ "$RC" -eq 0 ] && grep -q 'name: ark-onboarding-bot-slack' <<<"$OUT" && grep -q 'secretKey: SLACK_APP_TOKEN' <<<"$OUT" && grep -q 'src.slack_app' <<<"$OUT" && pass "slack worker + tokens render" || fail "slack render wrong"
+# Redis off here on purpose: the claim is that the SLACK worker adds no Service,
+# and Redis legitimately brings its own, which would mask a regression.
 [ "$(grep -c '^kind: Service$' <<<"$OUT")" -eq 1 ] && pass "slack worker has no Service (outbound only)" || fail "Service count with slack on: $(grep -c '^kind: Service$' <<<"$OUT")"
 
 echo "== G: no ingress -- CIDR not required =="
@@ -76,7 +84,7 @@ render --set image.tag=90000000000001-abcdef0-arm64 --set ingress.enabled=false 
 
 echo "== I: redis for chat sessions =="
 # Off by default: a chart consumer who has provisioned no volume must still render.
-render "${BASE[@]}"; [ "$RC" -eq 0 ] && ! grep -q 'component: redis' <<<"$OUT" && pass "redis absent unless enabled" || fail "redis should be opt-in"
+render "${NOREDIS[@]}"; [ "$RC" -eq 0 ] && ! grep -q 'component: redis' <<<"$OUT" && pass "redis absent unless enabled" || fail "redis should be opt-in"
 # Enabled: the three objects, and a StatefulSet rather than a Deployment -- the
 # AOF is the record, and a rolling Deployment fights its own RWO volume.
 render "${BASE[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=redis --set web.env.REDIS_URL=redis://ark-onboarding-bot-redis:6379/0
@@ -101,6 +109,54 @@ render "${BASE[@]}" --set redis.enabled=true --set redis.exporter.enabled=true -
 [ "$RC" -eq 0 ] && grep -q 'redis-exporter' <<<"$OUT" && grep -q 'name: metrics' <<<"$OUT" && pass "exporter adds a sidecar and a metrics port" || fail "exporter render wrong"
 # Fail closed: a Redis the app never connects to looks healthy while chats
 # still vanish on restart.
-render "${BASE[@]}" --set redis.enabled=true; [ "$RC" -ne 0 ] && pass "redis without SESSION_STORE rejected" || fail "should reject redis.enabled with no SESSION_STORE"
+# Built from the chart, not the overlay: the overlay supplies SESSION_STORE, so
+# redis.enabled on top of it is the CORRECT pairing rather than the one the
+# guard rejects.
+MINIMAL=(--set image.tag=90000000000099-0000000-arm64 --set ingress.enabled=false --set externalSecret.awsSecretPath=example/path)
+# Each guard is greped for its OWN message, the way every other guard case in
+# this file does it. Exit code alone is not enough: the fixture below trips both
+# guards, so `RC -ne 0` passed with either one deleted -- which is how a guard
+# added specifically to stop an untested claim ended up untested itself.
+render "${MINIMAL[@]}" --set redis.enabled=true
+{ [ "$RC" -ne 0 ] && grep -q 'without SESSION_STORE=redis' <<<"$OUT"; } && pass "redis.enabled without SESSION_STORE=redis rejected" || fail "should reject redis.enabled with no SESSION_STORE"
+# An absent key and a wrong VALUE are the same mistake with different symptoms.
+render "${MINIMAL[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=memory --set web.env.REDIS_URL=redis://x:6379/0
+{ [ "$RC" -ne 0 ] && grep -q 'without SESSION_STORE=redis' <<<"$OUT"; } && pass "redis.enabled with SESSION_STORE=memory rejected" || fail "should reject a Redis the app will not use"
+# The URL guard keys on SESSION_STORE, not on redis.enabled, so it also covers
+# the external-Redis path values.yaml documents (enabled:false + a URL).
+render "${MINIMAL[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=redis
+{ [ "$RC" -ne 0 ] && grep -q 'no non-empty REDIS_URL' <<<"$OUT"; } && pass "SESSION_STORE=redis without REDIS_URL rejected" || fail "should reject a missing REDIS_URL"
+render "${MINIMAL[@]}" --set web.env.SESSION_STORE=redis
+{ [ "$RC" -ne 0 ] && grep -q 'no non-empty REDIS_URL' <<<"$OUT"; } && pass "external-redis path without REDIS_URL rejected" || fail "enabled:false + SESSION_STORE=redis must still need a URL"
+# Empty is not present: every other guard here rejects a blank value, and a
+# blank URL is the exact READY-pod-that-500s state the message describes.
+render "${MINIMAL[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=redis --set web.env.REDIS_URL=""
+{ [ "$RC" -ne 0 ] && grep -q 'no non-empty REDIS_URL' <<<"$OUT"; } && pass "empty REDIS_URL rejected" || fail "an empty URL must be rejected like a missing one"
+# Matches the app, which does .strip().lower() on this variable.
+render "${MINIMAL[@]}" --set redis.enabled=true --set web.env.SESSION_STORE=Redis --set web.env.REDIS_URL=redis://x:6379/0
+[ "$RC" -eq 0 ] && pass "SESSION_STORE is case-insensitive, as the app reads it" || fail "Redis should be accepted: the app lowercases"
+
+echo "== J: the overlay actually persists chat, and the tag is well-formed =="
+# The feature this chart exists to ship is the sidebar; on the default store a
+# release empties it. Assert the deployed overlay opts out of that.
+render "${BASE[@]}"
+[ "$RC" -eq 0 ] && grep -q 'SESSION_STORE: "redis"' <<<"$OUT" && grep -q 'REDIS_URL:' <<<"$OUT" && grep -q 'kind: StatefulSet' <<<"$OUT" && pass "deployed overlay persists chat threads" || fail "overlay must set SESSION_STORE=redis AND REDIS_URL"
+# Nothing rendered the tag actually committed: every case above overrides it,
+# so a fat-fingered digit or a reverted bump stayed green. The overlay comment
+# records a hard floor of ordinal 59 -- below it the pod crash-loops on first
+# sync and nothing recovers it, since there is no image-updater.
+render -f "$CHART/pai-risk-mlops-platform-values.yaml" --set web.forwardedAllowIps=10.42.0.0/16
+COMMITTED_TAG=$(grep -oE 'ark-chatbot:[^"]+' <<<"$OUT" | head -1 | cut -d: -f2)
+if [[ "$COMMITTED_TAG" =~ ^9[0-9]{13}-[0-9a-f]{7,40}-arm64$ ]]; then
+  pass "committed tag is well-formed ($COMMITTED_TAG)"
+  # Computed INSIDE the match. Unconditionally, a malformed tag makes this
+  # substring a non-number and `set -u` kills the script here -- which today
+  # only hides the summary line, because this is the last assertion in the
+  # file, and tomorrow silently skips whoever appends a case K.
+  ORDINAL=$(( 10#${COMMITTED_TAG:2:12} ))
+  [ "$ORDINAL" -ge 59 ] && pass "committed ordinal $ORDINAL is above the floor of 59" || fail "ordinal $ORDINAL is below the documented floor of 59"
+else
+  fail "committed tag malformed: $COMMITTED_TAG"
+fi
 
 echo; [ "$FAILED" -eq 0 ] && echo "All ark-onboarding-bot render assertions passed." || echo "Render assertions FAILED."; exit "$FAILED"

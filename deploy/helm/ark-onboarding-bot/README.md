@@ -21,6 +21,8 @@ overlay for the cluster, secrets from AWS Secrets Manager through the cluster's
 | `proxy-buffering: off` on the Ingress | `values.yaml` | The bot streams answers over SSE; buffered, they arrive all at once. |
 | `startupProbe` on `/ready` | `values.yaml` | The encoder warms on first `/ready`; liveness must not kill a pod that is still warming. `/ready` also fails without the backend credential. |
 | Auth gate off, `required` URLs when on | `ingress.yaml`, guard | Same auth-url pattern as the doc-site funnel; an empty auth-url is silently dropped by nginx-ingress (fails OPEN), so the render refuses it. |
+| `redis.enabled` requires `SESSION_STORE=redis` | `_helpers.tpl` guard | A Redis the app never connects to looks healthy on the dashboard while chats still vanish on every restart. An absent key, an empty value and `memory` all land here. |
+| `SESSION_STORE=redis` requires a non-empty `REDIS_URL` | `_helpers.tpl` guard | `build_session_store` raises on the missing URL and `/ready` never touches the session store, so the pod goes READY and STAYS there while `/api/sessions` 500s and the ask path returns a 502 that points at the gateway instead of at the overlay. Keyed on `SESSION_STORE`, not `redis.enabled`, so it also covers the external-Redis path. |
 | `readOnlyRootFilesystem: false` for the first deploy | `values.yaml` | The mounts for every write path are in place; flip to true after the smoke passes against it, not before. |
 
 ## Go-live, in order
@@ -104,6 +106,18 @@ Each step unblocks the next. Steps 2-4 are platform-side.
 
 Edit `image.tag` in the overlay to a previous tag that exists in ECR and merge.
 ArgoCD rolls it within minutes. Do not `kubectl set image`: `selfHeal` reverts it.
+
+**Rolling the image back is safe for the app.** Every image that reads
+`SESSION_STORE` has had a Redis branch since `19c4a9a`, and older images ignore
+the variable entirely, so a tag revert does not strand the pod against a store
+it cannot speak to.
+
+**Turning Redis back OFF is a different operation, and it is not a tag edit.**
+The Redis PVC comes from `volumeClaimTemplates`, so the StatefulSet controller
+owns it, not this chart: reverting the change removes the StatefulSet and
+LEAVES the volume, still holding the chat threads. That is the benign
+direction, but re-enabling later reattaches the old data rather than starting
+clean. Delete the PVC deliberately if a clean slate is what you want.
 
 ## Verify locally
 
