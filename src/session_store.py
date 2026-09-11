@@ -125,7 +125,14 @@ DEFAULT_SIDEBAR_PAGE_SIZE = 50
 
 # Applied to both connect and read. See RedisSessionStore.__init__ for why a
 # missing timeout turns the readiness probe into the outage it reports on.
-REDIS_SOCKET_TIMEOUT_SECONDS = 2.0
+#
+# 0.5s, and the number is set BY the probe budget rather than by what feels
+# generous. /ready is the probe path, and a kubelet httpGet defaults to
+# timeoutSeconds: 1 -- so anything at or above one second means a blackholed
+# Redis fails the probe instead of being reported by it. The chart now also
+# sets timeoutSeconds explicitly (web.probes.*.timeoutSeconds), but this side
+# must hold on its own: the app is deployed by charts we do not own too.
+REDIS_SOCKET_TIMEOUT_SECONDS = 0.5
 
 
 def sidebar_page_size() -> int:

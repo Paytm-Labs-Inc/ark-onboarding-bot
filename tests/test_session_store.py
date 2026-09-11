@@ -5,8 +5,11 @@ from __future__ import annotations
 import calendar
 from datetime import UTC, datetime
 import os
+import pathlib
 import time
 import unittest
+
+import yaml
 from unittest.mock import patch
 
 from src.chat import ask_in_session, list_user_sessions, load_session_payload, reset_session
@@ -615,3 +618,55 @@ class RedisClientHasTimeoutsTests(unittest.TestCase):
             reset_session_store(None)
         self.assertFalse(health["ok"])
         self.assertEqual(health["error"], "TimeoutError")
+
+
+class SocketTimeoutFitsTheProbeBudgetTests(unittest.TestCase):
+    """The socket timeout is set BY the probe budget, so pin the relationship.
+
+    Two independent numbers in two different files have to agree, and the
+    failure when they disagree is silent and remote: a blackholed Redis makes
+    ping() outlast the kubelet httpGet timeout, readiness fails, and the pod
+    leaves the Service -- which is the outage the store probe was added to
+    prevent rather than cause. This already happened once at 2s against
+    kubelet's 1s default.
+
+    Asserted against the chart rather than a copy of the number, so bumping one
+    side without the other cannot pass.
+    """
+
+    CHART_VALUES = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "deploy" / "helm" / "ark-onboarding-bot" / "values.yaml"
+    )
+
+    def _probe_timeouts(self) -> dict[str, float]:
+        values = yaml.safe_load(self.CHART_VALUES.read_text(encoding="utf-8"))
+        probes = values["web"]["probes"]
+        return {name: probes[name]["timeoutSeconds"] for name in ("startup", "readiness", "liveness")}
+
+    def test_every_probe_declares_a_timeout(self) -> None:
+        # Left implicit, kubelet uses 1s -- which is below the client's own
+        # timeout and turns a slow store into a failed probe.
+        for name, timeout in self._probe_timeouts().items():
+            with self.subTest(probe=name):
+                self.assertIsNotNone(timeout, f"{name} probe must set timeoutSeconds")
+                self.assertGreater(timeout, 0)
+
+    def test_the_client_gives_up_before_the_probe_does(self) -> None:
+        # The app's timeout must fire FIRST, so /ready reports the failure
+        # instead of being cut off mid-probe with nothing to say.
+        for name, timeout in self._probe_timeouts().items():
+            with self.subTest(probe=name):
+                self.assertLess(
+                    REDIS_SOCKET_TIMEOUT_SECONDS,
+                    timeout,
+                    f"socket timeout {REDIS_SOCKET_TIMEOUT_SECONDS}s must be under the "
+                    f"{name} probe's {timeout}s budget",
+                )
+
+    def test_it_also_holds_under_a_chart_we_do_not_own(self) -> None:
+        # The app is deployed by other charts too, where timeoutSeconds may be
+        # left at kubelet's 1s default. The client has to be safe there as well,
+        # which is why 0.5s rather than "just under whatever our chart says".
+        KUBELET_DEFAULT_HTTPGET_TIMEOUT = 1.0
+        self.assertLess(REDIS_SOCKET_TIMEOUT_SECONDS, KUBELET_DEFAULT_HTTPGET_TIMEOUT)
