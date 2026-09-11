@@ -29,6 +29,12 @@ jobs:
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
           ./actionlint -color
 
+      # Checks the eval data rather than the bot, and needs nothing installed
+      # to do it, so a padded holdout or a gate scored against its own patterns
+      # fails here in seconds rather than after the whole eval chain has run.
+      - name: Eval data checks
+        run: python3 eval/validate_eval_data.py
+
   retrieval-eval:
     needs: workflow-lint
     runs-on: ubuntu-latest
