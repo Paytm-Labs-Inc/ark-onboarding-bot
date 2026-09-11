@@ -4,6 +4,8 @@ from __future__ import annotations
 
 
 def case_badge_label(case: str | None, *, cannot_fix_reason: str | None = None) -> str:
+    if case == "completed":
+        return "Completed"
     if case == "already_fixed":
         return "Already fixed"
     if case == "needs_fix":

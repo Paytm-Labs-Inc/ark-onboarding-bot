@@ -6,7 +6,7 @@ import json
 import unittest
 
 from src.ark_client import ArkClient
-from src.scout import gather_scout_report
+from src.scout import ScoutReport, gather_scout_report, session_succeeded
 
 
 class _FakeResponse:
@@ -80,6 +80,36 @@ class ScoutTests(unittest.TestCase):
         self.assertEqual(len(report.raw_events), 1)
         self.assertEqual(report.raw_events[0]["type"], "session_failed")
         self.assertEqual(report.raw_action_results, [])
+
+    def test_session_succeeded_when_completed_without_error(self) -> None:
+        report = ScoutReport(
+            session_id="s-fbtj7o5j90",
+            found=True,
+            status="completed",
+            stage="smoke",
+            gather_errors=["worktree_diff: Unknown method: worktree"],
+        )
+        self.assertTrue(session_succeeded(report))
+
+    def test_session_not_succeeded_when_failed(self) -> None:
+        report = ScoutReport(
+            session_id="s-abc1234567",
+            found=True,
+            status="failed",
+            stage="pr",
+            error="git push failed",
+        )
+        self.assertFalse(session_succeeded(report))
+
+    def test_session_not_succeeded_when_completed_but_stage_failed(self) -> None:
+        report = ScoutReport(
+            session_id="s-abc1234567",
+            found=True,
+            status="completed",
+            stage="verify",
+            raw_show={"stage_results": {"verify": {"ok": False, "message": "tests failed"}}},
+        )
+        self.assertFalse(session_succeeded(report))
 
     def test_missing_session(self) -> None:
         client = ArkClient(
