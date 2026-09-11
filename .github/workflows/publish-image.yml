@@ -43,11 +43,16 @@ name: Publish image
 # MUST name an arm64 runner: the build is linux/arm64 and skips emulation when
 # the variable is set, so an amd64 self-hosted runner fails in buildx.
 #
-# `latest` is published for humans only. It is safe for the deploy because the
-# argocd-image-updater entry MUST carry
+# `latest` is published for humans only -- nothing deploys from it. On this
+# cluster image.tag is hand-maintained in the overlay and bumped by PR, because
+# argocd-image-updater is deliberately not wired here (it needs a
+# per-repository write credential this cluster does not have). So the tag a
+# release ships is whatever a human wrote, which is exactly why
+# test-render.sh case J asserts the committed tag's shape and ordinal floor.
+#
+# If image-updater is ever wired up, its entry MUST carry
 #   allow-tags: regexp:^[0-9]{14}-[a-f0-9]{7,40}-arm64$
-# (the chart README's app-of-apps snippet includes it); without that filter
-# `latest` sorts above every ordinal tag and the app pins to a mutable tag.
+# or `latest` sorts above every ordinal tag and the app pins to a mutable tag.
 
 # workflow_dispatch deliberately takes no ref input. checkout would honour one,
 # but docker/metadata-action derives its tags from the workflow context, so a
