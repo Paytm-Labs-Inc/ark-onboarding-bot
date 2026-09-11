@@ -70,9 +70,16 @@ web:
     # of seconds cold. startupProbe covers it so liveness never kills a pod
     # that is still warming, and readiness stays honest afterwards (it also
     # fails when the backend credential is missing -- see the app's /ready).
-    startup:   { path: /ready,  periodSeconds: 5,  failureThreshold: 36 }   # up to 3 min
-    readiness: { path: /ready,  periodSeconds: 10, failureThreshold: 3 }
-    liveness:  { path: /health, periodSeconds: 30, failureThreshold: 3 }
+    # timeoutSeconds is explicit because the DEFAULT IS 1s, and /ready now does
+    # a Redis round trip. Left implicit, a slow-but-alive store fails the probe
+    # and kubelet pulls a pod that is answering questions fine -- the outcome
+    # the store probe was added to prevent. 3s sits above the client's own 0.5s
+    # socket timeout (REDIS_SOCKET_TIMEOUT_SECONDS) with room for the gateway
+    # check beside it, so the app's timeout is always the one that fires first
+    # and /ready gets to REPORT the failure rather than be cut off mid-probe.
+    startup:   { path: /ready,  periodSeconds: 5,  failureThreshold: 36, timeoutSeconds: 3 }   # up to 3 min
+    readiness: { path: /ready,  periodSeconds: 10, failureThreshold: 3,  timeoutSeconds: 3 }
+    liveness:  { path: /health, periodSeconds: 30, failureThreshold: 3,  timeoutSeconds: 3 }
   # The image runs as a non-root user with the app tree read-only in practice;
   # the only writes are the JSONL logs under eval/ and /tmp, both mounted below.
   # readOnlyRootFilesystem is OFF for the first deploy and should be flipped to

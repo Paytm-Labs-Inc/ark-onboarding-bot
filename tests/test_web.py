@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+
+import anyio
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -465,6 +467,70 @@ class ReadyReportsWhatItVerifiedTests(unittest.TestCase):
             self.assertEqual(payload["gateway"], "ok")
         finally:
             os.environ.pop("PI_MODEL", None)
+
+    @patch("src.web.unusable_backend_model", return_value=None)
+    @patch("src.web.check_retrieval_ready", return_value=(True, {"status": "ready", "chunks": 393}))
+    def test_the_probe_names_the_store(self, _r, _g) -> None:
+        from src.session_store import MemorySessionStore, reset_session_store
+
+        os.environ["PI_API_KEY"] = "pi-x"
+        reset_session_store(MemorySessionStore())
+        try:
+            store = TestClient(app).get("/ready").json()["store"]
+            self.assertEqual(store["backend"], "memory")
+            self.assertTrue(store["ok"])
+            # durable:false is the field's whole purpose -- a pod on a plain dict
+            # reports READY identically to one on Redis.
+            self.assertFalse(store["durable"])
+        finally:
+            reset_session_store(None)
+
+    @patch("src.web.unusable_backend_model", return_value=None)
+    @patch("src.web.check_retrieval_ready", return_value=(True, {"status": "ready", "chunks": 393}))
+    def test_a_degraded_store_is_reported_and_is_NOT_a_503(self, _r, _g) -> None:
+        """The contract this endpoint's comment argues for, pinned.
+
+        The bot answers questions without history, so a broken store is a lost
+        feature rather than a dead service -- 503ing here would pull a working
+        assistant out of the load balancer over its sidebar. Nothing asserted
+        that, so a later change that failed readiness on store.ok would have
+        stayed green.
+        """
+        os.environ["PI_API_KEY"] = "pi-x"
+        with patch(
+            "src.web.session_store_health",
+            return_value={"backend": "redis", "durable": True, "ok": False, "error": "ConnectionError"},
+        ):
+            response = TestClient(app).get("/ready")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "ready")
+        self.assertFalse(payload["store"]["ok"])
+        self.assertEqual(payload["store"]["error"], "ConnectionError")
+
+    @patch("src.web.unusable_backend_model", return_value=None)
+    @patch("src.web.check_retrieval_ready", return_value=(True, {"status": "ready", "chunks": 393}))
+    def test_the_store_probe_runs_off_the_event_loop(self, _r, _g) -> None:
+        # It is a blocking socket round trip on the single replica. Called
+        # inline it would freeze /health, in-flight SSE and middleware for
+        # exactly as long as the store is slow -- the case it exists to detect,
+        # so the naive version makes the outage worse the moment it works. The
+        # gateway probe is already held to this; nothing held the store probe.
+        os.environ["PI_API_KEY"] = "pi-x"
+        with patch("src.web.anyio.to_thread.run_sync", wraps=anyio.to_thread.run_sync) as spy:
+            TestClient(app).get("/ready")
+        # The other probes are MagicMocks here and have no __name__, so read it
+        # defensively rather than assuming every offloaded callable is a
+        # function.
+        offloaded = [
+            getattr(call.args[0], "__name__", "") for call in spy.call_args_list if call.args
+        ]
+        self.assertIn("session_store_health", offloaded)
+        # Through the shared limiter, like the other two probes.
+        self.assertTrue(
+            any(call.kwargs.get("limiter") is not None for call in spy.call_args_list),
+            "store probe must go through the probe limiter",
+        )
 
     @patch("src.web.unusable_backend_model", return_value="model 'x' is not served by the gateway")
     @patch("src.web.check_retrieval_ready", return_value=(True, {"status": "ready", "chunks": 393}))

@@ -55,6 +55,11 @@
       margin: 0;
       padding: 0;
       overflow-y: auto;
+      /* The rail scrolls DOWN, never sideways. One long unbroken title pushed
+         the row past the rail and the whole list gained a horizontal scrollbar,
+         which is not a gesture this control has. Measured on production: 283px
+         of content in a 255px rail. */
+      overflow-x: hidden;
       min-height: 0;
       display: flex;
       flex-direction: column;
@@ -66,6 +71,12 @@
          same target it was as a div. */
       display: block;
       width: 100%;
+      /* THE cause of the sideways scroll, not the scrollbar itself. A flex item
+         defaults to min-width: auto, so this button refused to shrink below its
+         own text and the ellipsis inside it could never engage -- the row simply
+         got wider. ark-ui writes the same idiom on its rail rows: `min-w-0 ...
+         truncate`. */
+      min-width: 0;
       font: inherit;
       color: inherit;
       border: 1px solid transparent;
@@ -77,8 +88,15 @@
       transition: background var(--ark-duration-1) var(--ark-ease);
     }
     .session-item:hover { background: var(--ark-elevated); }
-    /* The row and its delete control share the <li>. */
-    .session-list li { display: flex; align-items: center; gap: var(--ark-space-1); }
+    /* The row and its delete control share the <li>, which is itself a flex
+       item -- so it needs min-width: 0 too, or the <li> is the thing that
+       refuses to shrink and the button inside never gets the chance. */
+    .session-list li {
+      display: flex;
+      align-items: center;
+      gap: var(--ark-space-1);
+      min-width: 0;
+    }
     .session-delete {
       flex: none;
       border: 0;
@@ -129,6 +147,9 @@
       background: var(--ark-elevated);
     }
     .session-title {
+      /* `w-full truncate`, in ark-ui's words: the span has to own a width for
+         the ellipsis to have an edge to appear at. */
+      width: 100%;
       font-size: var(--ark-text-sm);
       font-weight: 500;
       white-space: nowrap;
@@ -136,9 +157,16 @@
       text-overflow: ellipsis;
     }
     .session-meta {
+      /* Truncates on the same terms. This line carries a linked ark session id
+         on some rows, which is exactly the kind of unbreakable token that
+         caused the overflow in the first place. */
+      width: 100%;
       margin-top: 2px;
       font-size: var(--ark-text-xs);
       color: var(--ark-fg-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .session-empty {
       font-size: var(--ark-text-sm);

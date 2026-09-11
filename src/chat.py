@@ -18,6 +18,7 @@ from src.session_store import (
     get_session_store,
     history_summary_max_chars,
     max_history_turns,
+    session_store_backend,
     stored_to_payload,
     title_from_question,
 )
@@ -188,6 +189,20 @@ def load_session_payload(session_id: str, user_id: str = ANONYMOUS_USER) -> dict
     if stored is None or stored.user_id != user_id:
         return None
     return stored_to_payload(stored)
+
+
+def session_store_health() -> dict[str, object]:
+    """What the store is and whether it answers, for /ready.
+
+    Catches construction too, not just the probe: build_session_store() raises
+    on a missing REDIS_URL or an unknown backend, and that raise happens on the
+    first session request rather than at boot -- so without this, the one probe
+    meant to surface a broken store would itself 500.
+    """
+    try:
+        return get_session_store().health()
+    except Exception as exc:  # noqa: BLE001 -- a probe reports, never raises
+        return {"backend": session_store_backend(), "ok": False, "error": str(exc)}
 
 
 def list_user_sessions(user_id: str, archived: bool = False) -> list[dict[str, Any]]:

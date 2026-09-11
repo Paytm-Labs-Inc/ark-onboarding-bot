@@ -5,8 +5,11 @@ from __future__ import annotations
 import calendar
 from datetime import UTC, datetime
 import os
+import pathlib
 import time
 import unittest
+
+import yaml
 from unittest.mock import patch
 
 from src.chat import ask_in_session, list_user_sessions, load_session_payload, reset_session
@@ -18,6 +21,7 @@ from src.session_store import (
     StoredTurn,
     TITLE_MAX_LEN,
     _parse_iso,
+    REDIS_SOCKET_TIMEOUT_SECONDS,
     archive_after_days,
     extract_ark_session_id,
     max_stored_turns,
@@ -426,3 +430,275 @@ class ListingDoesNotReadSessionBodiesTests(unittest.TestCase):
         archived = self.store.list_for_user("user-z", archived=True)
         self.assertEqual([s.session_id for s in active], [])
         self.assertEqual([s.session_id for s in archived], ["redis-0"])
+
+
+@unittest.skipUnless(fakeredis is not None, "fakeredis not installed")
+class ListingIsPipelinedAndBoundedTests(unittest.TestCase):
+    """Drawing the sidebar costs one metadata round trip, not one per thread.
+
+    The body reads were already gone; this is the other half. The page lists
+    twice per refresh and refreshes on load, after every answer, on New chat and
+    after every delete, so a per-thread HGETALL multiplied by every one of those.
+    And the archived index only grows -- nothing but an explicit delete removes
+    from it -- so an unbounded list got slower for the life of the browser id.
+    """
+
+    def setUp(self) -> None:
+        self.server = fakeredis.FakeStrictRedis(decode_responses=True)
+        self.store = RedisSessionStore.__new__(RedisSessionStore)
+        self.store._client = self.server
+        reset_session_store(self.store)
+
+    def tearDown(self) -> None:
+        reset_session_store(None)
+        os.environ.pop("SIDEBAR_PAGE_SIZE", None)
+
+    def _seed(self, count: int) -> None:
+        for i in range(count):
+            self.store.save(
+                StoredSession(
+                    session_id=f"redis-{i}",
+                    user_id="user-z",
+                    title=f"Thread {i}",
+                    turns=[StoredTurn(f"q{i}", "a", [], [])],
+                )
+            )
+
+    def test_metadata_is_read_in_one_round_trip(self) -> None:
+        self._seed(20)
+        calls: list[str] = []
+        real = self.server.hgetall
+
+        def counting(key, *a, **kw):
+            calls.append(key)
+            return real(key, *a, **kw)
+
+        self.server.hgetall = counting  # type: ignore[method-assign]
+        try:
+            listed = self.store.list_for_user("user-z", archived=False)
+        finally:
+            self.server.hgetall = real  # type: ignore[method-assign]
+
+        self.assertEqual(len(listed), 20)
+        # Zero DIRECT hgetall calls: they all went through the pipeline. The
+        # assertion is about round trips, so it has to look at the client rather
+        # than at the returned rows.
+        self.assertEqual(calls, [], f"{len(calls)} sequential HGETALLs")
+
+    def test_the_list_is_capped(self) -> None:
+        os.environ["SIDEBAR_PAGE_SIZE"] = "5"
+        # Distinct timestamps on purpose. The zset score is _parse_iso(updated_at),
+        # so rows saved inside the same second tie and Redis falls back to
+        # lexicographic order -- which would make an ordering assertion here pass
+        # or fail on how fast the machine is, not on the cap.
+        base = time.time() - 10_000
+        for i in range(12):
+            self.store.save(
+                StoredSession(
+                    session_id=f"redis-{i}",
+                    user_id="user-z",
+                    title=f"Thread {i}",
+                    updated_at=datetime.fromtimestamp(base + i * 60, UTC).isoformat(),
+                    turns=[StoredTurn(f"q{i}", "a", [], [])],
+                ),
+                touch_activity=False,
+            )
+        listed = self.store.list_for_user("user-z", archived=False)
+        self.assertEqual(len(listed), 5)
+        # Newest first, so the cap drops the oldest rather than an arbitrary five.
+        self.assertEqual(listed[0].session_id, "redis-11")
+        self.assertNotIn("redis-0", [row.session_id for row in listed])
+
+    def test_the_memory_store_is_capped_the_same_way(self) -> None:
+        # Two backends that disagree about a limit is a behaviour found in prod.
+        os.environ["SIDEBAR_PAGE_SIZE"] = "5"
+        mem = MemorySessionStore()
+        reset_session_store(mem)
+        for i in range(12):
+            mem.save(
+                StoredSession(
+                    session_id=f"mem-{i}",
+                    user_id="user-z",
+                    title=f"Thread {i}",
+                    turns=[StoredTurn(f"q{i}", "a", [], [])],
+                )
+            )
+        self.assertEqual(len(mem.list_for_user("user-z", archived=False)), 5)
+
+
+class SessionStoreHealthTests(unittest.TestCase):
+    """/ready must be able to tell a working store from a configured one."""
+
+    def tearDown(self) -> None:
+        reset_session_store(None)
+
+    def test_memory_reports_itself_as_not_durable(self) -> None:
+        from src.chat import session_store_health
+
+        reset_session_store(MemorySessionStore())
+        health = session_store_health()
+        self.assertEqual(health["backend"], "memory")
+        self.assertFalse(health["durable"])
+        self.assertTrue(health["ok"])
+
+    @unittest.skipUnless(fakeredis is not None, "fakeredis not installed")
+    def test_redis_reports_ok_when_it_answers(self) -> None:
+        from src.chat import session_store_health
+
+        store = RedisSessionStore.__new__(RedisSessionStore)
+        store._client = fakeredis.FakeStrictRedis(decode_responses=True)
+        reset_session_store(store)
+        health = session_store_health()
+        self.assertEqual(health["backend"], "redis")
+        self.assertTrue(health["ok"])
+
+    def test_an_unreachable_redis_reports_rather_than_raising(self) -> None:
+        # The probe exists to surface this state; raising would make the one
+        # endpoint meant to reveal a broken store 500 instead.
+        from src.chat import session_store_health
+
+        class Dead:
+            def ping(self):
+                raise ConnectionError("Connection refused")
+
+        store = RedisSessionStore.__new__(RedisSessionStore)
+        store._client = Dead()
+        reset_session_store(store)
+        health = session_store_health()
+        self.assertFalse(health["ok"])
+        self.assertEqual(health["error"], "ConnectionError")
+
+
+class RedisClientHasTimeoutsTests(unittest.TestCase):
+    """An unreachable Redis must FAIL the probe, not block it.
+
+    health() exists to surface a broken store. Without socket timeouts a
+    blackholed REDIS_URL leaves ping() waiting indefinitely, which hangs /ready
+    on the shared probe limiter -- so kubelet marks the pod unready and pulls a
+    working assistant out of the load balancer. The probe would have caused the
+    outage it was written to report.
+    """
+
+    def test_the_client_is_built_with_connect_and_read_timeouts(self) -> None:
+        import redis
+
+        captured: dict[str, object] = {}
+
+        def capturing_from_url(url, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        # Patch the real constructor: __init__ calls redis.Redis.from_url, so a
+        # stand-in module has to have that exact shape and a wrong guess here
+        # would pass for the wrong reason.
+        with patch.object(redis.Redis, "from_url", staticmethod(capturing_from_url)):
+            RedisSessionStore("redis://example:6379/0")
+
+        self.assertEqual(captured.get("socket_connect_timeout"), REDIS_SOCKET_TIMEOUT_SECONDS)
+        self.assertEqual(captured.get("socket_timeout"), REDIS_SOCKET_TIMEOUT_SECONDS)
+        # A timeout that is None or absent is the bug; assert it is a real number.
+        self.assertIsInstance(REDIS_SOCKET_TIMEOUT_SECONDS, float)
+        self.assertGreater(REDIS_SOCKET_TIMEOUT_SECONDS, 0)
+
+    def test_a_timing_out_ping_reports_rather_than_propagating(self) -> None:
+        # redis-py raises TimeoutError once the socket timeout fires; health()
+        # has to turn that into ok: false like any other failure.
+        from src.chat import session_store_health
+
+        class TimingOut:
+            def ping(self):
+                raise TimeoutError("Timeout reading from socket")
+
+        store = RedisSessionStore.__new__(RedisSessionStore)
+        store._client = TimingOut()
+        reset_session_store(store)
+        try:
+            health = session_store_health()
+        finally:
+            reset_session_store(None)
+        self.assertFalse(health["ok"])
+        self.assertEqual(health["error"], "TimeoutError")
+
+
+class SocketTimeoutFitsTheProbeBudgetTests(unittest.TestCase):
+    """The socket timeout is set BY the probe budget, so pin the relationship.
+
+    Two independent numbers in two different files have to agree, and the
+    failure when they disagree is silent and remote: a blackholed Redis makes
+    ping() outlast the kubelet httpGet timeout, readiness fails, and the pod
+    leaves the Service -- which is the outage the store probe was added to
+    prevent rather than cause. This already happened once at 2s against
+    kubelet's 1s default.
+
+    Asserted against the chart rather than a copy of the number, so bumping one
+    side without the other cannot pass.
+    """
+
+    CHART_VALUES = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "deploy" / "helm" / "ark-onboarding-bot" / "values.yaml"
+    )
+
+    def _probe_timeouts(self) -> dict[str, float]:
+        values = yaml.safe_load(self.CHART_VALUES.read_text(encoding="utf-8"))
+        probes = values["web"]["probes"]
+        return {name: probes[name]["timeoutSeconds"] for name in ("startup", "readiness", "liveness")}
+
+    def test_every_probe_declares_a_timeout(self) -> None:
+        # Left implicit, kubelet uses 1s -- which is below the client's own
+        # timeout and turns a slow store into a failed probe.
+        for name, timeout in self._probe_timeouts().items():
+            with self.subTest(probe=name):
+                self.assertIsNotNone(timeout, f"{name} probe must set timeoutSeconds")
+                self.assertGreater(timeout, 0)
+
+    def test_the_client_gives_up_before_the_probe_does(self) -> None:
+        # The app's timeout must fire FIRST, so /ready reports the failure
+        # instead of being cut off mid-probe with nothing to say.
+        for name, timeout in self._probe_timeouts().items():
+            with self.subTest(probe=name):
+                self.assertLess(
+                    REDIS_SOCKET_TIMEOUT_SECONDS,
+                    timeout,
+                    f"socket timeout {REDIS_SOCKET_TIMEOUT_SECONDS}s must be under the "
+                    f"{name} probe's {timeout}s budget",
+                )
+
+    def test_the_gateway_probe_also_fits_the_budget(self) -> None:
+        # /ready makes TWO outbound calls and both sit under the same kubelet
+        # timeout, so pinning only the Redis one leaves the identical failure
+        # a single call up the same handler. This defaulted to 5s against a 3s
+        # probe budget.
+        from src.answer import READY_PROBE_TIMEOUT_SECONDS
+
+        for name, timeout in self._probe_timeouts().items():
+            with self.subTest(probe=name):
+                self.assertLess(
+                    READY_PROBE_TIMEOUT_SECONDS,
+                    timeout,
+                    f"gateway probe timeout {READY_PROBE_TIMEOUT_SECONDS}s must be under "
+                    f"the {name} probe's {timeout}s budget",
+                )
+
+    def test_both_probes_together_fit_the_budget(self) -> None:
+        # They run in sequence on the same request, so the budget has to cover
+        # the SUM, not each in isolation. This is what the chart comment claims
+        # when it says there is room for the gateway check beside the store one.
+        from src.answer import READY_PROBE_TIMEOUT_SECONDS
+
+        worst_case = REDIS_SOCKET_TIMEOUT_SECONDS + READY_PROBE_TIMEOUT_SECONDS
+        for name, timeout in self._probe_timeouts().items():
+            with self.subTest(probe=name):
+                self.assertLessEqual(
+                    worst_case,
+                    timeout,
+                    f"store {REDIS_SOCKET_TIMEOUT_SECONDS}s + gateway "
+                    f"{READY_PROBE_TIMEOUT_SECONDS}s exceeds the {name} probe's {timeout}s",
+                )
+
+    def test_it_also_holds_under_a_chart_we_do_not_own(self) -> None:
+        # The app is deployed by other charts too, where timeoutSeconds may be
+        # left at kubelet's 1s default. The client has to be safe there as well,
+        # which is why 0.5s rather than "just under whatever our chart says".
+        KUBELET_DEFAULT_HTTPGET_TIMEOUT = 1.0
+        self.assertLess(REDIS_SOCKET_TIMEOUT_SECONDS, KUBELET_DEFAULT_HTTPGET_TIMEOUT)
