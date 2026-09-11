@@ -95,7 +95,8 @@
       gap: var(--ark-space-1);
       min-width: 0;
     }
-    .session-archive {
+    .session-archive,
+    .session-unarchive {
       flex: none;
       border: 0;
       background: transparent;
@@ -113,7 +114,8 @@
                   color var(--ark-duration-1) var(--ark-ease);
       opacity: 0.45;
     }
-    .session-archive svg {
+    .session-archive svg,
+    .session-unarchive svg {
       width: 16px;
       height: 16px;
       stroke: currentColor;
@@ -123,13 +125,18 @@
       stroke-linejoin: round;
     }
     .session-list li:hover .session-archive,
-    .session-archive:focus-visible { opacity: 1; }
-    .session-archive:hover { color: var(--ark-fg); background: var(--ark-elevated); }
-    .session-archive:focus-visible {
+    .session-list li:hover .session-unarchive,
+    .session-archive:focus-visible,
+    .session-unarchive:focus-visible { opacity: 1; }
+    .session-archive:hover,
+    .session-unarchive:hover { color: var(--ark-fg); background: var(--ark-elevated); }
+    .session-archive:focus-visible,
+    .session-unarchive:focus-visible {
       outline: none;
       box-shadow: var(--ark-focus-ring);
     }
-    .session-archive:active { color: var(--ark-fg); background: var(--ark-line); }
+    .session-archive:active,
+    .session-unarchive:active { color: var(--ark-fg); background: var(--ark-line); }
     .archive-dropdown {
       border: 1px solid var(--ark-line);
       border-radius: var(--ark-radius-sm);
@@ -216,34 +223,41 @@
     .archive-toast {
       position: fixed;
       left: 50%;
-      bottom: var(--ark-space-6);
-      transform: translateX(-50%);
+      top: 50%;
+      transform: translate(-50%, -50%);
       display: flex;
       align-items: center;
-      gap: var(--ark-space-3);
-      padding: var(--ark-space-3) var(--ark-space-4);
+      justify-content: space-between;
+      gap: var(--ark-space-5);
+      min-width: min(22rem, calc(100vw - 2rem));
+      max-width: min(28rem, calc(100vw - 2rem));
+      padding: var(--ark-space-5) var(--ark-space-6);
       background: var(--ark-panel);
       border: 1px solid var(--ark-line);
       border-radius: var(--ark-radius-md);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-      font-size: var(--ark-text-sm);
-      z-index: 20;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+      font-size: var(--ark-text-base);
+      line-height: 1.4;
+      z-index: 30;
     }
     .archive-toast.hidden { display: none; }
     .archive-toast-undo {
+      flex: none;
       border: 0;
-      background: transparent;
-      color: var(--ark-violet-500, #6d28d9);
+      background: var(--ark-violet-500, #6d28d9);
+      color: #fff;
       font: inherit;
+      font-size: var(--ark-text-sm);
       font-weight: 600;
       cursor: pointer;
-      padding: 0;
+      padding: var(--ark-space-2) var(--ark-space-4);
+      border-radius: var(--ark-radius-sm);
     }
-    .archive-toast-undo:hover { text-decoration: underline; }
+    .archive-toast-undo:hover { filter: brightness(1.08); }
+    .archive-toast-undo:active { filter: brightness(0.94); }
     .archive-toast-undo:focus-visible {
       outline: none;
       box-shadow: var(--ark-focus-ring);
-      border-radius: var(--ark-radius-sm);
     }
     /* Keyboard users get a visible target. :focus-visible only, so a mouse
        click does not leave a ring behind. */
@@ -602,6 +616,13 @@
       '<path d="M12 12v6"></path>' +
       '<path d="M9 15h6"></path>' +
       "</svg>";
+    const UNARCHIVE_ICON =
+      '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+      '<path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"></path>' +
+      '<path d="M1 3h22v5H1z"></path>' +
+      '<path d="M12 18V11"></path>' +
+      '<path d="M9 14l3-3 3 3"></path>' +
+      "</svg>";
 
     let archiveToastTimer = null;
     let lastArchivedSessionId = null;
@@ -912,7 +933,7 @@
     function renderSessionList(
       container,
       sessions,
-      { emptyLabel = "No chats yet", showArchiveButton = false } = {},
+      { emptyLabel = "No chats yet", showArchiveButton = false, showUnarchiveButton = false } = {},
     ) {
       container.replaceChildren();
       if (!sessions.length) {
@@ -963,6 +984,22 @@
           item.appendChild(archiveBtn);
         }
 
+        if (showUnarchiveButton) {
+          const unarchiveBtn = document.createElement("button");
+          unarchiveBtn.type = "button";
+          unarchiveBtn.className = "session-unarchive";
+          unarchiveBtn.innerHTML = UNARCHIVE_ICON;
+          unarchiveBtn.setAttribute(
+            "aria-label",
+            `Unarchive chat: ${session.title || "Untitled chat"}`,
+          );
+          unarchiveBtn.addEventListener("click", async (event) => {
+            event.stopPropagation();
+            await unarchiveSession(session.session_id);
+          });
+          item.appendChild(unarchiveBtn);
+        }
+
         container.appendChild(item);
       }
     }
@@ -999,6 +1036,7 @@
           archivedSessions,
           {
             emptyLabel: archivedResp.ok ? "No archived chats" : "Could not load archive",
+            showUnarchiveButton: true,
           },
         );
         if (archivedResp.ok) {
@@ -1175,10 +1213,7 @@
       }
     }
 
-    async function undoArchive() {
-      if (!lastArchivedSessionId) return;
-      const sid = lastArchivedSessionId;
-      hideArchiveToast();
+    async function unarchiveSession(sid) {
       try {
         const response = await fetch(`api/session/${encodeURIComponent(sid)}/unarchive`, {
           method: "POST",
@@ -1195,6 +1230,13 @@
       } catch (_error) {
         setStatus("Could not restore that chat.", true);
       }
+    }
+
+    async function undoArchive() {
+      if (!lastArchivedSessionId) return;
+      const sid = lastArchivedSessionId;
+      hideArchiveToast();
+      await unarchiveSession(sid);
     }
 
     function startNewChat() {

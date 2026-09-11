@@ -555,7 +555,7 @@ class SidebarTitleOverflowTests(unittest.TestCase):
         self.assertIn("overflow-x: hidden", list_css)
         item_css = chat[chat.index(".session-item {") : chat.index(".session-item:hover")]
         self.assertIn("min-width: 0", item_css)
-        li_css = chat[chat.index(".session-list li {") : chat.index(".session-archive {")]
+        li_css = chat[chat.index(".session-list li {") : chat.index(".session-archive,")]
         self.assertIn("min-width: 0", li_css)
         title_css = chat[chat.index(".session-title {") : chat.index(".session-meta {")]
         self.assertIn("width: 100%", title_css)
@@ -563,9 +563,33 @@ class SidebarTitleOverflowTests(unittest.TestCase):
         meta_css = chat[chat.index(".session-meta {") : chat.index(".session-empty {")]
         self.assertIn("width: 100%", meta_css)
         self.assertIn("text-overflow: ellipsis", meta_css)
-        archive_css = chat[chat.index(".session-archive {") : chat.index(".session-archive svg {")]
+        archive_css = chat[chat.index(".session-archive,") : chat.index(".session-archive svg,")]
         self.assertIn("flex: none", archive_css)
         self.assertIn("min-width: 24px", archive_css)
+
+
+class ArchiveUnarchiveControlTests(unittest.TestCase):
+    """Archived rows need a way back to Recent, not only the 5-second toast.
+
+    Opening an archived chat does not unarchive it. Without a control on the
+    row, Undo was the only restore after the toast vanished.
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_archived_list_wires_an_unarchive_control(self) -> None:
+        chat = (self.ROOT / "src" / "templates" / "chat.html").read_text(encoding="utf-8")
+        self.assertIn("showUnarchiveButton: true", chat)
+        self.assertIn("Unarchive chat:", chat)
+        self.assertIn("session-unarchive", chat)
+
+    def test_undo_toast_sits_in_the_centre(self) -> None:
+        chat = (self.ROOT / "src" / "templates" / "chat.html").read_text(encoding="utf-8")
+        toast = chat[chat.index(".archive-toast {") : chat.index(".archive-toast.hidden")]
+        self.assertIn("top: 50%", toast)
+        self.assertIn("left: 50%", toast)
+        self.assertIn("translate(-50%, -50%)", toast)
+        self.assertNotIn("bottom:", toast)
 
 
 class ReadyReportsWhatItVerifiedTests(unittest.TestCase):
