@@ -546,7 +546,10 @@ def _run_session_debug(handler):
 
 
 @app.post("/api/session-debug/action")
-def api_session_debug_action(body: DebugActionRequest) -> dict:
+def api_session_debug_action(
+    body: DebugActionRequest,
+    _limit: None = Depends(enforce_ask_rate_limit),
+) -> dict:
     gate_id = body.gate_id.strip()
     action = body.action.strip()
     return _run_session_debug(lambda: run_debug_action(gate_id, action))
