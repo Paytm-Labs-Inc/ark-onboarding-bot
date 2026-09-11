@@ -275,6 +275,16 @@ def ask_stream(
         }
         return
 
+    if should_refuse(question):
+        done = {"type": "done", **refusal_result(), "stream_mode": "none"}
+        if log:
+            _log_ask_result(
+                question, done, channel=channel, session_id=session_id,
+                duration_ms=_elapsed_ms(started), request_id=request_id,
+            )
+        yield done
+        return
+
     intent, ark_session_id = resolve_intent(question, debug_thread=debug_thread)
     if intent == "session_debug" and ark_session_id:
         for event in debug_session_stream(ark_session_id):
@@ -292,16 +302,6 @@ def ask_stream(
                 yield done
             else:
                 yield event
-        return
-
-    if should_refuse(question):
-        done = {"type": "done", **refusal_result(), "stream_mode": "none"}
-        if log:
-            _log_ask_result(
-                question, done, channel=channel, session_id=session_id,
-                duration_ms=_elapsed_ms(started), request_id=request_id,
-            )
-        yield done
         return
 
     top_k = _default_top_k() if k is None else k
@@ -387,6 +387,15 @@ def ask(
             "chunk_count": 0,
         }
 
+    if should_refuse(question):
+        result = refusal_result()
+        if log:
+            _log_ask_result(
+                question, result, channel=channel, session_id=session_id,
+                duration_ms=_elapsed_ms(started), request_id=request_id,
+            )
+        return result
+
     intent, ark_session_id = resolve_intent(question, debug_thread=debug_thread)
     if intent == "session_debug" and ark_session_id:
         result = debug_session(ark_session_id).to_ask_dict()
@@ -398,15 +407,6 @@ def ask(
                 session_id=session_id,
                 duration_ms=_elapsed_ms(started),
                 request_id=request_id,
-            )
-        return result
-
-    if should_refuse(question):
-        result = refusal_result()
-        if log:
-            _log_ask_result(
-                question, result, channel=channel, session_id=session_id,
-                duration_ms=_elapsed_ms(started), request_id=request_id,
             )
         return result
 

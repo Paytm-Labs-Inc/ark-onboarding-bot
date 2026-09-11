@@ -269,7 +269,10 @@ def run_action(gate_id: str, action: str) -> tuple[str, PendingDebugActions | No
             raw = completion_json(prompt)
             answer = _format_generated(action, raw)
         except Exception as exc:  # noqa: BLE001 — show failure in chat
-            answer = f"Could not generate {ACTION_SPECS[action]['label']}: {exc}"
+            return (
+                f"Could not generate {ACTION_SPECS[action]['label']}: {exc}",
+                pending,
+            )
 
     pending.completed.add(action)
     return answer, pending

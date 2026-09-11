@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,11 +14,18 @@ from src.retrieve import retrieve_scored
 from src.scout import ScoutReport
 
 
+CHANGELOG_UNAVAILABLE = (
+    "Changelog evidence unavailable in this deployment (no git binary or checkout). "
+    "Case 1 'already fixed' matching needs a Foundry repo with git."
+)
+
+
 @dataclass
 class EnrichmentBundle:
     rag_chunks: list[dict[str, Any]] = field(default_factory=list)
     code_chunks: list[dict[str, Any]] = field(default_factory=list)
     changelog_hits: list[dict[str, str]] = field(default_factory=list)
+    changelog_note: str = ""
     worktree_summary: str = ""
     codegraph_summary: str = ""
 
@@ -44,6 +52,21 @@ class EnrichmentBundle:
             f"- {h.get('ref', '?')}: {h.get('subject', '')} ({h.get('date', '')})"
             for h in self.changelog_hits[:8]
         )
+
+
+def git_repo_ready(root: Path) -> bool:
+    """True when git can read commit history from *root*."""
+    if not shutil.which("git") or not root.is_dir():
+        return False
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--git-dir"],
+            capture_output=True,
+            timeout=5,
+        )
+        return proc.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def _grep_codebase(query: str, root: Path, *, limit: int = 5) -> list[dict[str, Any]]:
@@ -120,7 +143,10 @@ def enrich_report(report: ScoutReport, *, top_k: int = 6) -> EnrichmentBundle:
     if not bundle.code_chunks:
         bundle.code_chunks = _grep_codebase(query, root)
     paths = _files_from_worktree(report)
-    bundle.changelog_hits = _recent_commits(root, paths=paths or None)
+    if git_repo_ready(root):
+        bundle.changelog_hits = _recent_commits(root, paths=paths or None)
+    else:
+        bundle.changelog_note = CHANGELOG_UNAVAILABLE
 
     if report.stage_diffs:
         bundle.worktree_summary = report.stage_diffs[:2000]

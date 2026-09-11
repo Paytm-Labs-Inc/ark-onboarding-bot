@@ -101,6 +101,20 @@ def apply_already_fixed_gate(
     if verdict.case != "already_fixed":
         return verdict
 
+    if enrichment.changelog_note:
+        fallback_case = "needs_fix" if verdict.proposed_fix else "cannot_fix"
+        evidence = [enrichment.changelog_note, *verdict.evidence]
+        return DebugVerdict(
+            case=fallback_case,  # type: ignore[arg-type]
+            confidence=max(0.0, verdict.confidence - 0.2),
+            summary=verdict.summary or report.error or "Session failed",
+            root_cause=verdict.root_cause or report.error or "",
+            evidence=evidence[:8],
+            cannot_fix_reason=verdict.cannot_fix_reason or "unknown",
+            proposed_fix=verdict.proposed_fix,
+            matching_fix_ref=None,
+        )
+
     match = find_strong_changelog_match(report, enrichment)
     if match:
         evidence = [match.evidence_line(), *verdict.evidence]

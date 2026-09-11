@@ -11,7 +11,7 @@ from src.session_changelog_evidence import (
     find_strong_changelog_match,
 )
 from src.session_classifier import DebugVerdict
-from src.session_enrichers import EnrichmentBundle
+from src.session_enrichers import CHANGELOG_UNAVAILABLE, EnrichmentBundle
 from src.session_handlers import handle_already_fixed
 
 
@@ -35,6 +35,29 @@ class ChangelogEvidenceTests(unittest.TestCase):
         match = find_strong_changelog_match(report, enrichment)
         self.assertIsNotNone(match)
         self.assertEqual(match.match_type, "error_substring")
+
+    def test_changelog_unavailable_downgrades_already_fixed(self) -> None:
+        report = ScoutReport(
+            session_id="s-abc1234567",
+            found=True,
+            error="some unrelated timeout",
+            stage="verify",
+        )
+        verdict = DebugVerdict(
+            case="already_fixed",
+            confidence=0.9,
+            summary="Looks fixed",
+            root_cause="timeout",
+            evidence=["llm guess"],
+            matching_fix_ref="abc",
+        )
+        gated = apply_already_fixed_gate(
+            verdict,
+            report,
+            EnrichmentBundle(changelog_note=CHANGELOG_UNAVAILABLE),
+        )
+        self.assertNotEqual(gated.case, "already_fixed")
+        self.assertIn("Changelog evidence unavailable", gated.evidence[0])
 
     def test_no_match_downgrades_already_fixed(self) -> None:
         report = ScoutReport(

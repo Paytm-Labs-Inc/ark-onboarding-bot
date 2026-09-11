@@ -120,6 +120,28 @@ class SessionActionsTests(unittest.TestCase):
         self.assertIsNotNone(state)
         self.assertIn("slack_message", state.completed)
 
+    @patch("src.session_actions.completion_json")
+    def test_run_action_keeps_action_on_llm_failure(self, mock_json: MagicMock) -> None:
+        mock_json.side_effect = RuntimeError("gateway 503")
+        report = ScoutReport(session_id="s-abc1234567", found=True, error="arkd boom")
+        verdict = DebugVerdict(
+            case="cannot_fix",
+            confidence=0.9,
+            summary="Platform issue",
+            root_cause="arkd",
+            evidence=["infra"],
+            cannot_fix_reason="infra",
+        )
+        pending = create_action_gate(
+            report, verdict, EnrichmentBundle(), case="cannot_fix"
+        )
+        answer, state = run_action(pending.gate_id, "infra_ticket")
+        self.assertIn("503", answer)
+        self.assertIsNotNone(state)
+        self.assertNotIn("infra_ticket", state.completed)
+        ids = {item["id"] for item in action_menu("cannot_fix", verdict)}
+        self.assertIn("infra_ticket", ids)
+
     @patch("src.session_debug.classify_session")
     @patch("src.session_debug.enrich_report")
     @patch("src.session_debug.gather_scout_report")
@@ -201,6 +223,30 @@ class SessionActionsTests(unittest.TestCase):
         result = run_debug_action("gate1", "rerun_instructions")
         self.assertEqual(result.case, "already_fixed")
         self.assertTrue(result.gate_pending)
+
+    @patch("src.session_debug.run_action")
+    def test_run_debug_action_preserves_cannot_fix_reason(self, mock_run: MagicMock) -> None:
+        from src.session_actions import PendingDebugActions
+
+        pending = PendingDebugActions(
+            gate_id="gate1",
+            case="cannot_fix",
+            ark_session_id="s-abc1234567",
+            report=ScoutReport(session_id="s-abc1234567", found=True),
+            verdict=DebugVerdict(
+                case="cannot_fix",
+                confidence=0.9,
+                summary="Platform issue",
+                root_cause="provisioning timeout",
+                evidence=[],
+                cannot_fix_reason="infra",
+            ),
+            enrichment=EnrichmentBundle(),
+            completed=set(),
+        )
+        mock_run.return_value = ("Ticket draft here.", pending)
+        result = run_debug_action("gate1", "infra_ticket")
+        self.assertEqual(result.cannot_fix_reason, "infra")
 
 
 if __name__ == "__main__":

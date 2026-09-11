@@ -484,31 +484,46 @@ def api_reset(body: ResetRequest) -> dict[str, bool]:
     return {"ok": True}
 
 
-@app.post("/api/session-debug/approve")
-def api_session_debug_approve(body: GateActionRequest) -> dict:
-    result = approve_plan(body.gate_id.strip())
+def _session_debug_response(result) -> dict:
     payload = result.to_ask_dict()
     payload["sources"] = enrich_citations(payload.get("citations", []))
     payload["handoff"] = False
     return payload
+
+
+def _run_session_debug(handler):
+    try:
+        return _session_debug_response(handler())
+    except ValueError as exc:
+        _log_upstream_failure(exc)
+        raise HTTPException(status_code=400, detail=BAD_REQUEST_MESSAGE) from exc
+    except TimeoutError as exc:
+        _log_upstream_failure(exc)
+        raise HTTPException(status_code=504, detail=TIMEOUT_MESSAGE) from exc
+    except PiAtCapacity as exc:
+        raise HTTPException(status_code=503, detail=BUSY_MESSAGE, headers={"Retry-After": "10"}) from exc
+    except RuntimeError as exc:
+        _log_upstream_failure(exc)
+        raise HTTPException(status_code=502, detail=UNAVAILABLE_MESSAGE) from exc
+
+
+@app.post("/api/session-debug/approve")
+def api_session_debug_approve(body: GateActionRequest) -> dict:
+    gate_id = body.gate_id.strip()
+    return _run_session_debug(lambda: approve_plan(gate_id))
 
 
 @app.post("/api/session-debug/reject")
 def api_session_debug_reject(body: GateActionRequest) -> dict:
-    result = reject_plan(body.gate_id.strip())
-    payload = result.to_ask_dict()
-    payload["sources"] = enrich_citations(payload.get("citations", []))
-    payload["handoff"] = False
-    return payload
+    gate_id = body.gate_id.strip()
+    return _run_session_debug(lambda: reject_plan(gate_id))
 
 
 @app.post("/api/session-debug/action")
 def api_session_debug_action(body: DebugActionRequest) -> dict:
-    result = run_debug_action(body.gate_id.strip(), body.action.strip())
-    payload = result.to_ask_dict()
-    payload["sources"] = enrich_citations(payload.get("citations", []))
-    payload["handoff"] = False
-    return payload
+    gate_id = body.gate_id.strip()
+    action = body.action.strip()
+    return _run_session_debug(lambda: run_debug_action(gate_id, action))
 
 
 @app.post("/api/feedback")

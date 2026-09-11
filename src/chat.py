@@ -188,8 +188,10 @@ def enrich_citations(citations: list[str]) -> list[dict[str, str]]:
 def _debug_meta(result: dict[str, Any]) -> dict[str, Any]:
     meta = {key: result[key] for key in _DEBUG_META_KEYS if key in result}
     verdict = result.get("verdict")
-    if isinstance(verdict, dict) and "cannot_fix_reason" in verdict:
-        meta.setdefault("cannot_fix_reason", verdict.get("cannot_fix_reason"))
+    if isinstance(verdict, dict):
+        reason = verdict.get("cannot_fix_reason")
+        if reason and not meta.get("cannot_fix_reason"):
+            meta["cannot_fix_reason"] = reason
     return meta
 
 

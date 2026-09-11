@@ -237,7 +237,7 @@ def approve_plan(plan_id: str) -> DebugResult:
     dispatch_id = str(dispatch.get("dispatch_session_id") or "")
     try:
         pr_info = poll_and_create_pr(dispatch_id)
-    except ArkError as exc:
+    except Exception as exc:  # noqa: BLE001 — dispatch already started; never 500 here
         pr_info = {
             "pr_url": None,
             "message": (
@@ -409,6 +409,7 @@ def run_debug_action(gate_id: str, action: str) -> DebugResult:
     return DebugResult(
         answer=body,
         case=pending.case,
+        cannot_fix_reason=pending.verdict.cannot_fix_reason,
         ark_session_id=pending.ark_session_id,
         gate_id=gate_id,
         gate_pending=plan_still_pending or has_helpers,
