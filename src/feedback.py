@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.jsonl_purge import purge_session_records
+
 FEEDBACK_PATH = Path(__file__).resolve().parent.parent / "eval" / "feedback.jsonl"
 
 
@@ -47,3 +49,17 @@ def read_feedback(path: Path | None = None) -> list[dict[str, Any]]:
             records.append(parsed)
     records.reverse()
     return records
+
+
+def purge_session(session_id: str) -> int:
+    """Erase this session's feedback, as part of a user delete.
+
+    Worse than the query log if it is missed: this keeps the answer in full,
+    not a preview, and /reviews renders it to anyone holding the shared token.
+    """
+    return purge_session_records(
+        FEEDBACK_PATH,
+        session_id,
+        lock=_WRITE_LOCK,
+        lock_timeout=_WRITE_LOCK_TIMEOUT_SECONDS,
+    )
