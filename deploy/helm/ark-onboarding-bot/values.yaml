@@ -119,6 +119,47 @@ logs:
 # In-cluster rather than ElastiCache: measured ~6.8 KB per 4-turn session, so
 # 200mb holds roughly 29k sessions, and at ~6 questions/day ElastiCache would be
 # new metered spend for nothing measurable.
+# Where the retrieval corpus comes from at pod start.
+#   files  chunk and embed data/*.md at boot, which is what runs today
+#   postgres read the stored corpus, so the pod does not re-embed and the corpus
+#          can be refreshed without rebuilding the image
+# Anything that stops Postgres answering falls back to files, so this is safe to
+# flip before an ingest has run -- it just will not do anything yet.
+corpus:
+  store: files
+  ingest:
+    # Renders the ingest Job. Without it nothing ever writes the corpus, and a
+    # pod set to `postgres` would fall back to files forever while every probe
+    # stayed green. That is the failure this flag exists to make impossible to
+    # reach by accident: turning the store on and the ingest off is called out
+    # by a guard rather than discovered in production.
+    enabled: false
+    # Re-pull the documents from the Foundry site before ingesting. This is the
+    # part that decouples a doc edit from an image rebuild: without it the Job
+    # ingests whatever data/ the image happens to carry.
+    #
+    # Off by default because it needs egress to foundry.mypaytm.com, which this
+    # pod has never had to make. The answer path only ever reaches the
+    # inference gateway. Turn it on once that egress is confirmed; until then
+    # the Job ingests the image's copy, which is correct, just not decoupled.
+    refreshDocs: false
+    # The Job runs as a post-install/pre-upgrade hook, so the corpus is in
+    # place before any new pod starts. Helm waits for it, which means a failed
+    # ingest fails the upgrade; `helm upgrade --no-hooks` is the escape hatch.
+    # A scheduled refresh is a follow-up; it needs a CronJob and a decision
+    # about how often the docs really change.
+    backoffLimit: 2
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        # Embedding loads torch and the encoder. Below ~1Gi this is OOM-killed
+        # part-way through and leaves the previous corpus in place, which is the
+        # safe outcome but an invisible one.
+        memory: 1536Mi
+
 redis:
   enabled: false
   image: redis:7-alpine

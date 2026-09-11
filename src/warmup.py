@@ -6,8 +6,10 @@ import logging
 import os
 
 from src.answer import warm_agent
-from src.chunker import DATA_DIR, load_chunks
+from src.chunker import DATA_DIR
+from src.corpus_store import corpus_backend
 from src.retrieve import retrieve
+from src.retriever import default_index_info
 
 logger = logging.getLogger(__name__)
 
@@ -21,22 +23,30 @@ def _warmup_enabled() -> bool:
 
 def check_retrieval_ready() -> tuple[bool, dict[str, object]]:
     """Verify corpus load and a sample retrieval. Used by /ready and startup warmup."""
-    if not DATA_DIR.is_dir():
+    # data/ is only a precondition when it is the corpus. With CORPUS_STORE
+    # =postgres the rows are the corpus, and an image that ships no documents
+    # is the point rather than a fault.
+    if corpus_backend() != "postgres" and not DATA_DIR.is_dir():
         return False, {"status": "not_ready", "reason": "data directory missing"}
-
-    chunks = load_chunks(DATA_DIR)
-    if not chunks:
-        return False, {"status": "not_ready", "reason": "no corpus chunks"}
 
     try:
         hits = retrieve(_WARMUP_QUERY, k=1)
     except Exception as exc:  # noqa: BLE001 — surface readiness failure to caller
         return False, {"status": "not_ready", "reason": f"retrieval failed: {exc}"}
 
+    # Report the corpus actually in use, not the copy on disk. A probe that
+    # counts files while the pod serves rows is the kind of green-but-wrong
+    # signal that has already hidden two outages here. Checked before the hit
+    # count so an empty corpus still says so, rather than being reported as a
+    # retrieval that happened to return nothing.
+    info = default_index_info()
+    if not info["chunks"]:
+        return False, {"status": "not_ready", "reason": "no corpus chunks"}
+
     if not hits:
         return False, {"status": "not_ready", "reason": "retrieval returned no chunks"}
 
-    return True, {"status": "ready", "chunks": len(chunks)}
+    return True, {"status": "ready", **info}
 
 
 def warm_retrieval() -> bool:

@@ -39,4 +39,13 @@ so the wrong config cannot ship green. Returns nothing on success.
 {{- if and (eq (lower (.Values.web.env.SESSION_STORE | default "")) "redis") (not (.Values.web.env.REDIS_URL | default "")) -}}
 {{- fail "SESSION_STORE=redis with no non-empty REDIS_URL in web.env: build_session_store raises on the missing URL, and /ready never touches the session store -- so the pod goes READY and STAYS there while /api/sessions 500s and the ask path returns 502 'upstream unavailable', pointing whoever debugs it at the gateway instead of at this file. Set REDIS_URL." -}}
 {{- end -}}
+{{- if and (eq .Values.corpus.store "postgres") (not (contains "DATABASE_URL" (toString .Values.web.env))) -}}
+{{- fail "corpus.store=postgres without DATABASE_URL in web.env: the pod would find no corpus, fall back to embedding data/ on every boot, and report ready the whole time. Set DATABASE_URL." -}}
+{{- end -}}
+{{- if and .Values.corpus.ingest.enabled (ne .Values.corpus.store "postgres") -}}
+{{- fail "corpus.ingest.enabled with corpus.store not postgres: the Job would spend a minute embedding the corpus into Postgres and every pod would keep reading data/ regardless. Set corpus.store=postgres, or turn the ingest off." -}}
+{{- end -}}
+{{- if hasKey .Values.web.env "CORPUS_STORE" -}}
+{{- fail "CORPUS_STORE belongs in corpus.store, not web.env: setting it in both renders a ConfigMap with a duplicate key." -}}
+{{- end -}}
 {{- end -}}
