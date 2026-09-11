@@ -121,6 +121,25 @@ def session_ttl_seconds() -> int | None:
         return None
 
 
+DEFAULT_SIDEBAR_PAGE_SIZE = 50
+
+
+def sidebar_page_size() -> int:
+    """How many threads one sidebar list returns.
+
+    A cap rather than a preference: the archived index only grows, so an
+    unbounded list gets slower for the life of the browser id. 50 is well past
+    what anyone scrolls and small enough that the pipelined metadata read stays
+    one modest round trip.
+    """
+    raw = os.environ.get("SIDEBAR_PAGE_SIZE", "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_SIDEBAR_PAGE_SIZE
+    return value if value > 0 else DEFAULT_SIDEBAR_PAGE_SIZE
+
+
 def archive_after_days() -> int:
     raw = os.environ.get("SESSION_ARCHIVE_AFTER_DAYS", str(DEFAULT_ARCHIVE_AFTER_DAYS)).strip()
     try:
@@ -292,6 +311,8 @@ class SessionStore(Protocol):
 
     def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]: ...
 
+    def health(self) -> dict[str, object]: ...
+
 
 def _should_archive(session: StoredSession, idle_days: int) -> bool:
     if session.archived:
@@ -370,11 +391,13 @@ class MemorySessionStore:
     def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
         self._apply_archive_rules(user_id)
         index = self._user_archived if archived else self._user_active
+        # Same bound as the Redis path, so a behaviour only one backend has
+        # cannot be discovered in production.
         ordered = sorted(
             index.get(user_id, {}).items(),
             key=lambda item: item[1],
             reverse=True,
-        )
+        )[: sidebar_page_size()]
         summaries: list[SessionSummary] = []
         for session_id, _score in ordered:
             session = self._sessions.get(session_id)
@@ -392,6 +415,16 @@ class MemorySessionStore:
                 )
             )
         return summaries
+
+    def health(self) -> dict[str, object]:
+        """What this store is, in the words a probe should use.
+
+        `durable: False` is the whole point. A pod on this store reports READY
+        exactly like one on Redis, and the difference only shows up when a
+        release empties everybody's sidebar -- which is what shipped the
+        sidebar onto a plain dict in the first place.
+        """
+        return {"backend": "memory", "durable": False, "ok": True}
 
 
 class RedisSessionStore:
@@ -581,10 +614,23 @@ class RedisSessionStore:
     def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
         self._apply_archive_rules(user_id)
         zkey = self._archived_key(user_id) if archived else self._active_key(user_id)
-        session_ids = self._client.zrevrange(zkey, 0, -1)
-        summaries: list[SessionSummary] = []
+        # Bounded, and the newest first. zrevrange(0, -1) returned the whole
+        # index, and the archived one only ever grows -- _apply_archive_rules
+        # moves rows in and nothing but an explicit delete takes them out -- so
+        # that half got monotonically slower for the life of the browser id.
+        session_ids = self._client.zrevrange(zkey, 0, sidebar_page_size() - 1)
+
+        # One round trip for the metadata, not one per thread. The page lists
+        # twice per refresh (active + archived) and refreshes on load, after
+        # every answer, on New chat and after every delete, so at 200 threads
+        # this was 200 sequential HGETALLs each time.
+        pipe = self._client.pipeline(transaction=False)
         for session_id in session_ids:
-            meta = self._client.hgetall(self._meta_key(session_id))
+            pipe.hgetall(self._meta_key(session_id))
+        metas = pipe.execute()
+
+        summaries: list[SessionSummary] = []
+        for session_id, meta in zip(session_ids, metas):
             if not meta:
                 session = self.load(session_id)
                 if session is None:
@@ -609,6 +655,29 @@ class RedisSessionStore:
                 )
             )
         return summaries
+
+
+    def health(self) -> dict[str, object]:
+        """Answer from the server, not from the config.
+
+        /ready reported chunks, model and gateway and said nothing about the
+        session store, so a pod with a wrong REDIS_URL went READY and STAYED
+        there while every session request 500'd -- pointing whoever debugged it
+        at the gateway. The probe that already argues this case for the model
+        ("the key is set" looked the same as "the model answers") was making the
+        same mistake about the store.
+
+        PING is deliberate: it is O(1) and it proves the connection rather than
+        the string. A failure is reported, never raised -- /ready owns whether a
+        degraded store means not-ready, and today it does not, because the bot
+        still answers questions without history.
+        """
+        info: dict[str, object] = {"backend": "redis", "durable": True}
+        try:
+            self._client.ping()
+        except Exception as exc:  # noqa: BLE001 -- a probe reports, never raises
+            return {**info, "ok": False, "error": type(exc).__name__}
+        return {**info, "ok": True}
 
 
 _store: SessionStore | None = None

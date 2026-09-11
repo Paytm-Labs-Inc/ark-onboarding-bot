@@ -426,3 +426,140 @@ class ListingDoesNotReadSessionBodiesTests(unittest.TestCase):
         archived = self.store.list_for_user("user-z", archived=True)
         self.assertEqual([s.session_id for s in active], [])
         self.assertEqual([s.session_id for s in archived], ["redis-0"])
+
+
+@unittest.skipUnless(fakeredis is not None, "fakeredis not installed")
+class ListingIsPipelinedAndBoundedTests(unittest.TestCase):
+    """Drawing the sidebar costs one metadata round trip, not one per thread.
+
+    The body reads were already gone; this is the other half. The page lists
+    twice per refresh and refreshes on load, after every answer, on New chat and
+    after every delete, so a per-thread HGETALL multiplied by every one of those.
+    And the archived index only grows -- nothing but an explicit delete removes
+    from it -- so an unbounded list got slower for the life of the browser id.
+    """
+
+    def setUp(self) -> None:
+        self.server = fakeredis.FakeStrictRedis(decode_responses=True)
+        self.store = RedisSessionStore.__new__(RedisSessionStore)
+        self.store._client = self.server
+        reset_session_store(self.store)
+
+    def tearDown(self) -> None:
+        reset_session_store(None)
+        os.environ.pop("SIDEBAR_PAGE_SIZE", None)
+
+    def _seed(self, count: int) -> None:
+        for i in range(count):
+            self.store.save(
+                StoredSession(
+                    session_id=f"redis-{i}",
+                    user_id="user-z",
+                    title=f"Thread {i}",
+                    turns=[StoredTurn(f"q{i}", "a", [], [])],
+                )
+            )
+
+    def test_metadata_is_read_in_one_round_trip(self) -> None:
+        self._seed(20)
+        calls: list[str] = []
+        real = self.server.hgetall
+
+        def counting(key, *a, **kw):
+            calls.append(key)
+            return real(key, *a, **kw)
+
+        self.server.hgetall = counting  # type: ignore[method-assign]
+        try:
+            listed = self.store.list_for_user("user-z", archived=False)
+        finally:
+            self.server.hgetall = real  # type: ignore[method-assign]
+
+        self.assertEqual(len(listed), 20)
+        # Zero DIRECT hgetall calls: they all went through the pipeline. The
+        # assertion is about round trips, so it has to look at the client rather
+        # than at the returned rows.
+        self.assertEqual(calls, [], f"{len(calls)} sequential HGETALLs")
+
+    def test_the_list_is_capped(self) -> None:
+        os.environ["SIDEBAR_PAGE_SIZE"] = "5"
+        # Distinct timestamps on purpose. The zset score is _parse_iso(updated_at),
+        # so rows saved inside the same second tie and Redis falls back to
+        # lexicographic order -- which would make an ordering assertion here pass
+        # or fail on how fast the machine is, not on the cap.
+        base = time.time() - 10_000
+        for i in range(12):
+            self.store.save(
+                StoredSession(
+                    session_id=f"redis-{i}",
+                    user_id="user-z",
+                    title=f"Thread {i}",
+                    updated_at=datetime.fromtimestamp(base + i * 60, UTC).isoformat(),
+                    turns=[StoredTurn(f"q{i}", "a", [], [])],
+                ),
+                touch_activity=False,
+            )
+        listed = self.store.list_for_user("user-z", archived=False)
+        self.assertEqual(len(listed), 5)
+        # Newest first, so the cap drops the oldest rather than an arbitrary five.
+        self.assertEqual(listed[0].session_id, "redis-11")
+        self.assertNotIn("redis-0", [row.session_id for row in listed])
+
+    def test_the_memory_store_is_capped_the_same_way(self) -> None:
+        # Two backends that disagree about a limit is a behaviour found in prod.
+        os.environ["SIDEBAR_PAGE_SIZE"] = "5"
+        mem = MemorySessionStore()
+        reset_session_store(mem)
+        for i in range(12):
+            mem.save(
+                StoredSession(
+                    session_id=f"mem-{i}",
+                    user_id="user-z",
+                    title=f"Thread {i}",
+                    turns=[StoredTurn(f"q{i}", "a", [], [])],
+                )
+            )
+        self.assertEqual(len(mem.list_for_user("user-z", archived=False)), 5)
+
+
+class SessionStoreHealthTests(unittest.TestCase):
+    """/ready must be able to tell a working store from a configured one."""
+
+    def tearDown(self) -> None:
+        reset_session_store(None)
+
+    def test_memory_reports_itself_as_not_durable(self) -> None:
+        from src.chat import session_store_health
+
+        reset_session_store(MemorySessionStore())
+        health = session_store_health()
+        self.assertEqual(health["backend"], "memory")
+        self.assertFalse(health["durable"])
+        self.assertTrue(health["ok"])
+
+    @unittest.skipUnless(fakeredis is not None, "fakeredis not installed")
+    def test_redis_reports_ok_when_it_answers(self) -> None:
+        from src.chat import session_store_health
+
+        store = RedisSessionStore.__new__(RedisSessionStore)
+        store._client = fakeredis.FakeStrictRedis(decode_responses=True)
+        reset_session_store(store)
+        health = session_store_health()
+        self.assertEqual(health["backend"], "redis")
+        self.assertTrue(health["ok"])
+
+    def test_an_unreachable_redis_reports_rather_than_raising(self) -> None:
+        # The probe exists to surface this state; raising would make the one
+        # endpoint meant to reveal a broken store 500 instead.
+        from src.chat import session_store_health
+
+        class Dead:
+            def ping(self):
+                raise ConnectionError("Connection refused")
+
+        store = RedisSessionStore.__new__(RedisSessionStore)
+        store._client = Dead()
+        reset_session_store(store)
+        health = session_store_health()
+        self.assertFalse(health["ok"])
+        self.assertEqual(health["error"], "ConnectionError")

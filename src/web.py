@@ -36,6 +36,7 @@ from src.chat import (
     list_user_sessions,
     load_session_payload,
     reset_session,
+    session_store_health,
 )
 from src.feedback import append_feedback, read_feedback
 from src.warmup import check_retrieval_ready, warm_services
@@ -417,7 +418,21 @@ async def ready() -> dict[str, object] | JSONResponse:
     # "the key is set" looked the same as "the model answers". Naming the model
     # would also have made the 2026-09-01 deregistration obvious on the probe
     # instead of only in failing answers.
-    return {**body, "model": configured_model(), "gateway": "ok"}
+    # The same argument, applied to the session store. A wrong REDIS_URL left
+    # the pod READY and serving 500s on every session request, because nothing
+    # here looked at the store at all -- so "Redis is configured" read exactly
+    # like "Redis answers", which is the mistake this function already fixed for
+    # the gateway one paragraph up.
+    #
+    # Off the event loop for the same reason the gateway probe is: it is a
+    # blocking socket round trip on the single replica.
+    store = await anyio.to_thread.run_sync(session_store_health, limiter=_PROBE_LIMITER)
+
+    # Deliberately NOT a 503. The bot answers questions without history, so a
+    # degraded store is a lost feature rather than a dead service, and failing
+    # readiness here would pull a working assistant out of the load balancer
+    # over its sidebar. It is reported loudly instead.
+    return {**body, "model": configured_model(), "gateway": "ok", "store": store}
 
 
 @app.post("/api/ask")
