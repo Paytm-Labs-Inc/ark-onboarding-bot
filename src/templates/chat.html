@@ -532,20 +532,55 @@
       }
     }
 
-    function setDebugActionBusy(busy) {
-      debugActionInFlight = busy;
+    function syncComposerDisabled() {
+      submitBtn.disabled = Boolean(
+        submitBtn.dataset.askBusy || submitBtn.dataset.debugBusy
+      );
+    }
+
+    function resetComposerBusyState() {
+      debugActionInFlight = false;
+      delete submitBtn.dataset.askBusy;
+      delete submitBtn.dataset.debugBusy;
       for (const btn of chat.querySelectorAll(".debug-action-link")) {
-        btn.disabled = busy;
+        btn.disabled = false;
       }
+      syncComposerDisabled();
+    }
+
+    function setAskBusy(busy, generation) {
       if (busy) {
-        if (!submitBtn.disabled) {
-          submitBtn.dataset.debugBusy = "1";
-          submitBtn.disabled = true;
-        }
-      } else if (submitBtn.dataset.debugBusy) {
-        delete submitBtn.dataset.debugBusy;
-        submitBtn.disabled = false;
+        submitBtn.dataset.askBusy = "1";
+        syncComposerDisabled();
+        return;
       }
+      if (generation !== undefined && generation !== chatGeneration) {
+        return;
+      }
+      delete submitBtn.dataset.askBusy;
+      syncComposerDisabled();
+    }
+
+    function setDebugActionBusy(busy, generation) {
+      if (busy) {
+        debugActionInFlight = true;
+        for (const btn of chat.querySelectorAll(".debug-action-link")) {
+          btn.disabled = true;
+        }
+        submitBtn.dataset.debugBusy = "1";
+        syncComposerDisabled();
+        return;
+      }
+      if (generation !== undefined && generation !== chatGeneration) {
+        debugActionInFlight = false;
+        return;
+      }
+      debugActionInFlight = false;
+      for (const btn of chat.querySelectorAll(".debug-action-link")) {
+        btn.disabled = false;
+      }
+      delete submitBtn.dataset.debugBusy;
+      syncComposerDisabled();
     }
 
     function setStatus(message, isError = false) {
@@ -687,7 +722,7 @@
     }
 
     async function postDebugAction(gateId, action, answerBlock) {
-      if (debugActionInFlight) return;
+      if (debugActionInFlight || submitBtn.dataset.askBusy) return;
       const generation = chatGeneration;
       const turn = answerBlock.closest(".turn");
       const question = turn?.querySelector(".question")?.textContent || "";
@@ -739,13 +774,13 @@
       } catch (error) {
         setStatus(error.message || "Action failed.", true);
       } finally {
-        setDebugActionBusy(false);
+        setDebugActionBusy(false, generation);
       }
     }
 
     chat.addEventListener("click", (event) => {
       const btn = event.target.closest(".debug-action-link");
-      if (!btn || btn.disabled || debugActionInFlight) return;
+      if (!btn || btn.disabled || debugActionInFlight || submitBtn.dataset.askBusy) return;
       const turn = btn.closest(".turn");
       const gateId = turn?.dataset.gateId;
       if (!gateId) return;
@@ -1212,7 +1247,7 @@
       showEmptyState();
       questionEl.value = "";
       setStatus("");
-      submitBtn.disabled = false;
+      resetComposerBusyState();
       questionEl.focus();
       loadSidebarLists();
     }
@@ -1264,7 +1299,7 @@
         return;
       }
 
-      submitBtn.disabled = true;
+      setAskBusy(true);
       setStatus("Thinking…");
       const generation = chatGeneration;
 
@@ -1332,7 +1367,7 @@
         if (liveTurn) liveTurn.remove();
         setStatus(error.message || "Something went wrong.", true);
       } finally {
-        submitBtn.disabled = false;
+        setAskBusy(false, generation);
         questionEl.focus();
       }
     });
