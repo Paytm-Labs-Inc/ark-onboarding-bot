@@ -992,6 +992,72 @@ class RoadmapPromiseCarriesNoDateTests(unittest.TestCase):
                 )
                 self.assertEqual(out["answer"], ROADMAP_PHRASE)
 
+    def test_a_decorated_decline_does_not_leak_the_date(self) -> None:
+        """"Sorry," must not make an invented date look like real content.
+
+        _DECLINE_WINDOW exists because models prepend exactly this. With the
+        decoration counted as content the answer took the tacked-on-to-a-real-
+        answer branch, so the PROMISE was stripped and the invented date kept:
+        "Sorry,  It is slated for the week of Sep 7, 2026."
+        """
+        from src.answer import ROADMAP_PHRASE, _finalize_parsed
+
+        for opener in ("Sorry, ", "Unfortunately, ", "I'm afraid "):
+            with self.subTest(opener=opener):
+                out = _finalize_parsed(
+                    {
+                        "answer": opener + ROADMAP_PHRASE + " It is slated for the week of Sep 7, 2026.",
+                        "chunks_used": [1],
+                    },
+                    self.CHUNKS,
+                )
+                self.assertEqual(out["answer"], ROADMAP_PHRASE)
+                self.assertNotIn("Sep 7", out["answer"])
+
+    def test_an_unbacked_dated_promise_declines_rather_than_leaking(self) -> None:
+        """The High one: guard ordering, not guard logic.
+
+        The date guard ran AFTER the unbacked-promise block, and that block
+        strips ROADMAP_PHRASE from any answer that is not an exact match -- so
+        the phrase was gone before the guard looked for it, and the invented
+        date was promoted to the whole answer with no decline left:
+        "It is slated for the week of Sep 7, 2026."
+
+        An unbacked promise is not something to repeat, so this declines
+        plainly rather than keeping a promise nothing supports.
+        """
+        from src.answer import REFUSAL_PHRASE, ROADMAP_PHRASE, _finalize_parsed
+
+        out = _finalize_parsed(
+            {
+                "answer": ROADMAP_PHRASE + " It is slated for the week of Sep 7, 2026.",
+                "chunks_used": [],
+            },
+            self.CHUNKS,
+        )
+        self.assertEqual(out["answer"], REFUSAL_PHRASE)
+        self.assertEqual(out["citations"], [])
+        self.assertNotIn("Sep 7", out["answer"])
+
+    def test_no_path_returns_a_bare_invented_date(self) -> None:
+        # The property both bugs violated, asserted directly across the shapes
+        # that reach this function.
+        from src.answer import ROADMAP_PHRASE, _finalize_parsed
+
+        dated = " It is slated for the week of Sep 7, 2026."
+        for answer in (
+            ROADMAP_PHRASE + dated,
+            "Sorry, " + ROADMAP_PHRASE + dated,
+            ROADMAP_PHRASE + " Targeting Q3.",
+        ):
+            for used in ([], [1]):
+                with self.subTest(answer=answer, chunks_used=used):
+                    out = _finalize_parsed(
+                        {"answer": answer, "chunks_used": used}, self.CHUNKS
+                    )
+                    self.assertNotIn("Sep 7", out["answer"])
+                    self.assertNotIn("Q3", out["answer"])
+
     def test_the_date_shapes_the_regex_must_catch(self) -> None:
         from src.answer import ROADMAP_PHRASE, decline_states_a_date
 

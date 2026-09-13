@@ -71,7 +71,12 @@ _DATE_TOKEN_RE = re.compile(
 _DATE_FILLER = frozenset(
     "it is are was we the a an and or to for be been will would ship ships shipping "
     "shipped slated expected expect targeting target due planned plan eta around "
-    "about approximately roughly by on in of at from live launch release".split()
+    "about approximately roughly by on in of at from live launch release "
+    # Decline DECORATIONS. _DECLINE_WINDOW exists because models prepend these,
+    # and without them here "Sorry, <promise> ... Sep 7" read as a real answer
+    # -- so the promise was stripped and the invented date kept.
+    "sorry apologies unfortunately afraid currently right now yet still "
+    "this that time but however though although".split()
 )
 
 
@@ -95,8 +100,12 @@ def _is_only_promise_and_date(text: str) -> bool:
         residue = residue.replace(_normalise_decline(phrase), " ")
     residue = _DATE_TOKEN_RE.sub(" ", residue)
     return not [
-        word for word in residue.split()
-        if word not in _DATE_FILLER and not word.isdigit()
+        word
+        for word in residue.split()
+        # Single characters are never content here: _normalise_decline strips
+        # apostrophes, so "I'm afraid" arrives as "i m afraid" and that orphaned
+        # "m" would otherwise read as a real word.
+        if word not in _DATE_FILLER and not word.isdigit() and len(word) > 1
     ]
 
 
@@ -1026,6 +1035,43 @@ def _finalize_parsed(
 ) -> dict[str, Any]:
     answer_text = str(parsed.get("answer", "")).strip()
     citations = _resolve_citations(parsed, chunks)
+
+    # THE DATE GUARD RUNS FIRST, on the text as the model wrote it.
+    #
+    # It used to run after the unbacked-promise block below, and that ordering
+    # made the guard worse than the bug. That block strips ROADMAP_PHRASE from
+    # any answer that is not an exact match, so by the time the guard looked for
+    # the phrase it was gone -- leaving the invented date as the entire answer:
+    #
+    #   "<promise> It is slated for the week of Sep 7, 2026."  (nothing cited)
+    #       -> "It is slated for the week of Sep 7, 2026."
+    #
+    # The decline vanished and the fabrication was promoted to the answer. Same
+    # shape for a decorated decline ("Sorry, <promise> ... Sep 7"), which also
+    # never reached the guard as a bare promise.
+    #
+    # Rule 4(b) says the roadmap has this coming. It does not say WHEN, and a
+    # date appended to the promise is the nearest-bet synthesis rule 3 invites,
+    # attributed to the roadmap page the citation names.
+    states_a_date = ROADMAP_NORMALISED in _normalise_decline(
+        answer_text
+    ) and decline_states_a_date(answer_text)
+    if states_a_date and _is_only_promise_and_date(answer_text):
+        # Nothing here but the decline and an invented date. Keep the decline
+        # and drop the date -- backed by the roadmap page when we actually
+        # retrieved it, and a plain refusal when we did not, because an
+        # unbacked promise is not something to repeat.
+        roadmap_source = _first_roadmap_source(chunks)
+        if roadmap_source and any(is_roadmap_source(c) for c in citations):
+            return {"answer": ROADMAP_PHRASE, "citations": [roadmap_source]}
+        return {"answer": REFUSAL_PHRASE, "citations": []}
+    if states_a_date:
+        # A promise tacked onto a REAL answer: strip the promise, keep the
+        # answer. Prompt rule 19 asks for a ship date when a chunk dates the
+        # named feature, so replacing the whole answer here would throw away
+        # the corpus-sourced date the rule asks for.
+        answer_text = answer_text.replace(ROADMAP_PHRASE, "").strip()
+
     if roadmap_promise_unbacked(answer_text, citations):
         # Rule 4(b) has the model promise a roadmap whenever the chunks are
         # silent, which turns every gap in the docs into a commitment. Keep the
@@ -1039,32 +1085,6 @@ def _finalize_parsed(
             answer_text, citations = REFUSAL_PHRASE, []
         else:
             answer_text = answer_text.replace(ROADMAP_PHRASE, "").strip()
-
-    # A roadmap promise may not carry a date the corpus never stated. Rule 4(b)
-    # says the roadmap has this coming; it does not say WHEN, and a date
-    # appended to the promise is the nearest-bet synthesis rule 3 invites --
-    # attributed, worse, to the roadmap page the citation names.
-    #
-    # This guard was eval-only at first, which made it no guard at all: a
-    # promise carrying a roadmap citation is BACKED, so the block above falls
-    # straight through and the user got the fabricated date. Sharing it with
-    # the runtime is the pattern roadmap_promise_unbacked already follows --
-    # one definition, so the gate and the product cannot disagree about what
-    # the model just did.
-    if ROADMAP_NORMALISED in _normalise_decline(answer_text) and decline_states_a_date(
-        answer_text
-    ):
-        if _is_only_promise_and_date(answer_text):
-            roadmap_source = _first_roadmap_source(chunks)
-            return {
-                "answer": ROADMAP_PHRASE,
-                "citations": [roadmap_source] if roadmap_source else [],
-            }
-        # A promise tacked onto a REAL answer: strip the promise and keep the
-        # answer, which is the treatment the unbacked path above already gives
-        # it. Replacing the whole answer here dropped a corpus-sourced ship
-        # date whenever the model also used the 4(b) line.
-        answer_text = answer_text.replace(ROADMAP_PHRASE, "").strip()
 
     return {"answer": answer_text or REFUSAL_PHRASE, "citations": citations}
 
