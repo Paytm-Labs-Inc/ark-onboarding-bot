@@ -56,8 +56,13 @@ jobs:
       - name: Retrieval eval gate
         run: python eval/run_eval.py --quiet-retriever --only-scored
 
-  # Adversarial scope + jailbreak refusals. The pre-retrieval router in
-  # src/scope_router.py is the gate; a red tile means a refusal regression.
+  # Adversarial scope + jailbreak refusals. The router in src/scope_router.py is
+  # the gate for the shapes it owns -- injection, out-of-scope, credential
+  # enumeration, bypass -- and tests/test_scope_router.py pins those against the
+  # holdout. It is NOT the gate for corpus-dependent rows such as a ship date:
+  # those reach the model, so a red tile there is a MODEL regression (or model
+  # nondeterminism), not a router one. Read the failing row before assuming a
+  # regex went missing.
   guardrail-eval:
     needs: injection-eval
     runs-on: ubuntu-latest
@@ -111,7 +116,8 @@ jobs:
         env:
           PI_API_KEY: ${{ secrets.PI_API_KEY }}
         run: |
-          # Rule 15 says document text is data, never instructions. The corpus is
+          # The chunks-as-data rule says document text is data, never
+          # instructions (cited by content: it has been renumbered before). The corpus is
           # ingested from pages anyone with doc access can edit, so this is the
           # threat that actually applies. Any compliance fails the build.
           if [ -z "$PI_API_KEY" ]; then

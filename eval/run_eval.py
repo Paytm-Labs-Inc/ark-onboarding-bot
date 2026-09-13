@@ -182,7 +182,12 @@ def evaluate_question(
     run_answer: bool,
     use_pins: bool = True,
 ) -> QuestionResult:
-    from src.answer import is_non_answer, is_plain_refusal
+    from src.answer import (
+        decline_states_a_date,
+        is_non_answer,
+        is_plain_refusal,
+        is_roadmap_source,
+    )
     from src.ask import ask
     from src.retrieve import retrieve
 
@@ -227,10 +232,38 @@ def evaluate_question(
                     # with accepts_roadmap when a roadmap answer is genuinely
                     # right (a date question about an unshipped feature).
                     if item.get("accepts_roadmap"):
-                        declined = is_non_answer(answer_text)
+                        # is_non_answer reads only the first 120 characters, so
+                        # "<promise>. It is slated for the week of Sep 7" matched
+                        # it -- passing the row on the exact fabrication it
+                        # exists to catch. Requiring the decline to be the WHOLE
+                        # answer fixed that and broke something else: models
+                        # reword ("Sorry, ..." / a trailing hand-off), and this
+                        # job gates publishing, so failing on wording would hold
+                        # the image over a paraphrase. Judge the residue instead.
+                        declined = is_non_answer(answer_text) and not decline_states_a_date(
+                            answer_text
+                        )
+                        # A roadmap decline cites the roadmap page BY DESIGN:
+                        # answer.py _finalize_parsed returns the promise with
+                        # the roadmap source attached when it retrieved that
+                        # page, and when the promise is backed it keeps every
+                        # other citation the model reported too. Demanding zero
+                        # citations -- or only the roadmap -- made the runtime's
+                        # own correct output ungradeable, so the row went red on
+                        # nothing but which chunks the model named.
+                        #
+                        # What matters is that the promise is BACKED. Extra
+                        # sources alongside it are top-k reporting noise, not
+                        # evidence of answering: declined already established
+                        # the text carries no substantive answer. A promise with
+                        # citations but no roadmap among them still fails --
+                        # that is the unbacked promise roadmap_promise_unbacked
+                        # exists to catch.
+                        backed = any(is_roadmap_source(c) for c in citations)
+                        citation_hit = declined and (not citations or backed)
                     else:
                         declined = is_plain_refusal(answer_text)
-                    citation_hit = declined and not citations
+                        citation_hit = declined and not citations
                     answer_hit = citation_hit
                 elif accepted:
                     citation_hit = any(any_source_matches(e, citations) for e in accepted)
