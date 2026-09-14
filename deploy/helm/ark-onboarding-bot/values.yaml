@@ -8,8 +8,10 @@
 namespace: ark-onboarding-bot
 
 image:
-  # Set in the cluster overlay. `tag` is REQUIRED (no default): argocd-image-updater
-  # writes the current timestamped tag back into the overlay, and a chart that
+  # Set in the cluster overlay. `tag` is REQUIRED (no default), and on this
+  # cluster it is HAND-MAINTAINED: argocd-image-updater is deliberately not
+  # wired here, because it needs a per-repository write credential this cluster
+  # does not have, so a release bumps the tag in the overlay by PR. A chart that
   # silently defaulted to :latest would deploy something nobody chose.
   repository: ""
   tag: ""
