@@ -80,33 +80,51 @@ _DATE_FILLER = frozenset(
 )
 
 
-def _is_only_promise_and_date(text: str) -> bool:
-    """True when nothing survives removing the decline phrase and the date.
+# What is left after removing the decline and the date has to be an ANSWER. Two
+# words is not one, whatever those words are.
+_MIN_ANSWER_WORDS = 3
 
-    The two cases have to be told apart, because they want opposite handling:
 
-      "<promise> It is slated for the week of Sep 7, 2026."
-          a 4(b) decline that invented a date -> the date must go.
-
-      "Slack alert delivery is in the Week of Aug 10 section. <promise>"
-          a real answer that also tacked the promise on -> the ANSWER must
-          survive. Prompt rule 19 asks for exactly this when a chunk dates the
-          named feature, so wiping it would destroy the answers the prompt asks
-          for, and _finalize_parsed already strips a tacked-on promise rather
-          than dropping the answer under it.
-    """
+def _residue_after_decline_and_date(text: str) -> list[str]:
+    """Words left once the decline phrases and the date expression are gone."""
     residue = _normalise_decline(text)
     for phrase in (ROADMAP_PHRASE, REFUSAL_PHRASE):
         residue = residue.replace(_normalise_decline(phrase), " ")
     residue = _DATE_TOKEN_RE.sub(" ", residue)
-    return not [
+    return [
         word
         for word in residue.split()
-        # Single characters are never content here: _normalise_decline strips
-        # apostrophes, so "I'm afraid" arrives as "i m afraid" and that orphaned
-        # "m" would otherwise read as a real word.
+        # Single characters are never content: _normalise_decline strips
+        # apostrophes, so "I'm afraid" arrives as "i m afraid".
         if word not in _DATE_FILLER and not word.isdigit() and len(word) > 1
     ]
+
+
+def _is_only_promise_and_date(text: str) -> bool:
+    """True when nothing that could be an ANSWER survives the decline and date.
+
+    Counting content rather than matching a vocabulary, and that is the whole
+    point. This started as a closed filler list, and a closed list is a
+    treadmill: every discourse marker it did not know -- "Also,", "Note that",
+    "Indeed," -- reopened the same hole, because an unlisted word read as real
+    content and sent the answer down the strip-the-promise branch, which then
+    returned the invented date with the decline removed.
+
+    A date plus one or two connectives is not an answer no matter which
+    connectives they are. _DATE_FILLER still runs first so the common openers
+    are removed outright; the floor catches whatever it has not met yet.
+
+    The two cases this has to keep apart:
+
+      "Also, <promise> It is slated for the week of Sep 7."
+          -> residue "also" -> not an answer -> the date goes.
+
+      "Slack alert delivery is listed in the Week of Aug 10 section. <promise>"
+          -> residue "slack alert delivery listed section" -> a real answer,
+             and prompt rule 19 asks for exactly this when a chunk dates the
+             named feature.
+    """
+    return len(_residue_after_decline_and_date(text)) < _MIN_ANSWER_WORDS
 
 
 def decline_states_a_date(text: str) -> bool:

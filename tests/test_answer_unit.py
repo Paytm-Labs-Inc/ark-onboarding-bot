@@ -1058,6 +1058,15 @@ class RoadmapPromiseCarriesNoDateTests(unittest.TestCase):
             REFUSAL_PHRASE + dated,
             "Sorry, " + REFUSAL_PHRASE + dated,
             REFUSAL_PHRASE + " Targeting Q3.",
+            # Discourse markers a closed filler list cannot enumerate. Each of
+            # these reopened the hole by reading as real content, which sent the
+            # answer down the strip-the-promise branch and returned the date
+            # with the decline removed.
+            *(
+                marker + phrase + dated
+                for marker in ("Also, ", "Note that ", "Please note ", "Indeed, ", "Furthermore, ")
+                for phrase in (ROADMAP_PHRASE, REFUSAL_PHRASE)
+            ),
         ):
             for used in ([], [1]):
                 with self.subTest(answer=answer, chunks_used=used):
@@ -1092,6 +1101,23 @@ class RoadmapPromiseCarriesNoDateTests(unittest.TestCase):
                 )
                 self.assertEqual(out["answer"], REFUSAL_PHRASE)
                 self.assertEqual(out["citations"], [])
+
+    def test_a_real_answer_is_never_mistaken_for_filler(self) -> None:
+        """The other side of counting content instead of matching a vocabulary.
+
+        The floor has to be low enough that a genuine short answer survives it;
+        a guard that eats real answers is worse than the leak it closes.
+        """
+        from src.answer import ROADMAP_PHRASE, _finalize_parsed
+
+        for answer in (
+            "Slack alert delivery is listed in the Week of Aug 10, 2026 section. " + ROADMAP_PHRASE,
+            "The Week of Sep 7, 2026 section lists Jira-to-PR.",
+            "Run ark host enroll, then verify under Settings.",
+        ):
+            with self.subTest(answer=answer):
+                out = _finalize_parsed({"answer": answer, "chunks_used": [1]}, self.CHUNKS)
+                self.assertIn(answer.split(".")[0][:18], out["answer"])
 
     def test_the_date_shapes_the_regex_must_catch(self) -> None:
         from src.answer import ROADMAP_PHRASE, decline_states_a_date
