@@ -10,6 +10,8 @@ import httpx
 from unittest.mock import MagicMock, patch
 
 from src.answer import (
+    _build_user_content,
+    _messages_for,
     _parse_and_finalize,
     REFUSAL_PHRASE,
     ROADMAP_PHRASE,
@@ -1079,6 +1081,73 @@ class PlainRefusalTests(unittest.TestCase):
         # The window exists so a grounded answer quoting the phrase is not
         # scored as a refusal. A raw substring match loses that.
         self.assertFalse(is_plain_refusal("Run ark host enroll. " * 8 + REFUSAL_PHRASE))
+
+
+class SystemRoleTests(unittest.TestCase):
+    """The rules belong in a system message, not in the user turn.
+
+    Everything was one user-role string, which is why persona and continuation
+    attacks land: with no system message, "ignore your instructions" is
+    addressed to text of exactly the same standing as itself.
+    """
+
+    def test_a_composed_prompt_splits_into_system_and_user(self) -> None:
+        prompt = _build_user_content("how do I set up Cursor?", [{"text": "t", "source": "s"}])
+        messages = _messages_for(prompt)
+        self.assertEqual([m["role"] for m in messages], ["system", "user"])
+
+    def test_the_rules_are_in_the_system_message_only(self) -> None:
+        prompt = _build_user_content("q", [{"text": "t", "source": "s"}])
+        system, user = _messages_for(prompt)
+        self.assertEqual(system["content"], SYSTEM_PROMPT)
+        # The whole point: a rule the user turn still carries is a rule the
+        # model reads at the same standing as the retrieved chunks.
+        self.assertNotIn("Decline ONLY in these two cases", user["content"])
+
+    def test_the_chunks_and_question_stay_in_the_user_message(self) -> None:
+        prompt = _build_user_content("how do I enroll a host?", [{"text": "t", "source": "s"}])
+        _, user = _messages_for(prompt)
+        self.assertIn("<documents>", user["content"])
+        self.assertIn("how do I enroll a host?", user["content"])
+
+    def test_a_prompt_composed_elsewhere_is_left_alone(self) -> None:
+        # The Cursor backend and any caller passing its own string must not be
+        # handed a system message built from rules they did not ask for.
+        messages = _messages_for("a prompt from somewhere else")
+        self.assertEqual(messages, [{"role": "user", "content": "a prompt from somewhere else"}])
+
+
+    @patch("src.answer.httpx.post")
+    def test_the_request_body_actually_carries_the_system_role(self, mock_post) -> None:
+        """The wiring, not just the helper.
+
+        Every other test here calls _messages_for directly, so reverting both
+        call sites to a lone user message would leave them green -- the "passes
+        for the wrong reason" shape this repo keeps finding. This asserts the
+        split on the thing that leaves the process: the request body.
+        """
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "choices": [{"message": {"content": json.dumps({"answer": "Run ark init.", "chunks_used": [1]})}}]
+        }
+        mock_post.return_value = resp
+
+        chunks = [{"source": "set-up-cursor -- https://x", "text": "Run ark init."}]
+        os.environ["PI_API_KEY"] = "pi-test"
+        try:
+            answer("how do I set up Cursor?", chunks)
+        finally:
+            os.environ.pop("PI_API_KEY", None)
+
+        messages = mock_post.call_args.kwargs["json"]["messages"]
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertEqual(messages[1]["role"], "user")
+        # The rules are in the system turn and NOT duplicated into the user one.
+        self.assertIn("Decline ONLY in these two cases", messages[0]["content"])
+        self.assertNotIn("Decline ONLY in these two cases", messages[1]["content"])
+        # The question and the chunks travel as user content.
+        self.assertIn("how do I set up Cursor?", messages[1]["content"])
 
 
 class ChunksAreDataTests(unittest.TestCase):
