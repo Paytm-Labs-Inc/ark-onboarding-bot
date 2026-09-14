@@ -184,6 +184,22 @@ def _normalise_decline(text: str) -> str:
 
 ROADMAP_NORMALISED = _normalise_decline(ROADMAP_PHRASE)
 
+
+REFUSAL_NORMALISED = _normalise_decline(REFUSAL_PHRASE)
+
+
+def _carries_a_decline(text: str) -> bool:
+    """True when the answer contains either decline phrase.
+
+    Both, deliberately. The date guard used to test only ROADMAP_NORMALISED, so
+    "<refusal> It is slated for the week of Sep 7, 2026." sailed through with
+    the invented date intact -- the same fail-open as the roadmap ordering bug,
+    on the sibling phrase. The eval side never had this split: is_non_answer
+    has always matched both.
+    """
+    normalised = _normalise_decline(text)
+    return ROADMAP_NORMALISED in normalised or REFUSAL_NORMALISED in normalised
+
 # Which provider generates the answer. `pi` posts to the Pi Inference gateway,
 # an OpenAI-compatible completions endpoint. `cursor` drives the Cursor agent,
 # which boots a workspace session per question and is roughly 10x slower.
@@ -1089,17 +1105,21 @@ def _finalize_parsed(
     # Rule 4(b) says the roadmap has this coming. It does not say WHEN, and a
     # date appended to the promise is the nearest-bet synthesis rule 3 invites,
     # attributed to the roadmap page the citation names.
-    states_a_date = ROADMAP_NORMALISED in _normalise_decline(
+    states_a_date = _carries_a_decline(answer_text) and decline_states_a_date(
         answer_text
-    ) and decline_states_a_date(answer_text)
+    )
     if states_a_date and _is_only_promise_and_date(answer_text):
         # Nothing here but the decline and an invented date. Keep the decline
         # and drop the date -- backed by the roadmap page when we actually
         # retrieved it, and a plain refusal when we did not, because an
         # unbacked promise is not something to repeat.
-        roadmap_source = _first_roadmap_source(chunks)
-        if roadmap_source and any(is_roadmap_source(c) for c in citations):
-            return {"answer": ROADMAP_PHRASE, "citations": [roadmap_source]}
+        # Answer with the decline the model actually chose. A plain refusal that
+        # invented a date is still a plain refusal; promoting it to a roadmap
+        # promise would invent a commitment on top of removing a date.
+        if ROADMAP_NORMALISED in _normalise_decline(answer_text):
+            roadmap_source = _first_roadmap_source(chunks)
+            if roadmap_source and any(is_roadmap_source(c) for c in citations):
+                return {"answer": ROADMAP_PHRASE, "citations": [roadmap_source]}
         return {"answer": REFUSAL_PHRASE, "citations": []}
     if states_a_date:
         # A promise tacked onto a REAL answer: strip the promise, keep the

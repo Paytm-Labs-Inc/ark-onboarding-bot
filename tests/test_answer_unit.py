@@ -1046,11 +1046,18 @@ class RoadmapPromiseCarriesNoDateTests(unittest.TestCase):
         # that reach this function.
         from src.answer import ROADMAP_PHRASE, _finalize_parsed
 
+        from src.answer import REFUSAL_PHRASE
+
         dated = " It is slated for the week of Sep 7, 2026."
         for answer in (
             ROADMAP_PHRASE + dated,
             "Sorry, " + ROADMAP_PHRASE + dated,
             ROADMAP_PHRASE + " Targeting Q3.",
+            # The sibling decline. The guard tested only the roadmap phrase, so
+            # this shape returned the invented date unchanged.
+            REFUSAL_PHRASE + dated,
+            "Sorry, " + REFUSAL_PHRASE + dated,
+            REFUSAL_PHRASE + " Targeting Q3.",
         ):
             for used in ([], [1]):
                 with self.subTest(answer=answer, chunks_used=used):
@@ -1059,6 +1066,32 @@ class RoadmapPromiseCarriesNoDateTests(unittest.TestCase):
                     )
                     self.assertNotIn("Sep 7", out["answer"])
                     self.assertNotIn("Q3", out["answer"])
+
+    def test_a_plain_refusal_that_invents_a_date_stays_a_plain_refusal(self) -> None:
+        """Both decline phrases, not just the roadmap one.
+
+        _finalize_parsed only entered the date guard when ROADMAP_NORMALISED was
+        present, so "<refusal> It is slated for the week of Sep 7, 2026." came
+        back unchanged -- the same fail-open as the ordering bugs, on the
+        sibling phrase. The eval side never had this split: is_non_answer has
+        always matched both.
+
+        It stays a REFUSAL, not promoted to a roadmap promise: inventing a
+        commitment on top of removing a date is not an improvement.
+        """
+        from src.answer import REFUSAL_PHRASE, _finalize_parsed
+
+        for used in ([], [1]):
+            with self.subTest(chunks_used=used):
+                out = _finalize_parsed(
+                    {
+                        "answer": REFUSAL_PHRASE + " It is slated for the week of Sep 7, 2026.",
+                        "chunks_used": used,
+                    },
+                    self.CHUNKS,
+                )
+                self.assertEqual(out["answer"], REFUSAL_PHRASE)
+                self.assertEqual(out["citations"], [])
 
     def test_the_date_shapes_the_regex_must_catch(self) -> None:
         from src.answer import ROADMAP_PHRASE, decline_states_a_date
