@@ -1117,6 +1117,39 @@ class SystemRoleTests(unittest.TestCase):
         self.assertEqual(messages, [{"role": "user", "content": "a prompt from somewhere else"}])
 
 
+    @patch("src.answer.httpx.post")
+    def test_the_request_body_actually_carries_the_system_role(self, mock_post) -> None:
+        """The wiring, not just the helper.
+
+        Every other test here calls _messages_for directly, so reverting both
+        call sites to a lone user message would leave them green -- the "passes
+        for the wrong reason" shape this repo keeps finding. This asserts the
+        split on the thing that leaves the process: the request body.
+        """
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "choices": [{"message": {"content": json.dumps({"answer": "Run ark init.", "chunks_used": [1]})}}]
+        }
+        mock_post.return_value = resp
+
+        chunks = [{"source": "set-up-cursor -- https://x", "text": "Run ark init."}]
+        os.environ["PI_API_KEY"] = "pi-test"
+        try:
+            answer("how do I set up Cursor?", chunks)
+        finally:
+            os.environ.pop("PI_API_KEY", None)
+
+        messages = mock_post.call_args.kwargs["json"]["messages"]
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertEqual(messages[1]["role"], "user")
+        # The rules are in the system turn and NOT duplicated into the user one.
+        self.assertIn("Decline ONLY in these two cases", messages[0]["content"])
+        self.assertNotIn("Decline ONLY in these two cases", messages[1]["content"])
+        # The question and the chunks travel as user content.
+        self.assertIn("how do I set up Cursor?", messages[1]["content"])
+
+
 class ChunksAreDataTests(unittest.TestCase):
     def test_chunks_are_delimited_and_the_rule_is_in_the_prompt(self) -> None:
         from src.answer import _build_user_content

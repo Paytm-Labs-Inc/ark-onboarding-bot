@@ -222,8 +222,11 @@ def _format_chunks(chunks: list[dict[str, Any]]) -> str:
     """Each chunk inside <document> tags, so page text is unmistakably data.
 
     The corpus is ingested from pages anyone with doc access can edit, and
-    the whole prompt is one user-role string. Delimiters plus rule 9 are what
-    stop a sentence on a page from reading as an instruction to the model.
+    these chunks travel in the USER turn -- the rules are in the system message
+    now (see _messages_for), but retrieved page text never is, and must not be.
+    Delimiters plus rule 9 are what stop a sentence on a page from reading as
+    an instruction to the model. The role split raises the rules above that
+    text; it does not make the delimiters optional.
     A chunk cannot close the delimiter early: a literal </document> in page
     text is defanged before it is placed.
     """
