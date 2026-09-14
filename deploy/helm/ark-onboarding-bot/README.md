@@ -14,7 +14,7 @@ overlay for the cluster, secrets from AWS Secrets Manager through the cluster's
 
 | Decision | Where | Why |
 |---|---|---|
-| `image.tag` is required, no default | `_helpers.tpl` guard | argocd-image-updater writes the tag; nothing should ever deploy `:latest`. |
+| `image.tag` is required, no default | `_helpers.tpl` guard | The tag is hand-maintained here and bumped by PR — argocd-image-updater is deliberately not wired (no per-repository write credential), so `test-render.sh` case J asserts the committed tag's shape and ordinal floor. Nothing should ever deploy `:latest`. |
 | `web.forwardedAllowIps` required behind the ingress; empty refused | guard | The `Secure` login cookie depends on trusting the ingress controller's `X-Forwarded-Proto`. `*` is the platform's interim behind the ClusterIP-only Service (only nginx can reach the pod); the overlay swaps it for the ingress-pod CIDR when the EKS/VPC value arrives. It does **not** buy a per-user rate limit here — `ingress-nginx` on this cluster overwrites `X-Forwarded-For` with the LB ENI, so the 30/min is shared. See `values.yaml`. |
 | `replicas: 1`, `strategy: Recreate` | `values.yaml`, guard | Sessions and the answer cache are in-process; logs are files. More than one pod needs sticky sessions and a durable log first (`stateful.multiReplicaAcknowledged`). |
 | Secrets only via `ExternalSecret` | `external-secret.yaml` | Nothing secret in git. One SM entry, JSON properties named in values. |

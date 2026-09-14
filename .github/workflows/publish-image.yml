@@ -186,7 +186,8 @@ jobs:
             type=ref,event=branch,suffix=-arm64
             type=ref,event=tag,suffix=-arm64
             type=sha,prefix=,suffix=-arm64,format=short
-            # The tag argocd-image-updater selects (alphabetical on the ordinal).
+            # The ordinal tag a release pins. Sorts alphabetically by the ordinal,
+            # which is what makes it selectable by hand or by an updater later.
             type=raw,value=${{ steps.deploy-order.outputs.tag }}-{{sha}}-arm64,enable={{is_default_branch}}
             # Convenience for humans; the chart refuses to deploy it (image.tag is required).
             type=raw,value=latest,enable={{is_default_branch}}
