@@ -107,7 +107,8 @@
       min-width: 0;
     }
     .session-archive,
-    .session-unarchive {
+    .session-unarchive,
+    .session-delete {
       flex: none;
       border: 0;
       background: transparent;
@@ -126,7 +127,8 @@
       opacity: 0.45;
     }
     .session-archive svg,
-    .session-unarchive svg {
+    .session-unarchive svg,
+    .session-delete svg {
       width: 16px;
       height: 16px;
       stroke: currentColor;
@@ -137,17 +139,25 @@
     }
     .session-list li:hover .session-archive,
     .session-list li:hover .session-unarchive,
+    .session-list li:hover .session-delete,
     .session-archive:focus-visible,
-    .session-unarchive:focus-visible { opacity: 1; }
+    .session-unarchive:focus-visible,
+    .session-delete:focus-visible { opacity: 1; }
     .session-archive:hover,
     .session-unarchive:hover { color: var(--ark-fg); background: var(--ark-elevated); }
+    /* Red only on this one. Restore and delete sit side by side on an archived
+       row and are one 24px target apart, so the destructive one has to read as
+       destructive before the click, not in the confirm that follows. */
+    .session-delete:hover { color: var(--ark-danger); background: var(--ark-elevated); }
     .session-archive:focus-visible,
-    .session-unarchive:focus-visible {
+    .session-unarchive:focus-visible,
+    .session-delete:focus-visible {
       outline: none;
       box-shadow: var(--ark-focus-ring);
     }
     .session-archive:active,
     .session-unarchive:active { color: var(--ark-fg); background: var(--ark-line); }
+    .session-delete:active { color: var(--ark-danger); background: var(--ark-line); }
     .archive-dropdown {
       border: 1px solid var(--ark-line);
       border-radius: var(--ark-radius-sm);
@@ -632,6 +642,17 @@
       '<path d="M12 18V11"></path>' +
       '<path d="M9 14l3-3 3 3"></path>' +
       "</svg>";
+    // A trash can, not the × this control used before the archive tray. Next
+    // to the restore arrow on the same row, × reads as "dismiss this row" --
+    // the one thing it does not do.
+    const DELETE_ICON =
+      '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+      '<path d="M3 6h18"></path>' +
+      '<path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path>' +
+      '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>' +
+      '<path d="M10 11v6"></path>' +
+      '<path d="M14 11v6"></path>' +
+      "</svg>";
 
     let archiveToastTimer = null;
     let lastArchivedSessionId = null;
@@ -942,7 +963,12 @@
     function renderSessionList(
       container,
       sessions,
-      { emptyLabel = "No chats yet", showArchiveButton = false, showUnarchiveButton = false } = {},
+      {
+        emptyLabel = "No chats yet",
+        showArchiveButton = false,
+        showUnarchiveButton = false,
+        showDeleteButton = false,
+      } = {},
     ) {
       container.replaceChildren();
       if (!sessions.length) {
@@ -1009,6 +1035,39 @@
           item.appendChild(unarchiveBtn);
         }
 
+        if (showDeleteButton) {
+          // Archive is the default action and it is undo-able; this is not.
+          // It lives in the tray rather than on a Recent row so the reversible
+          // gesture is the one under the cursor during normal use, but a user
+          // who wants their data gone still has a path that erases everywhere
+          // -- the thread, the query log and the feedback log.
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "session-delete";
+          deleteBtn.innerHTML = DELETE_ICON;
+          const label = session.title || "Untitled chat";
+          deleteBtn.setAttribute("aria-label", `Delete chat permanently: ${label}`);
+          deleteBtn.addEventListener("click", async (event) => {
+            // The row behind it is a button too; without this the click opens
+            // the thread on its way to deleting it.
+            event.stopPropagation();
+            // No undo toast for this one, so the confirm has to carry what
+            // Undo carries for archive: that it reaches the logs, and that
+            // there is no coming back from it.
+            if (
+              !window.confirm(
+                `Permanently delete “${label}”?\n\n` +
+                  "This erases the chat and its logged questions everywhere. " +
+                  "It cannot be undone.",
+              )
+            ) {
+              return;
+            }
+            await deleteSession(session.session_id);
+          });
+          item.appendChild(deleteBtn);
+        }
+
         container.appendChild(item);
       }
     }
@@ -1046,6 +1105,7 @@
           {
             emptyLabel: archivedResp.ok ? "No archived chats" : "Could not load archive",
             showUnarchiveButton: true,
+            showDeleteButton: true,
           },
         );
         if (archivedResp.ok) {
@@ -1264,6 +1324,51 @@
         loadSidebarLists();
       } catch (_error) {
         setStatus("Could not restore that chat.", true);
+      }
+    }
+
+    async function deleteSession(sid) {
+      try {
+        const response = await fetch("api/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sid }),
+        });
+        if (response.status === 401) {
+          window.location = "login";
+          return;
+        }
+        // 503 is the server saying the logs could not be erased, so it left
+        // the chat alone on purpose. Saying "could not delete" would be true
+        // but useless -- the one thing the user can do is try again, and the
+        // one thing they must not assume is that anything was erased.
+        if (response.status === 503) {
+          setStatus("Could not delete that chat yet — nothing was erased. Try again.", true);
+          return;
+        }
+        // A 404 is the same answer as success from here: the thread is not
+        // there any more. It also covers a thread belonging to someone else,
+        // which the server deliberately does not distinguish.
+        if (!response.ok && response.status !== 404) {
+          setStatus("Could not delete that chat.", true);
+          return;
+        }
+        // The undo toast may still be pointing at the row just deleted, and
+        // Undo would then try to unarchive a thread that is gone. Cleared
+        // before the branch below, because startNewChat does not touch it.
+        if (sid === lastArchivedSessionId) {
+          hideArchiveToast();
+        }
+        // Deleting the open chat is reachable from the tray: archive it, undo,
+        // archive it again -- the tray row for the open thread is right there.
+        // Leaving the transcript up would show a chat the server no longer has.
+        if (sid === sessionId) {
+          startNewChat();
+          return;
+        }
+        loadSidebarLists();
+      } catch (_error) {
+        setStatus("Could not delete that chat.", true);
       }
     }
 

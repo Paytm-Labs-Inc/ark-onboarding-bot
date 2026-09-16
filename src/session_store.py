@@ -10,6 +10,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from src.session_purge import purge_session_logs
+
 _ARK_SESSION_ID_RE = re.compile(r"\bs-([a-z0-9]{8,})\b", re.IGNORECASE)
 
 SESSION_KEY_PREFIX = "ark-onboarding-bot:"
@@ -361,6 +363,28 @@ def _should_delete_archived(session: StoredSession, retain_days: int) -> bool:
     return (time.time() - stamp) >= retain_days * 86400
 
 
+def _expire_archived(store: SessionStore, session_id: str) -> bool:
+    """Delete an aged-out archive, logs first. False means it was left alone.
+
+    Retention is a delete the user never asked for, so it owes exactly the
+    erase an explicit one does. Without this the seven-day sweep dropped the
+    thread from Redis and left its questions verbatim in the query log — the
+    same hole #122 closed on the explicit path, reopened on the one nobody
+    clicks.
+
+    A busy log must not break drawing the sidebar, so the failure is swallowed
+    rather than raised. It is not swallowed silently: the row stays archived,
+    so the next list or load tries again. Deleting anyway would leave the text
+    with nothing left to erase it against.
+    """
+    try:
+        purge_session_logs(session_id)
+    except OSError:
+        return False
+    store.delete(session_id)
+    return True
+
+
 def _copy_archive_flags(session: StoredSession, archived: bool, archived_at: str | None) -> None:
     session.archived = archived
     session.archived_at = archived_at if archived else None
@@ -394,8 +418,9 @@ class MemorySessionStore:
     def load(self, session_id: str) -> StoredSession | None:
         session = self._sessions.get(session_id)
         if session is not None and _should_delete_archived(session, archive_retain_days()):
-            self.delete(session_id)
-            return None
+            # Only report it gone once its logs actually are.
+            if _expire_archived(self, session_id):
+                return None
         return session
 
     def save(
@@ -449,8 +474,10 @@ class MemorySessionStore:
         retain_days = archive_retain_days()
         for session_id in list(self._user_archived.get(user_id, {})):
             session = self._sessions.get(session_id)
-            if session is None or _should_delete_archived(session, retain_days):
+            if session is None:
                 self.delete(session_id)
+            elif _should_delete_archived(session, retain_days):
+                _expire_archived(self, session_id)
 
     def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
         self._apply_archive_rules(user_id)
@@ -534,8 +561,9 @@ class RedisSessionStore:
             return None
         session = StoredSession.from_json(raw)
         if session is not None and _should_delete_archived(session, archive_retain_days()):
-            self.delete(session_id)
-            return None
+            # Only report it gone once its logs actually are.
+            if _expire_archived(self, session_id):
+                return None
         return session
 
     def _purge_stale_index(self, session_id: str) -> None:
@@ -731,9 +759,12 @@ class RedisSessionStore:
         for session_id, score in scored:
             if not (0 < score <= cutoff):
                 continue
+            # load() already expires what it reads, so a row that survives it
+            # is one whose log purge failed. Retrying here costs a lock attempt
+            # and keeps the sweep the place the rule is stated.
             session = self.load(session_id)
             if session is not None and _should_delete_archived(session, retain_days):
-                self.delete(session_id)
+                _expire_archived(self, session_id)
 
     def list_for_user(self, user_id: str, archived: bool) -> list[SessionSummary]:
         self._apply_archive_rules(user_id)

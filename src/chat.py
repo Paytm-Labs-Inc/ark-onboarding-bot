@@ -11,8 +11,7 @@ from typing import Any
 from src.answer import is_non_answer
 from src.ask import ask, ask_stream
 from src.citations import parse_citation
-from src.feedback import purge_session as purge_feedback
-from src.query_log import purge_session as purge_query_log
+from src.session_purge import purge_session_logs
 from src.session_store import (
     StoredSession,
     StoredTurn,
@@ -186,13 +185,10 @@ def reset_session(session_id: str, user_id: str = ANONYMOUS_USER) -> bool:
     stored = store.load(session_id)
     if stored is None or stored.user_id != user_id:
         return False
-    # Erase the observability logs before the thread itself. Either order can
-    # fail halfway, and this is the order whose halfway state is the safe one:
-    # if a purge raises, the thread is still there and the user can retry. The
-    # other order leaves the thread gone and the question text on the volume,
-    # which is the rule broken with nothing left to retry against.
-    purge_query_log(session_id)
-    purge_feedback(session_id)
+    # Logs first, then the thread; purge_session_logs carries the why. A raise
+    # here propagates to /api/reset as a 503, which is the honest answer: the
+    # chat is still there and the delete can be retried.
+    purge_session_logs(session_id)
     store.delete(session_id)
     return True
 

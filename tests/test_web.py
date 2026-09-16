@@ -626,6 +626,80 @@ class ArchiveUnarchiveControlTests(unittest.TestCase):
         self.assertNotIn("top: 50%", toast)
 
 
+class ArchivePanelDeleteControlTests(unittest.TestCase):
+    """Archive is the default, but a real delete has to stay reachable.
+
+    Replacing the sidebar delete with archive left no way to purge anything:
+    archive only moves a row, and the erase-everywhere path behind /api/reset
+    had no button in front of it. A user who wants their data gone needs one.
+    It sits in the Archive tray rather than on a Recent row so the reversible
+    gesture is still the one under the cursor during normal use.
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def chat_html(self) -> str:
+        return (self.ROOT / "src" / "templates" / "chat.html").read_text(encoding="utf-8")
+
+    def test_only_the_archived_list_wires_a_delete_control(self) -> None:
+        chat = self.chat_html()
+        self.assertIn("showDeleteButton: true", chat)
+        self.assertIn("session-delete", chat)
+        self.assertIn("Delete chat permanently:", chat)
+        # One call site, and it is the archived one. Recent rows keep archive.
+        self.assertEqual(chat.count("showDeleteButton: true"), 1)
+        archived_call = chat[chat.index('emptyLabel: archivedResp.ok ?') :]
+        self.assertIn("showDeleteButton: true", archived_call[:300])
+        active_call = chat[
+            chat.index('emptyLabel: activeResp.ok ?') : chat.index('emptyLabel: archivedResp.ok ?')
+        ]
+        self.assertNotIn("showDeleteButton", active_call)
+
+    def test_delete_goes_through_the_erase_everywhere_endpoint(self) -> None:
+        # /api/reset is the path that purges the query and feedback logs. A
+        # delete wired to the archive endpoint would look identical on screen
+        # and erase nothing.
+        chat = self.chat_html()
+        start = chat.index("async function deleteSession(")
+        fn = chat[start : chat.index("async function undoArchive(")]
+        self.assertIn('fetch("api/reset"', fn)
+        self.assertIn('method: "POST"', fn)
+        self.assertIn("session_id: sid", fn)
+
+    def test_delete_confirms_before_erasing(self) -> None:
+        chat = self.chat_html()
+        start = chat.index("if (showDeleteButton)")
+        block = chat[start : chat.index("container.appendChild(item)", start)]
+        self.assertIn("window.confirm", block)
+        self.assertIn("Permanently delete", block)
+        self.assertIn("cannot be undone", block)
+        # The row behind the control is a button too, so the click has to stop
+        # there or it opens the thread on the way to deleting it.
+        self.assertIn("event.stopPropagation()", block)
+
+    def test_a_503_says_nothing_was_erased(self) -> None:
+        # #122 leaves the thread in place when the logs cannot be purged and
+        # answers 503. "Could not delete" alone would leave the user unsure
+        # whether their questions are still on the volume. They are.
+        chat = self.chat_html()
+        start = chat.index("async function deleteSession(")
+        fn = chat[start : chat.index("async function undoArchive(")]
+        self.assertIn("response.status === 503", fn)
+        self.assertIn("nothing was erased", fn)
+
+    def test_deleting_the_undo_target_drops_the_toast(self) -> None:
+        # Undo unarchives lastArchivedSessionId. Deleting that row without
+        # clearing it leaves a button that restores a thread that is gone.
+        chat = self.chat_html()
+        start = chat.index("async function deleteSession(")
+        fn = chat[start : chat.index("async function undoArchive(")]
+        self.assertIn("sid === lastArchivedSessionId", fn)
+        self.assertIn("hideArchiveToast()", fn)
+        # Cleared before startNewChat takes the early return, which does not
+        # touch the toast.
+        self.assertLess(fn.index("hideArchiveToast()"), fn.index("startNewChat()"))
+
+
 class BootstrapClearsPurgedSessionTests(unittest.TestCase):
     """A 404 on the stored session id must not keep that id for the next ask.
 

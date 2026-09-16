@@ -18,6 +18,7 @@ import json
 import os
 import stat
 import threading
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -27,7 +28,19 @@ from src import feedback as feedback_mod
 from src import query_log as query_log_mod
 from src.chat import reset_session
 from src.jsonl_purge import purge_session_records
-from src.session_store import MemorySessionStore, StoredSession, StoredTurn, reset_session_store
+from src.session_store import (
+    MemorySessionStore,
+    RedisSessionStore,
+    SessionStore,
+    StoredSession,
+    StoredTurn,
+    reset_session_store,
+)
+
+try:
+    import fakeredis
+except ImportError:  # pragma: no cover - exercised by the skip below
+    fakeredis = None  # type: ignore[assignment]
 
 
 def _write_lines(path: Path, records: list[dict | str]) -> None:
@@ -281,7 +294,7 @@ class DeleteErasesEverywhereTests(unittest.TestCase):
         # The ordering guarantee. If the purge runs after the store delete,
         # this is the case that silently keeps the question text forever: the
         # thread is gone, so nothing is left to retry the erase against.
-        with patch("src.chat.purge_query_log", side_effect=OSError("volume stalled")):
+        with patch("src.session_purge.purge_query_log", side_effect=OSError("volume stalled")):
             with self.assertRaises(OSError):
                 reset_session("chat-1", user_id="user-a")
 
@@ -292,11 +305,133 @@ class DeleteErasesEverywhereTests(unittest.TestCase):
         # Same guarantee for the second log. The query log purge has already
         # run by this point, which is the safe direction: erased more than
         # asked, rather than a deleted chat whose answers are still served.
-        with patch("src.chat.purge_feedback", side_effect=OSError("volume stalled")):
+        with patch("src.session_purge.purge_feedback", side_effect=OSError("volume stalled")):
             with self.assertRaises(OSError):
                 reset_session("chat-1", user_id="user-a")
 
         self.assertIsNotNone(self.store.load("chat-1"))
+
+
+class ExpiredArchiveErasesEverywhereTests(unittest.TestCase):
+    """Retention is a delete nobody clicked, and it owes the same erase.
+
+    Only the explicit path ran the purge, so an archived chat that aged out
+    after seven days was dropped from the store and left its question verbatim
+    in the query log. Same hole as the one #122 closed, on the path with no
+    button in front of it -- and the only one that fires without the user
+    being there.
+    """
+
+    def make_store(self) -> SessionStore:
+        return MemorySessionStore()
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.query_path = self.dir / "query_log.jsonl"
+        self.feedback_path = self.dir / "feedback.jsonl"
+
+        self.store = self.make_store()
+        reset_session_store(self.store)
+        self.addCleanup(reset_session_store, None)
+
+        aged_out = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 8 * 86400)
+        )
+        self.store.save(
+            StoredSession(
+                session_id="old-archive",
+                user_id="user-a",
+                title="t",
+                archived=True,
+                archived_at=aged_out,
+                turns=[
+                    StoredTurn(
+                        question="my private question",
+                        answer="a",
+                        citations=[],
+                        retrieved_sources=[],
+                    )
+                ],
+            )
+        )
+        _write_lines(
+            self.query_path,
+            [
+                {"session_id": "old-archive", "question": "my private question"},
+                {"session_id": "live-chat", "question": "someone else's question"},
+            ],
+        )
+        _write_lines(
+            self.feedback_path,
+            [
+                {"session_id": "old-archive", "question": "my private question", "answer": "a"},
+                {"session_id": "live-chat", "question": "someone else's question", "answer": "b"},
+            ],
+        )
+        patcher_q = patch.object(query_log_mod, "QUERY_LOG_PATH", self.query_path)
+        patcher_f = patch.object(feedback_mod, "FEEDBACK_PATH", self.feedback_path)
+        patcher_q.start()
+        patcher_f.start()
+        self.addCleanup(patcher_q.stop)
+        self.addCleanup(patcher_f.stop)
+
+    def _log_text(self) -> str:
+        return self.query_path.read_text(encoding="utf-8") + self.feedback_path.read_text(
+            encoding="utf-8"
+        )
+
+    def test_listing_the_tray_erases_an_aged_out_archive_everywhere(self) -> None:
+        # The sweep is lazy: listing is what runs it, which is also the only
+        # thing that ever runs it.
+        self.assertEqual(self.store.list_for_user("user-a", archived=True), [])
+
+        self.assertIsNone(self.store.load("old-archive"))
+        self.assertNotIn("my private question", self._log_text())
+        self.assertIn("someone else's question", self._log_text())
+
+    def test_loading_an_aged_out_archive_erases_it_too(self) -> None:
+        # load() expires independently of the tray sweep, so it needs the
+        # purge on its own account -- a bootstrap fetch reaches it first.
+        self.assertIsNone(self.store.load("old-archive"))
+
+        self.assertNotIn("my private question", self._log_text())
+
+    def test_a_busy_log_leaves_the_archive_in_place_to_retry(self) -> None:
+        # The order guarantee, on the retention path. Dropping the thread here
+        # would strand the question text with nothing left to erase it against,
+        # and unlike the explicit delete there is no user to retry it.
+        with patch(
+            "src.session_purge.purge_query_log", side_effect=OSError("volume stalled")
+        ):
+            listed = self.store.list_for_user("user-a", archived=True)
+
+        self.assertEqual([item.session_id for item in listed], ["old-archive"])
+        self.assertIn("my private question", self.query_path.read_text(encoding="utf-8"))
+
+    def test_a_busy_log_does_not_break_drawing_the_sidebar(self) -> None:
+        # Retention runs inside a list, so a raise here would take out the
+        # whole rail over one stalled volume.
+        with patch(
+            "src.session_purge.purge_feedback", side_effect=OSError("volume stalled")
+        ):
+            self.store.list_for_user("user-a", archived=False)
+            self.store.list_for_user("user-a", archived=True)
+
+
+@unittest.skipUnless(fakeredis is not None, "fakeredis not installed")
+class ExpiredArchiveErasesEverywhereOnRedisTests(ExpiredArchiveErasesEverywhereTests):
+    """The same rule, on the backend production actually runs.
+
+    The two stores expire archives in their own code, so a purge wired into
+    only one of them is a privacy hole that every local test would pass.
+    """
+
+    def make_store(self) -> SessionStore:
+        store = RedisSessionStore.__new__(RedisSessionStore)
+        store._client = fakeredis.FakeStrictRedis(decode_responses=True)
+        return store
 
 
 if __name__ == "__main__":
