@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass, field
 from collections.abc import Iterator
@@ -10,8 +11,7 @@ from typing import Any
 from src.answer import is_non_answer
 from src.ask import ask, ask_stream
 from src.citations import parse_citation
-from src.feedback import purge_session as purge_feedback
-from src.query_log import purge_session as purge_query_log
+from src.session_purge import purge_session_logs
 from src.session_store import (
     StoredSession,
     StoredTurn,
@@ -174,7 +174,10 @@ def get_session(session_id: str | None, user_id: str = ANONYMOUS_USER) -> tuple[
 
 def save_session(session: ChatSession) -> None:
     refresh_history_summary(session)
-    get_session_store().save(_session_to_stored(session))
+    # overwrite_archive=False: archive/unarchive write the store directly, and
+    # the merge happens inside save after WATCH so an in-flight ask cannot
+    # undo a tray click — or redo it after Undo.
+    get_session_store().save(_session_to_stored(session), overwrite_archive=False)
 
 
 def reset_session(session_id: str, user_id: str = ANONYMOUS_USER) -> bool:
@@ -182,14 +185,36 @@ def reset_session(session_id: str, user_id: str = ANONYMOUS_USER) -> bool:
     stored = store.load(session_id)
     if stored is None or stored.user_id != user_id:
         return False
-    # Erase the observability logs before the thread itself. Either order can
-    # fail halfway, and this is the order whose halfway state is the safe one:
-    # if a purge raises, the thread is still there and the user can retry. The
-    # other order leaves the thread gone and the question text on the volume,
-    # which is the rule broken with nothing left to retry against.
-    purge_query_log(session_id)
-    purge_feedback(session_id)
+    # Logs first, then the thread; purge_session_logs carries the why. A raise
+    # here propagates to /api/reset as a 503, which is the honest answer: the
+    # chat is still there and the delete can be retried.
+    purge_session_logs(session_id)
     store.delete(session_id)
+    return True
+
+
+def archive_session(session_id: str, user_id: str = ANONYMOUS_USER) -> bool:
+    store = get_session_store()
+    stored = store.load(session_id)
+    if stored is None or stored.user_id != user_id:
+        return False
+    if not stored.archived:
+        stored.archived = True
+        stored.archived_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        store.save(stored, touch_activity=False)
+    return True
+
+
+def unarchive_session(session_id: str, user_id: str = ANONYMOUS_USER) -> bool:
+    store = get_session_store()
+    stored = store.load(session_id)
+    if stored is None or stored.user_id != user_id:
+        return False
+    if not stored.archived:
+        return True
+    stored.archived = False
+    stored.archived_at = None
+    store.save(stored)
     return True
 
 
