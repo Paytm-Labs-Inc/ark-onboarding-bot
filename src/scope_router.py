@@ -71,17 +71,6 @@ _OOS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     )
 )
 
-# Calendar-date asks. The roadmap has no dates — refuse even if an Ark noun
-# is present ("slack session control", "session debugger").
-_DATE_ASK_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in (
-        r"\bwhen exactly will .+\bship\b",
-        r"\bwhen will .+\bship\b",
-        r"\bwhat date will .+\bship\b",
-    )
-)
-
 # Inventory of secrets/keys, not "how do I list…".
 _INVENTORY_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(pattern, re.IGNORECASE)
@@ -141,8 +130,6 @@ def should_refuse(question: str) -> bool:
     if not text:
         return False
     if any(pattern.search(text) for pattern in _JAILBREAK_PATTERNS):
-        return True
-    if any(pattern.search(text) for pattern in _DATE_ASK_PATTERNS):
         return True
     if any(pattern.search(text) for pattern in _BYPASS_PATTERNS):
         return True
